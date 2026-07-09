@@ -35,7 +35,7 @@ workflow:
 
 backend:lint:
   stage: lint
-  image: rust:1.89-slim
+  image: rust:1-slim
   <<: *backend-rules
   cache:
     key:
@@ -52,7 +52,7 @@ backend:lint:
 
 backend:test:
   stage: test
-  image: rust:1.89-slim
+  image: rust:1-slim
   needs: ["backend:lint"]
   <<: *backend-rules
   services:
@@ -307,7 +307,7 @@ security:gitleaks:
 
 security:cargo-audit:
   <<: *audit-rules
-  image: rust:1.89-slim
+  image: rust:1-slim
   cache:
     key: cargo-audit-bin
     paths: [.cargo-audit/]
@@ -336,7 +336,7 @@ security:npm-audit:
 # Outdated-dependencies report (ADR-022): informative, native tools only.
 deps-report:cargo:
   <<: *audit-rules
-  image: rust:1.89-slim
+  image: rust:1-slim
   script:
     - scripts/deps-report.sh backend
 

@@ -23,12 +23,9 @@ pub struct SearchResult {
 /// Sorts results by publication date, newest first; results without a date go last
 /// (they are displayed in a separate "unknown date" section, see ADR-011).
 pub fn sort_by_publication_date(results: &mut [SearchResult]) {
-    results.sort_by(|a, b| match (b.published_at, a.published_at) {
-        (Some(b_date), Some(a_date)) => b_date.cmp(&a_date),
-        (Some(_), None) => std::cmp::Ordering::Greater,
-        (None, Some(_)) => std::cmp::Ordering::Less,
-        (None, None) => std::cmp::Ordering::Equal,
-    });
+    // Reverse(Option<_>) sorts Some(newest) first and None last, which is
+    // exactly the ADR-011 ordering.
+    results.sort_by_key(|r| std::cmp::Reverse(r.published_at));
 }
 
 #[cfg(test)]

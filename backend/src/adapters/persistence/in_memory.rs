@@ -97,7 +97,7 @@ impl JobRepository for InMemoryJobRepository {
             .filter(|j| j.user_id == user_id)
             .cloned()
             .collect();
-        jobs.sort_by(|a, b| b.created_at.cmp(&a.created_at));
+        jobs.sort_by_key(|job| std::cmp::Reverse(job.created_at));
         Ok(jobs)
     }
 
