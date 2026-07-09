@@ -1,0 +1,100 @@
+# Default profile (infra): PostgreSQL + Redis only — apps run locally for hot-reload.
+# Full stack: docker compose --profile full up --build
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: app
+      POSTGRES_PASSWORD: app
+      POSTGRES_DB: aiagent
+    ports:
+      # Host port 5433 to avoid clashing with a locally installed PostgreSQL.
+      - "5433:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U app -d aiagent"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    profiles: ["full"]
+    build: ./backend
+    environment:
+      DATABASE_URL: postgres://app:app@postgres:5432/aiagent
+      AGENT_API_URL: http://agent-api:8001
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
+      JWT_SECRET: ${JWT_SECRET:-change-me}
+      BIND_ADDR: 0.0.0.0:8000
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "/app/healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  agent-api:
+    profiles: ["full"]
+    build: ./agent
+    command: ["uvicorn", "aiagent.adapters.api.app:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
+    ports:
+      - "8001:8001"
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/healthz')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  agent-worker:
+    profiles: ["full"]
+    build: ./agent
+    command: ["celery", "-A", "aiagent.celery_app", "worker", "--loglevel=info"]
+    environment:
+      REDIS_URL: redis://redis:6379/0
+      BACKEND_INTERNAL_URL: http://backend:8000
+      INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      TAVILY_API_KEY: ${TAVILY_API_KEY:-}
+      AGENT_MODEL_ID: ${AGENT_MODEL_ID:-claude-opus-4-8}
+      # "fake" = deterministic keyless providers (e2e / keyless dev, ADR-021).
+      AGENT_PROVIDERS: ${AGENT_PROVIDERS:-live}
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "celery -A aiagent.celery_app inspect ping -d celery@$$HOSTNAME"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    profiles: ["full"]
+    build: ./frontend
+    ports:
+      - "8080:80"
+    depends_on:
+      - backend
+
+volumes:
+  pgdata:

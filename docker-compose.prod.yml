@@ -1,0 +1,57 @@
+# Production override for the VPS (ADR-015).
+# Usage on the VPS (in /opt/aiagent/):
+#   IMAGE_TAG=<short_sha> docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+#
+# - Images come from the GitLab registry (pinned tag = reproducible deploys, rollback = previous tag).
+# - Caddy is the only service exposing 80/443 (automatic TLS via Let's Encrypt).
+# - PostgreSQL and Redis publish no port on the host.
+services:
+  caddy:
+    image: caddy:2-alpine
+    profiles: ["full"]
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+    depends_on:
+      - frontend
+      - backend
+
+  backend:
+    image: ${CI_REGISTRY_IMAGE}/backend:${IMAGE_TAG}
+    build: !reset null
+    ports: !reset []
+    environment:
+      LOG_FORMAT: json # structured logs in production (ADR-018)
+      APP_ENV: production # fail-fast env validation at startup (ADR-020)
+
+  agent-api:
+    image: ${CI_REGISTRY_IMAGE}/agent:${IMAGE_TAG}
+    build: !reset null
+    ports: !reset []
+    environment:
+      LOG_FORMAT: json
+      APP_ENV: production
+
+  agent-worker:
+    image: ${CI_REGISTRY_IMAGE}/agent:${IMAGE_TAG}
+    build: !reset null
+    environment:
+      LOG_FORMAT: json
+      APP_ENV: production
+
+  frontend:
+    image: ${CI_REGISTRY_IMAGE}/frontend:${IMAGE_TAG}
+    build: !reset null
+    ports: !reset []
+
+  postgres:
+    ports: !reset []
+
+  redis:
+    ports: !reset []
+
+volumes:
+  caddy_data:

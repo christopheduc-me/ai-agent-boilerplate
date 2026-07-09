@@ -1,0 +1,3 @@
+# Auto-assigned reviewer on every pull/merge request.
+# At the repository root so both GitHub and GitLab read it (ADR-022).
+* @christopheduc-me

@@ -1,0 +1,72 @@
+# Weekly security audits (ADR-015 amendment / ADR-019): dependency
+# vulnerabilities + secret scanning over the full git history, plus an
+# outdated-dependencies report (ADR-022 — native tools, no platform bot).
+# Also runnable on demand from the Actions tab (workflow_dispatch).
+name: Security audits
+
+on:
+  schedule:
+    - cron: "0 6 * * 1" # every Monday 06:00 UTC
+  workflow_dispatch:
+
+jobs:
+  gitleaks:
+    name: gitleaks (secret scanning)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history: a secret committed then removed still leaks
+      - uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  cargo-audit:
+    name: cargo audit (Rust dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+      - name: Audit
+        working-directory: backend
+        run: cargo audit
+
+  pip-audit:
+    name: pip-audit (Python dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Audit
+        working-directory: agent
+        run: |
+          uv export --frozen --no-emit-project -o /tmp/requirements.txt
+          uvx pip-audit -r /tmp/requirements.txt
+
+  npm-audit:
+    name: npm audit (frontend dependencies)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Audit
+        working-directory: frontend
+        run: npm audit --audit-level=high
+
+  deps-report:
+    name: outdated dependencies report (informative)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: astral-sh/setup-uv@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Report
+        run: scripts/deps-report.sh all

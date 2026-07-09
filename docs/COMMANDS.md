@@ -1,0 +1,296 @@
+# Commands Cheat Sheet
+
+Every useful command for developing, testing, running, and deploying the project.
+All commands are run from the repository root unless stated otherwise.
+
+## 0. One-time setup
+
+```sh
+cp .env.example .env      # then fill in ANTHROPIC_API_KEY and TAVILY_API_KEY
+
+# Toolchains (macOS): Rust, uv (Python), Node 22
+# rustup: https://rustup.rs — uv: https://docs.astral.sh/uv — node: nvm install 22
+
+cd agent && uv sync            # creates agent/.venv from uv.lock
+cd frontend && npm install    # creates frontend/node_modules
+```
+
+---
+
+## 1. Docker — full stack
+
+```sh
+# Build and start everything (backend, agent API, worker, frontend, PostgreSQL, Redis)
+docker compose --profile full up --build
+
+# Same, detached
+docker compose --profile full up --build -d
+
+# Stop everything (keeps data volumes)
+docker compose --profile full down
+
+# Stop everything AND wipe the PostgreSQL volume
+docker compose --profile full down -v
+```
+
+Entry points once up:
+
+| Service | URL |
+|---|---|
+| Frontend (nginx) | http://localhost:8080 |
+| Rust backend API | http://localhost:8000 (healthz: `/healthz`) |
+| Agent FastAPI | http://localhost:8001 (healthz: `/healthz`) |
+| PostgreSQL | localhost:5433 (`app`/`app`, db `aiagent`) |
+| Redis | localhost:6379 |
+
+## 2. Docker — infra only (default profile)
+
+The recommended dev mode: containers for PostgreSQL + Redis, everything else local
+with hot-reload.
+
+```sh
+docker compose up -d          # postgres + redis only
+docker compose down           # stop them
+```
+
+## 3. Docker — start or inspect a single service
+
+```sh
+# Start one service (add --profile full for app services)
+docker compose up -d postgres
+docker compose up -d redis
+docker compose --profile full up -d --build backend
+docker compose --profile full up -d --build agent-api agent-worker
+docker compose --profile full up -d --build frontend
+
+# Rebuild a single image without starting it
+docker compose --profile full build backend
+
+# Restart a single service
+docker compose --profile full restart agent-worker
+
+# Logs (follow)
+docker compose --profile full logs -f backend
+docker compose --profile full logs -f agent-worker
+
+# Status + health of all services
+docker compose --profile full ps
+
+# Shell inside a running container
+docker compose --profile full exec backend sh
+docker compose --profile full exec postgres psql -U app -d aiagent
+docker compose --profile full exec redis redis-cli
+```
+
+## 4. Local development (hot-reload)
+
+Requires `docker compose up -d` (infra) first. One terminal per service:
+
+```sh
+# Rust backend — http://localhost:8000
+cd backend
+cargo run
+# Reads ../.env automatically (dotenvy). Without DATABASE_URL it falls back to
+# in-memory persistence; without AGENT_API_URL jobs are accepted but not
+# dispatched (noop dispatcher).
+
+# Agent FastAPI micro-API — http://localhost:8001
+cd agent
+uv run uvicorn aiagent.adapters.api.app:app --port 8001 --reload
+
+# Celery worker
+cd agent
+uv run celery -A aiagent.celery_app worker --loglevel=info
+
+# Frontend — http://localhost:5173 (proxies /api to :8000)
+cd frontend
+npm run dev
+```
+
+---
+
+## 5. Tests
+
+### All test suites (what CI runs)
+
+```sh
+cd backend && cargo test
+cd agent && uv run pytest
+cd frontend && npm test
+```
+
+### Backend (Rust)
+
+```sh
+cd backend
+cargo test                                  # everything (unit + integration)
+cargo test --lib                            # unit tests only
+cargo test --test http_api                  # the HTTP integration test file
+cargo test full_search_lifecycle            # a single test by name
+cargo test domain::                         # all domain tests
+cargo test -- --nocapture                   # show stdout/tracing while testing
+```
+
+### Agent (Python)
+
+```sh
+cd agent
+uv run pytest                               # everything
+uv run pytest tests/test_run_research.py    # one file
+uv run pytest -k cascade                    # by keyword
+uv run pytest -x -vv                        # stop at first failure, verbose
+RUN_LIVE_TESTS=1 uv run pytest              # includes live provider tests (none yet;
+                                            # reserved by ADR-012, needs API keys)
+```
+
+### Frontend (Vue)
+
+```sh
+cd frontend
+npm test                                    # single run (CI mode)
+npx vitest                                  # watch mode
+npx vitest run src/components/__tests__/ResultList.spec.ts   # one file
+```
+
+### End-to-end (full compose stack, no API key — ADR-021)
+
+```sh
+# Boot the fully containerized stack with the deterministic fake providers
+echo "AGENT_PROVIDERS=fake" >> .env        # or export it in the shell
+docker compose --profile full up -d --build --wait
+
+scripts/e2e-smoke.sh                        # register -> login -> search -> results
+scripts/e2e-smoke.sh http://other-host:8080 # any base URL
+
+docker compose --profile full down          # teardown (remember to revert .env)
+```
+
+`AGENT_PROVIDERS=fake` also works for keyless local development (the worker
+starts without ANTHROPIC/TAVILY keys and returns deterministic results).
+
+---
+
+## 6. Lint / format / typecheck (same as the CI `lint` stage)
+
+```sh
+# Backend
+cd backend
+cargo fmt                                   # format
+cargo fmt --check                           # check only (CI)
+cargo clippy --all-targets -- -D warnings   # lint (CI)
+
+# Agent
+cd agent
+uv run ruff format .                        # format
+uv run ruff format --check .                # check only (CI)
+uv run ruff check .                         # lint (CI)
+uv run ruff check --fix .                   # lint + autofix
+uv run mypy src                             # typecheck (CI)
+
+# Frontend
+cd frontend
+npm run lint                                # eslint (CI)
+npm run typecheck                           # vue-tsc (CI)
+```
+
+---
+
+## 7. Builds
+
+```sh
+# Release binaries (Rust)
+cd backend && cargo build --release         # target/release/backend + healthcheck
+
+# Production bundle (Vue)
+cd frontend && npm run build                # dist/
+
+# Docker images, exactly as CI builds them
+docker build -t aiagent/backend ./backend
+docker build -t aiagent/agent ./agent
+docker build -t aiagent/frontend ./frontend
+```
+
+---
+
+## 8. Quick API smoke test (curl)
+
+With the backend running on :8000:
+
+```sh
+# Health
+curl http://localhost:8000/healthz
+
+# Register
+curl -X POST http://localhost:8000/api/auth/register \
+  -H 'content-type: application/json' \
+  -d '{"email":"me@example.com","password":"password123"}'
+
+# Login -> capture the token
+TOKEN=$(curl -s -X POST http://localhost:8000/api/auth/login \
+  -H 'content-type: application/json' \
+  -d '{"email":"me@example.com","password":"password123"}' \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["access_token"])')
+
+# Launch a search
+curl -X POST http://localhost:8000/api/searches \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"rust hexagonal architecture"}'
+
+# List searches / read one
+curl -H "authorization: Bearer $TOKEN" http://localhost:8000/api/searches
+curl -H "authorization: Bearer $TOKEN" http://localhost:8000/api/searches/<job_id>
+```
+
+---
+
+## 9. Dependency management
+
+```sh
+# Backend
+cd backend && cargo update                  # refresh Cargo.lock
+cd backend && cargo add <crate>
+
+# Agent
+cd agent && uv add <package>                # add a dependency
+cd agent && uv add --group dev <package>    # add a dev dependency
+cd agent && uv lock --upgrade               # refresh uv.lock
+
+# Frontend
+cd frontend && npm install <package>
+cd frontend && npm update
+
+# Outdated report across the three bricks (native tools, no bot — ADR-022);
+# also run weekly by both CIs alongside the security audits
+scripts/deps-report.sh            # or: scripts/deps-report.sh backend|agent|frontend
+```
+
+---
+
+## 10. CI/CD and production (VPS)
+
+**GitHub Actions is the primary CI** (ADR-019, `.github/workflows/`): `ci.yml`
+runs lint + tests on every PR and publishes images to GHCR on `main`;
+`security.yml` runs the weekly audits (Monday 06:00 UTC; on-demand via
+Actions → Run workflow). **The boilerplate repo deploys nothing** — deployment
+is your fork's business; `.gitlab-ci.yml` mirrors the pipeline for
+GitLab-hosted forks and includes a reference `deploy:vps` job.
+
+On the VPS (`/opt/aiagent/`, by hand or from your fork's deploy job):
+
+```sh
+export CI_REGISTRY_IMAGE=ghcr.io/christopheduc-me/ai-agent-boilerplate IMAGE_TAG=<short_sha>
+
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full pull
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+
+# Rollback = redeploy the previous tag
+IMAGE_TAG=<previous_sha> docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+
+# Logs / status in production
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full ps
+docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full logs -f backend
+
+# Manual database backup (a daily cron does this, see ADR-015)
+docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
+  pg_dump -U app aiagent > backup_$(date +%F).sql
+```

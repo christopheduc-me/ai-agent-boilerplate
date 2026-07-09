@@ -1,0 +1,9 @@
+# Production reverse proxy (ADR-015). Replace example.com with the real domain.
+example.com {
+	handle /api/* {
+		reverse_proxy backend:8000
+	}
+	handle {
+		reverse_proxy frontend:80
+	}
+}

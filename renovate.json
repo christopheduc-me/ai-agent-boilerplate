@@ -1,0 +1,25 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Optional automated dependency updates (ADR-022). This file is inert until a Renovate runner is connected — the Mend-hosted app on GitHub, a scheduled CI job running the renovate container on GitLab/self-hosted. Renovate is chosen over platform-locked bots because the same config works on GitHub, GitLab, Bitbucket, Gitea, and self-hosted.",
+  "extends": ["config:recommended"],
+  "schedule": ["before 7am on monday"],
+  "timezone": "Europe/Paris",
+  "packageRules": [
+    {
+      "description": "Group non-major updates per brick to keep PR noise low",
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchFileNames": ["backend/**"],
+      "groupName": "backend non-major"
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchFileNames": ["agent/**"],
+      "groupName": "agent non-major"
+    },
+    {
+      "matchUpdateTypes": ["minor", "patch"],
+      "matchFileNames": ["frontend/**"],
+      "groupName": "frontend non-major"
+    }
+  ]
+}

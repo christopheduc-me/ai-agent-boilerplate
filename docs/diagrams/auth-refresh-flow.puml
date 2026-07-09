@@ -1,0 +1,87 @@
+@startuml auth-refresh-flow
+' Refresh token lifecycle (ADR-008): sign-up -> login -> silent refresh -> sign-out.
+' Front = Vue SPA (Pinia store, access token in memory only).
+' API   = Rust/Axum backend. Refresh tokens: opaque, single use, stored SHA-256 hashed.
+
+skinparam sequenceMessageAlign left
+
+actor User
+box "Browser"
+  participant "Vue SPA\n(Pinia auth store)" as Front
+end box
+box "Backend"
+  participant "Rust API\n(Axum)" as API
+  database "PostgreSQL\n(users, refresh_tokens)" as DB
+end box
+
+== Sign-up ==
+User -> Front : email + password
+Front -> API : POST /api/auth/register\n{email, password}
+API -> DB : INSERT user (argon2id password hash)
+API --> Front : 201 {id, email}
+
+== Login ==
+User -> Front : email + password
+Front -> API : POST /api/auth/login\n{email, password}
+API -> DB : SELECT user by email\n+ argon2id verify
+API -> API : issue JWT access token (15 min)\nissue opaque refresh token (~244 bits)
+API -> DB : INSERT refresh token\n(SHA-256 hash only, expires in 30 d)
+API --> Front : 200 {access_token}\nSet-Cookie: refresh_token=...\nHttpOnly; Secure; SameSite=Strict;\nPath=/api/auth; Max-Age=30d
+note right of Front
+  access_token kept **in memory** (Pinia),
+  never in localStorage.
+  refresh_token: HttpOnly cookie —
+  invisible to JavaScript.
+end note
+
+== Authenticated usage ==
+User -> Front : launches a search
+Front -> API : POST /api/searches\nAuthorization: Bearer <access_token>
+API --> Front : 202 {job_id}
+
+... ~15 min later, the access token has expired ...
+
+Front -> API : GET /api/searches\nAuthorization: Bearer <expired token>
+API --> Front : 401 invalid or missing access token
+
+group withAuth: refresh once, then retry
+  Front -> API : POST /api/auth/refresh\nCookie: refresh_token (sent automatically)
+  API -> DB : SELECT by SHA-256(presented)
+  API -> DB : DELETE consumed token  «single use»
+  API -> API : check expiry\nissue new access + refresh pair
+  API -> DB : INSERT new token hash
+  API --> Front : 200 {access_token}\nSet-Cookie: refresh_token=<new>  «rotation»
+  Front -> API : GET /api/searches\nAuthorization: Bearer <new access_token>
+  API --> Front : 200 [...]
+end
+
+group Replay of a consumed/stolen refresh token
+  Front -> API : POST /api/auth/refresh\nCookie: refresh_token=<already consumed>
+  API -> DB : SELECT by hash -> not found
+  API --> Front : 401 + Set-Cookie cleared (Max-Age=0)
+  Front -> Front : clear in-memory token
+  Front -> User : redirect to /login
+end
+
+== Page reload (silent session restore) ==
+User -> Front : F5 — in-memory access token is lost
+Front -> Front : router guard: not authenticated\n-> tryRefresh()
+Front -> API : POST /api/auth/refresh\nCookie: refresh_token (survived the reload)
+API -> DB : rotate (consume + insert new)
+API --> Front : 200 {access_token} + new cookie
+Front -> User : session restored, no login prompt
+
+== Sign-out ==
+User -> Front : clicks logout
+Front -> Front : clear in-memory access token
+Front -> API : POST /api/auth/logout\nCookie: refresh_token
+API -> DB : DELETE token (revocation, idempotent)
+API --> Front : 204\nSet-Cookie: refresh_token=; Max-Age=0
+Front -> User : redirect to /login
+
+note over API, DB
+  Background reaper (ADR-016) also purges
+  expired refresh tokens every 60 s.
+end note
+
+@enduml

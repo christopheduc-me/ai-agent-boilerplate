@@ -1,0 +1,25 @@
+# Environment
+.env
+.env.local
+
+# Rust
+backend/target/
+
+# Python
+agent/.venv/
+agent/__pycache__/
+**/__pycache__/
+*.pyc
+agent/.pytest_cache/
+agent/.mypy_cache/
+agent/.ruff_cache/
+
+# Node
+frontend/node_modules/
+frontend/dist/
+frontend/coverage/
+
+# IDE / OS
+.idea/
+.vscode/
+.DS_Store
