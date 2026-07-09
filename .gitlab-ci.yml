@@ -185,6 +185,7 @@ e2e:
       --destination "$CI_REGISTRY_IMAGE/$IMAGE_NAME:$CI_COMMIT_SHORT_SHA"
       --cache=true
       --cache-repo "$CI_REGISTRY_IMAGE/$IMAGE_NAME/cache"
+      --registry-mirror mirror.gcr.io
       $EXTRA_ARGS
   # On merge requests: build for validation without pushing.
   # On the default branch / tags: push SHA tag (publish stage adds `latest`).
