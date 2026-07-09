@@ -1,7 +1,15 @@
 # AI Agent Boilerplate
 
 [![CI](https://github.com/christopheduc-me/ai-agent-boilerplate/actions/workflows/ci.yml/badge.svg)](https://github.com/christopheduc-me/ai-agent-boilerplate/actions/workflows/ci.yml)
+[![Security audits](https://github.com/christopheduc-me/ai-agent-boilerplate/actions/workflows/security.yml/badge.svg)](https://github.com/christopheduc-me/ai-agent-boilerplate/actions/workflows/security.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Last commit](https://img.shields.io/github/last-commit/christopheduc-me/ai-agent-boilerplate)](https://github.com/christopheduc-me/ai-agent-boilerplate/commits/main)
+
+[![Rust](https://img.shields.io/badge/Rust-stable-B7410E?logo=rust)](backend/)
+[![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
+[![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
+[![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
+[![ADRs](https://img.shields.io/badge/ADRs-22-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
