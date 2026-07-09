@@ -40,7 +40,7 @@ impl ResearchJob {
             keyword: keyword.to_string(),
             status: JobStatus::Pending,
             error: None,
-            created_at: Utc::now(),
+            created_at: super::now_utc(),
             completed_at: None,
         })
     }
@@ -58,7 +58,7 @@ impl ResearchJob {
     pub fn complete(&mut self) {
         self.status = JobStatus::Completed;
         self.error = None;
-        self.completed_at = Some(Utc::now());
+        self.completed_at = Some(super::now_utc());
     }
 
     /// A failure never clobbers a completed job (late duplicate callbacks).
@@ -68,7 +68,7 @@ impl ResearchJob {
         }
         self.status = JobStatus::Failed;
         self.error = Some(error);
-        self.completed_at = Some(Utc::now());
+        self.completed_at = Some(super::now_utc());
     }
 
     pub fn is_finished(&self) -> bool {

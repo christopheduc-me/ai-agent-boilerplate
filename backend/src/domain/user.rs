@@ -15,7 +15,7 @@ impl User {
             id: Uuid::new_v4(),
             email,
             password_hash,
-            created_at: Utc::now(),
+            created_at: super::now_utc(),
         }
     }
 }

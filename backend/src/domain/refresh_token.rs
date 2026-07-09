@@ -22,7 +22,7 @@ impl RefreshToken {
     pub fn issue(user_id: Uuid, ttl_days: i64) -> (Self, String) {
         // Two v4 UUIDs -> ~244 bits of entropy, hex-encoded.
         let plaintext = format!("{}{}", Uuid::new_v4().simple(), Uuid::new_v4().simple());
-        let now = Utc::now();
+        let now = super::now_utc();
         let record = Self {
             id: Uuid::new_v4(),
             user_id,
