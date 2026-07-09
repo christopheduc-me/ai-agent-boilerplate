@@ -611,6 +611,25 @@ glue is unavoidable (workflows, templates), but logic inside it is not.
 **Accepted platform-specific remainders**: issue/PR templates and the workflow
 files themselves — adapters by nature, duplicated per forge where useful.
 
+### ADR-023 — Code coverage measurement and reporting (decided 2026-07-09)
+
+**Decision**: the three test jobs measure coverage with each ecosystem's
+standard tool — `cargo llvm-cov` (backend), `pytest --cov` (agent),
+`vitest --coverage` via v8 (frontend) — and reporting differs per platform:
+
+- **GitHub Actions → Codecov** (per-brick flags, README badge, diff-coverage
+  comment on PRs). Codecov passes the ADR-022 filter: it works on GitHub,
+  GitLab, Bitbucket, and self-hosted — unlike GitHub-centric alternatives.
+  Uploads are tokenless for public repos and **never fail the pipeline**
+  (`fail_ci_if_error: false` + `informational: true` in `codecov.yml`):
+  coverage is a signal for reviewers, not a gate.
+- **GitLab mirror → native `coverage:` regex** (job coverage shown in MRs and
+  available as a GitLab badge) — zero external service.
+
+Baseline at adoption: backend ≈85 % lines, agent ≈88 %, frontend low (only the
+domain-critical `ResultList` component is unit-tested — the e2e smoke covers
+the views end to end instead, ADR-021).
+
 ---
 
 ## 4. API contracts (summary)

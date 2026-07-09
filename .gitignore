@@ -23,3 +23,10 @@ frontend/coverage/
 .idea/
 .vscode/
 .DS_Store
+
+# Coverage artifacts (ADR-023)
+lcov.info
+coverage.xml
+.coverage
+coverage/
+htmlcov/

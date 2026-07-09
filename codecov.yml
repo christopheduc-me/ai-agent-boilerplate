@@ -1,0 +1,23 @@
+# Codecov configuration (ADR-023). Informational only: coverage never blocks a
+# PR — the number is a signal for reviewers, not a gate.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+comment:
+  layout: "condensed_header, diff, flags"
+  behavior: default
+  require_changes: true
+
+flags:
+  backend:
+    paths: [backend/]
+  agent:
+    paths: [agent/]
+  frontend:
+    paths: [frontend/]

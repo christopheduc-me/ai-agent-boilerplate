@@ -46,14 +46,23 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           workspaces: backend
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-llvm-cov
       - name: Lint
         working-directory: backend
         run: |
           cargo fmt --check
           cargo clippy --all-targets -- -D warnings
-      - name: Test (includes PostgreSQL integration tests)
+      - name: Test with coverage (includes PostgreSQL integration tests)
         working-directory: backend
-        run: cargo test
+        run: cargo llvm-cov --lcov --output-path lcov.info
+      - name: Upload coverage (ADR-023)
+        uses: codecov/codecov-action@v5
+        with:
+          files: backend/lcov.info
+          flags: backend
+          fail_ci_if_error: false
 
   # ---------------------------------------------------------------- agent (Python)
   agent:
@@ -74,9 +83,15 @@ jobs:
           uv run ruff check .
           uv run ruff format --check .
           uv run mypy src
-      - name: Test
+      - name: Test with coverage
         working-directory: agent
-        run: uv run pytest
+        run: uv run pytest --cov=aiagent --cov-report=xml
+      - name: Upload coverage (ADR-023)
+        uses: codecov/codecov-action@v5
+        with:
+          files: agent/coverage.xml
+          flags: agent
+          fail_ci_if_error: false
 
   # ---------------------------------------------------------------- frontend (Vue)
   frontend:
@@ -97,9 +112,15 @@ jobs:
         run: |
           npm run lint
           npm run typecheck
-      - name: Test
+      - name: Test with coverage
         working-directory: frontend
-        run: npm test
+        run: npm test -- --coverage --coverage.reporter=text --coverage.reporter=lcov
+      - name: Upload coverage (ADR-023)
+        uses: codecov/codecov-action@v5
+        with:
+          files: frontend/coverage/lcov.info
+          flags: frontend
+          fail_ci_if_error: false
       - name: Build
         working-directory: frontend
         run: npm run build

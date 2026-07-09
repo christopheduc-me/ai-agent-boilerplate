@@ -69,9 +69,14 @@ backend:test:
     key:
       files: [backend/Cargo.lock]
     paths: [backend/target/, .cargo/]
+  before_script:
+    - rustup component add llvm-tools-preview
+    - cargo install cargo-llvm-cov --locked
   script:
     - cd backend
-    - cargo test
+    - cargo llvm-cov
+    - cargo llvm-cov report --summary-only | awk '/^TOTAL/ {print "COVERAGE:", $10}'
+  coverage: '/COVERAGE: ([\d.]+)%/'
 
 # ---------------------------------------------------------------- agent (Python)
 .agent-rules: &agent-rules
@@ -108,7 +113,8 @@ agent:test:
   script:
     - cd agent
     - uv sync --frozen
-    - uv run pytest
+    - uv run pytest --cov=aiagent --cov-report=term
+  coverage: '/TOTAL.*? (\d+)%/'
 
 # ---------------------------------------------------------------- frontend (Vue)
 .frontend-rules: &frontend-rules
@@ -144,7 +150,8 @@ frontend:test:
   script:
     - cd frontend
     - npm ci
-    - npm test
+    - npm test -- --coverage --coverage.reporter=text
+  coverage: '/All files\s*\|\s*([\d.]+)/'
 
 # ---------------------------------------------------------------- e2e (full stack)
 # Full compose stack with fake providers (ADR-021) + smoke script through nginx.

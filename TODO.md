@@ -32,6 +32,10 @@ pipeline and the deployment work end to end. Tick as you go.
       rule if you maintain solo.
 - [ ] **Merge methods** (Settings → General → Pull Requests): enable **squash
       merge only** + "Automatically delete head branches".
+- [ ] **Enable the repo on Codecov** (ADR-023): log in to https://app.codecov.io
+      with GitHub and activate `ai-agent-boilerplate` — uploads are tokenless
+      for public repos; the README badge and PR diff-coverage comments start
+      working from the next CI run.
 - [ ] Check the **Security audits** workflow: it runs every Monday 06:00 UTC
       automatically; trigger it once manually (Actions → Security audits →
       Run workflow) to validate.
@@ -153,5 +157,8 @@ place — each item is an adapter/use-case cycle away.
       (connect the Mend app on GitHub, or a scheduled renovate container job
       on GitLab/self-hosted, to activate it).
 - [ ] SSE to replace frontend polling (noted in ARCHITECTURE §5).
-- [ ] Code coverage reporting in CI; pre-commit hooks (lefthook).
+- [x] **Code coverage reporting in CI (ADR-023)** — done: cargo llvm-cov /
+      pytest-cov / vitest v8 in the test jobs, Codecov on GitHub (informational,
+      per-brick flags), native `coverage:` regex on the GitLab mirror.
+- [ ] Pre-commit hooks (lefthook).
 - [ ] Redis-backed rate limiter if the backend ever scales horizontally (ADR-017).
