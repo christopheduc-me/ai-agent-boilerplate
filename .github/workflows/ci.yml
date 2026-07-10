@@ -63,6 +63,9 @@ jobs:
           files: backend/lcov.info
           flags: backend
           fail_ci_if_error: false
+          # Repo secret (Codecov UI -> GitHub Settings). Absent on fork PRs:
+          # the upload then falls back to tokenless and may be skipped.
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------- agent (Python)
   agent:
@@ -92,6 +95,7 @@ jobs:
           files: agent/coverage.xml
           flags: agent
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
 
   # ---------------------------------------------------------------- frontend (Vue)
   frontend:
@@ -121,6 +125,7 @@ jobs:
           files: frontend/coverage/lcov.info
           flags: frontend
           fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
       - name: Build
         working-directory: frontend
         run: npm run build

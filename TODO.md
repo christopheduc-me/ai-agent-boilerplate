@@ -32,10 +32,12 @@ pipeline and the deployment work end to end. Tick as you go.
       rule if you maintain solo.
 - [ ] **Merge methods** (Settings → General → Pull Requests): enable **squash
       merge only** + "Automatically delete head branches".
-- [ ] **Enable the repo on Codecov** (ADR-023): log in to https://app.codecov.io
-      with GitHub and activate `ai-agent-boilerplate` — uploads are tokenless
-      for public repos; the README badge and PR diff-coverage comments start
-      working from the next CI run.
+- [ ] **Configure Codecov** (ADR-023): on https://app.codecov.io, open the
+      repo's configuration and copy the **repository upload token**, then add
+      it as a GitHub Actions secret named `CODECOV_TOKEN` (Settings → Secrets
+      and variables → Actions). The badge and PR diff-coverage comments start
+      working from the next CI run. Safe in a public repo: Actions secrets are
+      never exposed to fork PRs.
 - [ ] Check the **Security audits** workflow: it runs every Monday 06:00 UTC
       automatically; trigger it once manually (Actions → Security audits →
       Run workflow) to validate.
