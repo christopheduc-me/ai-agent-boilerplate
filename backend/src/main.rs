@@ -136,7 +136,34 @@ async fn main() {
         .await
         .expect("failed to bind");
     tracing::info!(bind_addr = %config.bind_addr, "backend listening");
+    // Graceful shutdown (ADR-024): stop accepting connections on SIGTERM/SIGINT
+    // (docker stop, VPS redeploy, ctrl-c) and drain in-flight requests —
+    // including worker callbacks writing results — instead of dropping them.
     axum::serve(listener, router_with_limits(state, config.rate_limits))
+        .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
+    tracing::info!("backend stopped gracefully");
+}
+
+async fn shutdown_signal() {
+    let ctrl_c = async {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("failed to install ctrl-c handler");
+    };
+    #[cfg(unix)]
+    let terminate = async {
+        tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+            .expect("failed to install SIGTERM handler")
+            .recv()
+            .await;
+    };
+    #[cfg(not(unix))]
+    let terminate = std::future::pending::<()>();
+
+    tokio::select! {
+        () = ctrl_c => tracing::info!("SIGINT received, draining in-flight requests"),
+        () = terminate => tracing::info!("SIGTERM received, draining in-flight requests"),
+    }
 }

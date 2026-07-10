@@ -28,6 +28,14 @@ bar is on **clarity and consistency of the patterns**, not on feature count.
 
 ## Before pushing
 
+Optional but recommended — install the pre-commit hooks (fast lint/format
+checks on every commit; `git commit --no-verify` bypasses them):
+
+```sh
+brew install lefthook   # or see https://lefthook.dev for other platforms
+lefthook install
+```
+
 Run the same checks CI runs:
 
 ```sh

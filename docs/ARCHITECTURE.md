@@ -641,6 +641,50 @@ Baseline: backend ≈93 % lines, agent ≈95 %, frontend low by design (only the
 domain-critical `ResultList` component is unit-tested — the e2e smoke covers
 the views end to end instead, ADR-021).
 
+### ADR-024 — Graceful shutdown of the backend (decided 2026-07-10)
+
+**Problem**: `docker compose stop`, a VPS redeploy, or an orchestrator killing
+the container sends SIGTERM; without handling it, in-flight requests are
+dropped — including a worker callback in the middle of writing results.
+
+**Decision**: `axum::serve(...).with_graceful_shutdown(...)` on SIGTERM/SIGINT:
+the listener stops accepting connections, in-flight requests drain, then the
+process exits 0 (compose's default 10 s `stop_grace_period` is the hard cap).
+The Celery worker already handles SIGTERM natively (warm shutdown), and the
+ADR-016 idempotence covers the truly-interrupted cases — graceful shutdown
+makes them rare instead of systematic.
+
+### ADR-025 — Cross-language contract fixtures (decided 2026-07-10)
+
+**Problem**: the internal JSON contracts (backend ↔ FastAPI ↔ worker
+callbacks) are serialized by Python and deserialized by Rust (and vice versa),
+but each side was tested only against itself — a drift (renamed field, changed
+date format, new enum value) would surface in the e2e test at best, in
+production at worst.
+
+**Decision**: golden fixtures in `contracts/` (`task-request.json`,
+`results-callback.json`, `failure-callback.json`), asserted on **both sides in
+the direction of real traffic**: the producer must serialize exactly the
+fixture (Python `serialize_result`; Rust `HttpJobDispatcher`, captured by a
+stub server), the consumer must accept it (Rust: fixtures POSTed through the
+real router; Python: pydantic parse). Tests: `backend/tests/contract.rs`,
+`agent/tests/test_contract.py`. A drift now breaks a unit-speed test suite
+naming the exact contract.
+
+### ADR-015 amendment — trivy image scanning (added 2026-07-10)
+
+The weekly security audits also scan the three published images for
+HIGH/CRITICAL CVEs with **trivy** (`--ignore-unfixed`: only actionable
+findings) — the cargo/pip/npm audits cover application dependencies, trivy
+covers the **base images** (debian-slim, python-slim, nginx-alpine).
+
+### ADR-022 amendment — local pre-commit hooks (added 2026-07-10)
+
+**lefthook** (single multi-platform Go binary) provides opt-in pre-commit
+hooks (`lefthook install`): fast format/lint checks per brick plus a gitleaks
+staged scan when installed. Deliberately fast — test suites and clippy stay in
+CI. Bypass with `git commit --no-verify`.
+
 ---
 
 ## 4. API contracts (summary)

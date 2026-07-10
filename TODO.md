@@ -162,5 +162,12 @@ place — each item is an adapter/use-case cycle away.
 - [x] **Code coverage reporting in CI (ADR-023)** — done: cargo llvm-cov /
       pytest-cov / vitest v8 in the test jobs, Codecov on GitHub (informational,
       per-brick flags), native `coverage:` regex on the GitLab mirror.
-- [ ] Pre-commit hooks (lefthook).
+- [x] **Pre-commit hooks (lefthook, ADR-022 amendment)** — done: fast
+      format/lint per brick + gitleaks staged scan; `lefthook install` to opt in.
+- [x] **Graceful shutdown of the backend (ADR-024)** — done: SIGTERM/SIGINT
+      drain via `with_graceful_shutdown`.
+- [x] **Cross-language contract fixtures (ADR-025)** — done: `contracts/`
+      golden files asserted by both the Rust and Python suites.
+- [x] **Trivy image scanning (ADR-015 amendment)** — done: weekly HIGH/CRITICAL
+      CVE scan of the three published images in both CIs.
 - [ ] Redis-backed rate limiter if the backend ever scales horizontally (ADR-017).

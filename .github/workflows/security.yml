@@ -58,6 +58,29 @@ jobs:
         working-directory: frontend
         run: npm audit --audit-level=high
 
+  trivy:
+    name: trivy ${{ matrix.component }} (image CVE scan)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    strategy:
+      fail-fast: false
+      matrix:
+        component: [backend, agent, frontend]
+    steps:
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ghcr.io/${{ github.repository }}/${{ matrix.component }}:latest
+          severity: CRITICAL,HIGH
+          exit-code: "1"
+          ignore-unfixed: true # only actionable findings: a fix must exist
+
   deps-report:
     name: outdated dependencies report (informative)
     runs-on: ubuntu-latest

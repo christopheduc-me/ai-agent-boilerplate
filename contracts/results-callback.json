@@ -1,0 +1,28 @@
+{
+  "results": [
+    {
+      "title": "provider-dated",
+      "url": "https://example.com/provider-dated",
+      "snippet": "Date supplied by the search provider",
+      "published_at": "2026-05-01T00:00:00+00:00",
+      "date_confidence": "high",
+      "raw": { "provider": "fixture" }
+    },
+    {
+      "title": "llm-dated",
+      "url": "https://example.com/llm-dated",
+      "snippet": "Date extracted by the LLM",
+      "published_at": "2025-08-20T09:30:00+00:00",
+      "date_confidence": "medium",
+      "raw": { "provider": "fixture" }
+    },
+    {
+      "title": "undated",
+      "url": "https://example.com/undated",
+      "snippet": "No publication date could be determined",
+      "published_at": null,
+      "date_confidence": "unknown",
+      "raw": { "provider": "fixture" }
+    }
+  ]
+}
