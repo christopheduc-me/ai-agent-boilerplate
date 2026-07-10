@@ -441,9 +441,14 @@ burn the API budget or hammer login.
 
 **Why in-memory fixed-window**: single-instance deployment (ADR-015) — no shared
 store needed, ~80 lines, fully unit-testable. **Trade-offs accepted**: limits
-reset on restart, and horizontal scaling would need a Redis-backed limiter
-(noted in §5). `X-Forwarded-For` is only trustworthy because the reverse proxy
-is the sole public entry point in production.
+reset on restart, and the IP limiter is per-instance — with N instances the
+effective limit becomes N× the configured one (benign degradation; the
+per-user quota stays exact at any scale since it counts PostgreSQL rows).
+If horizontal scaling makes that matter, prefer rate limiting at the reverse
+proxy/load balancer over a Redis-backed limiter in the backend — the latter
+only pays off for fine-grained per-user rules (see TODO.md P4).
+`X-Forwarded-For` is only trustworthy because the reverse proxy is the sole
+public entry point in production.
 
 **Rejected alternatives**: `tower-governor` (an extra dependency and IP-extractor
 coupling for behavior we can state in a few dozen lines); quota stored as a
@@ -750,5 +755,4 @@ also enforces the per-user daily quota — ADR-017).
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
 - Recurring keyword monitoring (Celery beat).
-- Per-user quotas / rate limiting.
 - Observability: OpenTelemetry traces across the three components.

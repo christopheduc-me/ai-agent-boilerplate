@@ -172,4 +172,11 @@ place — each item is an adapter/use-case cycle away.
       golden files asserted by both the Rust and Python suites.
 - [x] **Trivy image scanning (ADR-015 amendment)** — done: weekly HIGH/CRITICAL
       CVE scan of the three published images in both CIs.
-- [ ] Redis-backed rate limiter if the backend ever scales horizontally (ADR-017).
+- [ ] Distributed per-IP rate limiting **if** the backend ever scales
+      horizontally (ADR-017). Note: the per-user quota is already
+      multi-instance-safe (it counts rows in PostgreSQL); only the in-memory
+      IP limiter is per-instance, and its degradation is benign (effective
+      limit becomes N× the configured one). When needed, prefer rate limiting
+      at the reverse proxy/load balancer (zero app code) over a Redis-backed
+      limiter — the latter only pays off for fine-grained per-user rules. The
+      swap surface is a single file (`backend/src/adapters/http/rate_limit.rs`).
