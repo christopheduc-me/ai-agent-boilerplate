@@ -1,8 +1,12 @@
 """DateExtractor adapter backed by Claude via langchain-anthropic (ADR-010/011)."""
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
 from aiagent.domain.models import RawSearchHit, as_utc
+
+if TYPE_CHECKING:
+    from langchain_core.language_models import BaseChatModel
 
 EXTRACTION_PROMPT = """\
 You extract the publication date of a web page from its title and excerpt.
@@ -29,9 +33,14 @@ def parse_extracted_date(text: str) -> datetime | None:
 
 
 class ClaudeDateExtractor:
-    """Live adapter — requires ANTHROPIC_API_KEY; never exercised in CI (ADR-012)."""
+    """Live adapter — requires ANTHROPIC_API_KEY; the model call itself is
+    never exercised in CI (ADR-012). `llm` is injectable so the prompt/parse
+    logic around it stays unit-testable with a fake chat model."""
 
-    def __init__(self, model_id: str) -> None:
+    def __init__(self, model_id: str, llm: "BaseChatModel | None" = None) -> None:
+        if llm is not None:
+            self._llm = llm
+            return
         from langchain_anthropic import ChatAnthropic
 
         # `model` / `max_tokens` are pydantic aliases mypy cannot see.

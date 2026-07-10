@@ -4,10 +4,10 @@ from datetime import UTC, datetime
 import httpx
 import respx
 
-from aiagent.adapters.llm import parse_extracted_date
+from aiagent.adapters.llm import EXTRACTION_PROMPT, ClaudeDateExtractor, parse_extracted_date
 from aiagent.adapters.sink import HttpResultSink, serialize_result
 from aiagent.adapters.tavily import hit_from_tavily
-from aiagent.domain.models import DateConfidence, ResearchResult
+from aiagent.domain.models import DateConfidence, RawSearchHit, ResearchResult
 
 # ---------------------------------------------------------------- tavily mapping
 
@@ -45,6 +45,62 @@ def test_parse_extracted_date_rejects_unknown_and_prose() -> None:
     assert parse_extracted_date("unknown") is None
     assert parse_extracted_date("The article was published in May 2024.") is None
     assert parse_extracted_date("") is None
+
+
+# ---------------------------------------------------------------- ClaudeDateExtractor
+
+
+class FakeChatModel:
+    """Stands in for ChatAnthropic: records the prompt, replies with `content`.
+
+    The model call is the only thing faked — prompt building and reply parsing
+    (the adapter's actual logic) run for real (ADR-012).
+    """
+
+    def __init__(self, content: object) -> None:
+        self.content = content
+        self.prompts: list[str] = []
+
+    def invoke(self, prompt: str) -> "FakeChatModel":
+        self.prompts.append(prompt)
+        return self  # quacks like an AIMessage: has .content
+
+
+def a_hit(title: str = "T") -> RawSearchHit:
+    return RawSearchHit(title=title, url="https://t", snippet="an excerpt", published_at=None)
+
+
+def test_claude_extractor_builds_the_prompt_and_parses_the_reply() -> None:
+    llm = FakeChatModel(content="2026-03-01")
+    extractor = ClaudeDateExtractor("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+
+    extracted = extractor.extract_date(a_hit(title="My Article"))
+
+    assert extracted == datetime(2026, 3, 1, tzinfo=UTC)
+    prompt = llm.prompts[0]
+    assert prompt == EXTRACTION_PROMPT.format(
+        title="My Article", url="https://t", snippet="an excerpt"
+    )
+
+
+def test_claude_extractor_returns_none_on_unknown() -> None:
+    extractor = ClaudeDateExtractor("m", llm=FakeChatModel(content="unknown"))  # type: ignore[arg-type]
+    assert extractor.extract_date(a_hit()) is None
+
+
+def test_claude_extractor_tolerates_structured_content_blocks() -> None:
+    # Some models return content as a list of blocks; the adapter must not
+    # crash, and a non-ISO stringification means "unknown".
+    blocks = [{"type": "text", "text": "2026-03-01"}]
+    extractor = ClaudeDateExtractor("m", llm=FakeChatModel(content=blocks))  # type: ignore[arg-type]
+    assert extractor.extract_date(a_hit()) is None
+
+
+def test_claude_extractor_builds_the_real_client_when_a_key_is_present(monkeypatch) -> None:
+    # Construction only — no request is ever sent (ADR-012).
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-never-used")
+    extractor = ClaudeDateExtractor("claude-opus-4-8")
+    assert extractor._llm is not None  # noqa: SLF001 - asserting the wiring
 
 
 # ---------------------------------------------------------------- http sink
