@@ -12,6 +12,11 @@ const router = useRouter();
 
 const job = ref<SearchJobDetail | null>(null);
 let timer: ReturnType<typeof setInterval> | undefined;
+const abort = new AbortController();
+
+function isTerminal(): boolean {
+  return job.value?.status === "completed" || job.value?.status === "failed";
+}
 
 async function refresh(): Promise<void> {
   try {
@@ -24,16 +29,34 @@ async function refresh(): Promise<void> {
     return;
   }
   // Poll while the agent works (ADR-003); stop on a terminal status.
-  if (job.value.status === "completed" || job.value.status === "failed") {
-    clearInterval(timer);
-  }
+  if (isTerminal()) clearInterval(timer);
 }
 
-onMounted(() => {
+function startPolling(): void {
   refresh();
   timer = setInterval(refresh, 2500);
+}
+
+onMounted(async () => {
+  // Live updates over SSE (ADR-026); the server closes the stream after the
+  // terminal status. Any failure falls back to plain polling.
+  try {
+    await auth.withAuth((token) =>
+      api.streamSearch(props.id, token, (update) => (job.value = update), abort.signal),
+    );
+    if (!isTerminal()) startPolling(); // stream ended early: keep following
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      router.push({ name: "login" });
+      return;
+    }
+    if (!abort.signal.aborted) startPolling();
+  }
 });
-onBeforeUnmount(() => clearInterval(timer));
+onBeforeUnmount(() => {
+  abort.abort();
+  clearInterval(timer);
+});
 </script>
 
 <template>
@@ -41,7 +64,7 @@ onBeforeUnmount(() => clearInterval(timer));
     <h2>“{{ job.keyword }}”</h2>
     <p>
       Status: <strong>{{ job.status }}</strong>
-      <span v-if="job.status === 'pending' || job.status === 'running'"> — refreshing…</span>
+      <span v-if="job.status === 'pending' || job.status === 'running'"> — live…</span>
     </p>
     <p v-if="job.error" class="error">{{ job.error }}</p>
     <ResultList v-if="job.status === 'completed'" :results="job.results" />

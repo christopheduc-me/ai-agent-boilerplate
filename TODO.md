@@ -158,7 +158,9 @@ place — each item is an adapter/use-case cycle away.
       inert portable `renovate.json` for forks that want automated update PRs
       (connect the Mend app on GitHub, or a scheduled renovate container job
       on GitLab/self-hosted, to activate it).
-- [ ] SSE to replace frontend polling (noted in ARCHITECTURE §5).
+- [x] **Live job updates over SSE (ADR-026)** — done: `GET
+      /api/searches/{id}/events` (DB-poll stream, closes on terminal status),
+      fetch-streaming client with automatic polling fallback.
 - [x] **Code coverage reporting in CI (ADR-023)** — done: cargo llvm-cov /
       pytest-cov / vitest v8 in the test jobs, Codecov on GitHub (informational,
       per-brick flags), native `coverage:` regex on the GitLab mirror.

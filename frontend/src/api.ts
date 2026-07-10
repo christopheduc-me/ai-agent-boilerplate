@@ -45,7 +45,70 @@ async function request<T>(path: string, options: RequestInit = {}, token?: strin
   return (await response.json()) as T;
 }
 
+export interface SSEEvent {
+  event: string;
+  data: string;
+}
+
+/**
+ * Incremental parser for a text/event-stream body (ADR-026). Feed it chunks
+ * (arbitrarily split), it returns the complete events found so far.
+ */
+export function createSSEParser(): (chunk: string) => SSEEvent[] {
+  let buffer = "";
+  return (chunk: string): SSEEvent[] => {
+    buffer += chunk;
+    const events: SSEEvent[] = [];
+    let separator: number;
+    while ((separator = buffer.indexOf("\n\n")) !== -1) {
+      const block = buffer.slice(0, separator);
+      buffer = buffer.slice(separator + 2);
+      let event = "message";
+      const data: string[] = [];
+      for (const line of block.split("\n")) {
+        if (line.startsWith("event:")) event = line.slice(6).trim();
+        else if (line.startsWith("data:")) data.push(line.slice(5).trim());
+        // lines starting with ":" are keep-alive comments — ignored
+      }
+      if (data.length > 0) events.push({ event, data: data.join("\n") });
+    }
+    return events;
+  };
+}
+
+/**
+ * Streams job updates over SSE. `EventSource` cannot send an Authorization
+ * header, so this uses fetch + ReadableStream instead (ADR-026). Resolves when
+ * the server closes the stream (terminal status); rejects on transport errors
+ * so the caller can fall back to polling.
+ */
+async function streamSearch(
+  id: string,
+  token: string,
+  onUpdate: (job: SearchJobDetail) => void,
+  signal?: AbortSignal,
+): Promise<void> {
+  const response = await fetch(`/api/searches/${id}/events`, {
+    headers: { Accept: "text/event-stream", Authorization: `Bearer ${token}` },
+    signal,
+  });
+  if (!response.ok || !response.body) {
+    throw new ApiError(response.status, response.statusText);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  const parse = createSSEParser();
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) return;
+    for (const event of parse(decoder.decode(value, { stream: true }))) {
+      if (event.event === "update") onUpdate(JSON.parse(event.data) as SearchJobDetail);
+    }
+  }
+}
+
 export const api = {
+  streamSearch,
   register: (email: string, password: string) =>
     request<{ id: string; email: string }>("/api/auth/register", {
       method: "POST",

@@ -1,8 +1,9 @@
 //! Inbound HTTP adapter (Axum): routes, DTOs, auth extractor, rate limiting,
-//! request correlation.
+//! request correlation, SSE job updates.
 
 pub mod rate_limit;
 pub mod request_id;
+pub mod sse;
 
 use std::sync::Arc;
 
@@ -128,6 +129,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
     let api_routes = Router::new()
         .route("/api/searches", post(create_search).get(list_searches))
         .route("/api/searches/{id}", get(get_search))
+        .route("/api/searches/{id}/events", get(search_events))
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
             rate_limit::rate_limit,
@@ -371,23 +373,49 @@ async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUse
     }
 }
 
+/// The job detail payload, shared by `GET /api/searches/{id}` and the SSE
+/// stream (ADR-026) so both surfaces always carry the same shape.
+pub(crate) fn job_detail_json(job: &ResearchJob, results: &[SearchResult]) -> serde_json::Value {
+    let mut body = serde_json::to_value(JobView::from(job)).expect("serializable view");
+    body["results"] = serde_json::to_value(results).expect("serializable results");
+    body
+}
+
 async fn get_search(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
     Path(job_id): Path<Uuid>,
 ) -> Response {
     match state.queries.get(user_id, job_id).await {
-        Ok(Some((job, results))) => {
-            let mut body = serde_json::to_value(JobView::from(&job)).expect("serializable view");
-            body["results"] = serde_json::to_value(results).expect("serializable results");
-            Json(body).into_response()
-        }
+        Ok(Some((job, results))) => Json(job_detail_json(&job, &results)).into_response(),
         Ok(None) => error_body(StatusCode::NOT_FOUND, "search not found"),
         Err(e) => {
             tracing::error!(error = %e, "get search failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
+}
+
+/// SSE stream of job updates (ADR-026): an `update` event per change, closed
+/// after the terminal status. The client keeps polling as a fallback.
+async fn search_events(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(job_id): Path<Uuid>,
+) -> Response {
+    // Reject unknown/foreign jobs with a proper 404 before streaming.
+    match state.queries.get(user_id, job_id).await {
+        Ok(Some(_)) => {}
+        Ok(None) => return error_body(StatusCode::NOT_FOUND, "search not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "search events failed");
+            return error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+        }
+    }
+    let stream = sse::job_updates(state.queries.clone(), user_id, job_id);
+    axum::response::sse::Sse::new(stream)
+        .keep_alive(axum::response::sse::KeepAlive::default())
+        .into_response()
 }
 
 // ---------------------------------------------------------------- internal handlers (worker -> backend, ADR-006)

@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-25-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-26-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together

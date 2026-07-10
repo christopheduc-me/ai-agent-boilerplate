@@ -383,6 +383,109 @@ async fn every_response_carries_a_request_id() {
 }
 
 #[tokio::test]
+async fn sse_streams_job_updates_until_terminal() {
+    use futures_util::StreamExt;
+
+    let app = app();
+
+    // Register + login + launch a job.
+    send(
+        &app,
+        post_json(
+            "/api/auth/register",
+            json!({"email": "sse@example.com", "password": "s3cret-password"}),
+            &[],
+        ),
+    )
+    .await;
+    let (_, body) = send(
+        &app,
+        post_json(
+            "/api/auth/login",
+            json!({"email": "sse@example.com", "password": "s3cret-password"}),
+            &[],
+        ),
+    )
+    .await;
+    let auth = format!("Bearer {}", body["access_token"].as_str().unwrap());
+    let (_, body) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "sse"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    let job_id = body["job_id"].as_str().unwrap().to_string();
+
+    // Unknown job -> 404, no stream.
+    let (status, _) = send(
+        &app,
+        get(
+            &format!("/api/searches/{}/events", uuid::Uuid::new_v4()),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    // Open the stream: the first frame carries the current (pending) state.
+    let response = app
+        .clone()
+        .oneshot(get(
+            &format!("/api/searches/{job_id}/events"),
+            &[("authorization", auth.as_str())],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(
+        response.headers().get("content-type").unwrap(),
+        "text/event-stream"
+    );
+    let mut frames = response.into_body().into_data_stream();
+    let mut received = String::new();
+
+    let first = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next())
+        .await
+        .expect("first SSE frame")
+        .unwrap()
+        .unwrap();
+    received.push_str(std::str::from_utf8(&first).unwrap());
+    assert!(received.contains("event: update"), "{received}");
+    assert!(received.contains(r#""status":"pending""#), "{received}");
+
+    // Worker delivers results: the stream must emit the completed state, then end.
+    send(
+        &app,
+        post_json(
+            &format!("/internal/jobs/{job_id}/results"),
+            json!({"results": [
+                {"title": "r", "url": "https://r", "snippet": "", "published_at": null, "date_confidence": "unknown"}
+            ]}),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !received.contains(r#""status":"completed""#) {
+        let frame = tokio::time::timeout_at(deadline, frames.next())
+            .await
+            .expect("completed update before timeout")
+            .expect("stream ended before the completed update")
+            .unwrap();
+        received.push_str(std::str::from_utf8(&frame).unwrap());
+    }
+
+    // Terminal state emitted -> the stream closes.
+    let end = tokio::time::timeout(std::time::Duration::from_secs(5), frames.next())
+        .await
+        .expect("stream should close after the terminal update");
+    assert!(end.is_none(), "stream must end after a terminal status");
+}
+
+#[tokio::test]
 async fn internal_endpoints_require_the_internal_token() {
     let app = app();
     let (status, _) = send(

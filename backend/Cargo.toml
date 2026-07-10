@@ -21,6 +21,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "rus
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 dotenvy = "0.15"
 sha2 = "0.11.0"
+futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

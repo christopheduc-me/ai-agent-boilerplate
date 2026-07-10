@@ -106,8 +106,8 @@ Vue Router. No heavy UI framework for now — plain CSS.
 **Pages**: sign-up, login, keyword form, list of searches, search detail
 (results sorted by date; sources without a date shown separately).
 
-**Refresh**: polling every 2–3 s while the job is `pending`/`running`.
-SSE/WebSocket is a possible later evolution (noted as such, not in the boilerplate).
+**Refresh**: live updates over SSE (ADR-026), with plain 2.5 s polling kept as
+an automatic fallback when the stream fails.
 
 ### ADR-004 — AI agent: Python, LangChain + Celery + Redis, hexagonal too
 
@@ -685,6 +685,27 @@ hooks (`lefthook install`): fast format/lint checks per brick plus a gitleaks
 staged scan when installed. Deliberately fast — test suites and clippy stay in
 CI. Bypass with `git commit --no-verify`.
 
+### ADR-026 — Live job updates over SSE (decided 2026-07-10, revisits ADR-003)
+
+**Decision**: `GET /api/searches/{id}/events` streams the job detail as SSE
+`update` events (same JSON shape as the GET endpoint — one shared builder),
+one event per change, closing after the terminal status. The frontend
+subscribes on the detail view and **falls back to the previous polling**
+automatically if the stream fails.
+
+Two deliberate implementation choices:
+
+1. **Per-connection database polling (1 s), not an in-process broadcast** — a
+   `tokio::broadcast` bus would be faster but silently wrong with two backend
+   instances; the job state lives in PostgreSQL, so polling it keeps the
+   stream correct at any scale. Upgrading to Postgres LISTEN/NOTIFY or Redis
+   pub/sub is a swap inside `adapters/http/sse.rs` (noted in §5).
+2. **Client uses fetch + ReadableStream, not `EventSource`** — the browser's
+   `EventSource` API cannot send an `Authorization` header, and the usual
+   workaround (access token in the query string) leaks tokens into proxy and
+   server logs. A small incremental SSE parser (`createSSEParser`, unit
+   tested) keeps the client dependency-free.
+
 ---
 
 ## 4. API contracts (summary)
@@ -700,6 +721,7 @@ CI. Bypass with `git commit --no-verify`.
 | POST | `/api/searches` | Launches a search `{keyword}` → `{job_id}` |
 | GET | `/api/searches` | List of the user's searches |
 | GET | `/api/searches/{id}` | Status + results sorted by date |
+| GET | `/api/searches/{id}/events` | SSE stream of the same payload, one `update` event per change, closes on terminal status (ADR-026) |
 
 All `/api/*` routes can answer `429` (per-IP rate limit; `POST /api/searches`
 also enforces the per-user daily quota — ADR-017).
@@ -724,7 +746,8 @@ also enforces the per-user daily quota — ADR-017).
 
 - Migrating the VPS deployment (ADR-015) to Kubernetes or a PaaS if scaling
   needs arise — the images being identical, only the orchestrator changes.
-- SSE or WebSocket for real-time job tracking (replaces polling).
+- Upgrade the SSE change-detection (ADR-026) from per-connection DB polling to
+  Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
 - Recurring keyword monitoring (Celery beat).
 - Per-user quotas / rate limiting.

@@ -131,6 +131,7 @@ dependencies = [
  "axum",
  "chrono",
  "dotenvy",
+ "futures-util",
  "http-body-util",
  "jsonwebtoken",
  "rand_core 0.6.4",
