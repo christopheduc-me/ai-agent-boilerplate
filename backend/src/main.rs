@@ -1,8 +1,13 @@
+//! Thin wiring binary: environment parsing/validation lives in
+//! `backend::config::AppConfig` (tested), the HTTP surface in
+//! `backend::adapters::http` (tested). This file only connects them —
+//! it is excluded from coverage along with `src/bin/` (ADR-023).
+
 use std::sync::Arc;
 
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
-use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
+use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
 };
@@ -10,6 +15,7 @@ use backend::adapters::persistence::postgres::{
     run_migrations, PostgresJobRepository, PostgresRefreshTokenRepository, PostgresUserRepository,
 };
 use backend::application::FailStaleJobs;
+use backend::config::AppConfig;
 use backend::domain::ports::{
     JobDispatcher, JobRepository, RefreshTokenRepository, UserRepository,
 };
@@ -35,14 +41,10 @@ async fn main() {
             .init(),
     }
 
-    // Fail-fast startup check (ADR-020): in production, every required
-    // variable must be set — no degraded fallbacks, no placeholder secrets.
-    if std::env::var("APP_ENV").as_deref() == Ok("production") {
-        let missing =
-            backend::config::missing_required(backend::config::REQUIRED_IN_PRODUCTION, |name| {
-                std::env::var(name).ok()
-            });
-        if !missing.is_empty() {
+    // Parse + validate the environment (ADR-020: fail fast in production).
+    let config = match AppConfig::from_env() {
+        Ok(config) => config,
+        Err(missing) => {
             tracing::error!(
                 missing = missing.join(", "),
                 "backend cannot start in production: required environment \
@@ -51,20 +53,17 @@ async fn main() {
             );
             std::process::exit(1);
         }
+    };
+    for warning in &config.warnings {
+        tracing::warn!("{warning}");
     }
 
-    let jwt_secret = std::env::var("JWT_SECRET").unwrap_or_else(|_| {
-        tracing::warn!("JWT_SECRET not set, using an insecure development default");
-        "insecure-dev-secret".into()
-    });
-    let internal_token = std::env::var("INTERNAL_API_TOKEN").unwrap_or_else(|_| "change-me".into());
-
-    let dispatcher: Arc<dyn JobDispatcher> = match std::env::var("AGENT_API_URL") {
-        Ok(url) => Arc::new(HttpJobDispatcher::new(url, internal_token.clone())),
-        Err(_) => {
-            tracing::warn!("AGENT_API_URL not set, jobs will not be dispatched (noop)");
-            Arc::new(NoopJobDispatcher)
-        }
+    let dispatcher: Arc<dyn JobDispatcher> = match &config.agent_api_url {
+        Some(url) => Arc::new(HttpJobDispatcher::new(
+            url.clone(),
+            config.internal_token.clone(),
+        )),
+        None => Arc::new(NoopJobDispatcher),
     };
 
     type Repos = (
@@ -72,11 +71,11 @@ async fn main() {
         Arc<dyn JobRepository>,
         Arc<dyn RefreshTokenRepository>,
     );
-    let (users, jobs, refresh_tokens): Repos = match std::env::var("DATABASE_URL") {
-        Ok(url) => {
+    let (users, jobs, refresh_tokens): Repos = match &config.database_url {
+        Some(url) => {
             let pool = PgPoolOptions::new()
                 .max_connections(10)
-                .connect(&url)
+                .connect(url)
                 .await
                 .expect("failed to connect to PostgreSQL");
             run_migrations(&pool)
@@ -89,27 +88,18 @@ async fn main() {
                 Arc::new(PostgresRefreshTokenRepository::new(pool)),
             )
         }
-        Err(_) => {
-            tracing::warn!(
-                "DATABASE_URL not set, using in-memory persistence (data lost on restart)"
-            );
-            (
-                Arc::new(InMemoryUserRepository::default()),
-                Arc::new(InMemoryJobRepository::default()),
-                Arc::new(InMemoryRefreshTokenRepository::default()),
-            )
-        }
+        None => (
+            Arc::new(InMemoryUserRepository::default()),
+            Arc::new(InMemoryJobRepository::default()),
+            Arc::new(InMemoryRefreshTokenRepository::default()),
+        ),
     };
 
     // Background reaper (ADR-016): fails jobs stuck without worker notification
     // and purges expired refresh tokens (ADR-008).
-    let timeout_minutes: u64 = std::env::var("JOB_TIMEOUT_MINUTES")
-        .ok()
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(15);
     let reaper = FailStaleJobs::new(
         jobs.clone(),
-        std::time::Duration::from_secs(timeout_minutes * 60),
+        std::time::Duration::from_secs(config.job_timeout_minutes * 60),
     );
     let refresh_tokens_for_reaper = refresh_tokens.clone();
     tokio::spawn(async move {
@@ -130,40 +120,23 @@ async fn main() {
         }
     });
 
-    fn env_u32(name: &str, default: u32) -> u32 {
-        std::env::var(name)
-            .ok()
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(default)
-    }
-
-    // Abuse protection (ADR-017): per-user quota + per-IP rate limits.
-    let daily_search_quota = env_u32("DAILY_SEARCH_QUOTA", 20);
-    let limits = RateLimitConfig {
-        auth_per_minute: env_u32("RATE_LIMIT_AUTH_PER_MINUTE", 10),
-        api_per_minute: env_u32("RATE_LIMIT_API_PER_MINUTE", 120),
-    };
-
-    let refresh_ttl_days = i64::from(env_u32("REFRESH_TOKEN_DAYS", 30));
-
     let state = AppState::new(
         users,
         jobs,
         refresh_tokens,
         dispatcher,
         Arc::new(Argon2PasswordHasher),
-        Arc::new(JwtTokenService::new(&jwt_secret, 15)),
-        internal_token,
-        daily_search_quota,
-        refresh_ttl_days,
+        Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),
+        config.internal_token,
+        config.daily_search_quota,
+        config.refresh_token_days,
     );
 
-    let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "0.0.0.0:8000".into());
-    let listener = tokio::net::TcpListener::bind(&bind_addr)
+    let listener = tokio::net::TcpListener::bind(&config.bind_addr)
         .await
         .expect("failed to bind");
-    tracing::info!(%bind_addr, "backend listening");
-    axum::serve(listener, router_with_limits(state, limits))
+    tracing::info!(bind_addr = %config.bind_addr, "backend listening");
+    axum::serve(listener, router_with_limits(state, config.rate_limits))
         .await
         .expect("server error");
 }

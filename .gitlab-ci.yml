@@ -74,8 +74,8 @@ backend:test:
     - cargo install cargo-llvm-cov --locked
   script:
     - cd backend
-    - cargo llvm-cov
-    - cargo llvm-cov report --summary-only | awk '/^TOTAL/ {print "COVERAGE:", $10}'
+    - cargo llvm-cov --ignore-filename-regex 'src/(main\.rs|bin/)'
+    - cargo llvm-cov report --summary-only --ignore-filename-regex 'src/(main\.rs|bin/)' | awk '/^TOTAL/ {print "COVERAGE:", $10}'
   coverage: '/COVERAGE: ([\d.]+)%/'
 
 # ---------------------------------------------------------------- agent (Python)

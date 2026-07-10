@@ -626,7 +626,18 @@ standard tool — `cargo llvm-cov` (backend), `pytest --cov` (agent),
 - **GitLab mirror → native `coverage:` regex** (job coverage shown in MRs and
   available as a GitLab badge) — zero external service.
 
-Baseline at adoption: backend ≈85 % lines, agent ≈88 %, frontend low (only the
+**Thin binaries are excluded, their logic is extracted and tested** (added
+2026-07-09): `src/main.rs` and `src/bin/healthcheck.rs` cannot be meaningfully
+unit-tested (they bind sockets and block), so their logic moved into library
+modules that are — `config::AppConfig` (env parsing, defaults, dev-fallback
+warnings, ADR-020 production validation) and `healthcheck::check` (probe
+tested against a stub TCP server). The residual shells are excluded from
+coverage (`--ignore-filename-regex` + `codecov.yml ignore`); everything they
+delegate to is measured. Same philosophy on the agent: `tasks.py` is covered
+end to end by calling the Celery task directly with fake providers (ADR-021)
+and respx-mocked backend callbacks.
+
+Baseline: backend ≈93 % lines, agent ≈95 %, frontend low by design (only the
 domain-critical `ResultList` component is unit-tested — the e2e smoke covers
 the views end to end instead, ADR-021).
 

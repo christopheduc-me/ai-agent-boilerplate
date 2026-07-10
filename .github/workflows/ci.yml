@@ -56,7 +56,9 @@ jobs:
           cargo clippy --all-targets -- -D warnings
       - name: Test with coverage (includes PostgreSQL integration tests)
         working-directory: backend
-        run: cargo llvm-cov --lcov --output-path lcov.info
+        # src/main.rs and src/bin/ are thin wiring shells: their logic lives in
+        # config.rs / healthcheck.rs, which ARE covered (ADR-023).
+        run: cargo llvm-cov --lcov --output-path lcov.info --ignore-filename-regex 'src/(main\.rs|bin/)'
       - name: Upload coverage (ADR-023)
         uses: codecov/codecov-action@v5
         with:

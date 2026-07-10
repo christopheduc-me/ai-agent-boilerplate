@@ -49,7 +49,7 @@ pub struct AppState {
 }
 
 /// HTTP throttling knobs (ADR-017). Internal routes are never rate limited.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 pub struct RateLimitConfig {
     /// Per-IP limit on `/api/auth/*` (brute-force protection).
     pub auth_per_minute: u32,
