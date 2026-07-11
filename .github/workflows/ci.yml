@@ -1,6 +1,6 @@
 # Primary CI (ADR-019): lint + test the three bricks, build images (published
 # to GHCR on main/tags). This repository is a boilerplate: it deploys nothing —
-# deployment to a VPS is documented for forks (TODO.md §4, and a reference
+# deployment to a VPS is documented for forks (SETUP.md §4, and a reference
 # deploy job in the .gitlab-ci.yml mirror).
 name: CI
 

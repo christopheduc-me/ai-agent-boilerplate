@@ -1,7 +1,9 @@
-# TODO — manual setup checklist
+# SETUP — running and deploying the stack
 
-Everything that must be done by hand (GitHub, VPS, API accounts) before the
-pipeline and the deployment work end to end. Tick as you go.
+Everything that must be done by hand (local env, API accounts, GitHub, VPS)
+to run the stack locally and deploy it. Some steps are one-time, others apply
+to every new machine or deployment — tick as you go. The technical roadmap
+lives in [ROADMAP.md](ROADMAP.md).
 
 ## 1. Local repository
 
@@ -10,7 +12,13 @@ pipeline and the deployment work end to end. Tick as you go.
 - [x] First commit on `main` + push to GitHub — done (2026-07-09, full
       verification green beforehand: 101 tests across the three bricks).
 - [ ] `cp .env.example .env` and fill in `ANTHROPIC_API_KEY` + `TAVILY_API_KEY`
-      (local development only — never committed).
+      (local development only — never committed). No keys yet? Set
+      `AGENT_PROVIDERS=fake` instead to run the whole stack keyless with
+      deterministic results (ADR-021).
+
+Then launch: dev mode (compose infra + the three bricks by hand) or the fully
+containerized stack — the exact commands are in the README Quick start and
+docs/COMMANDS.md.
 
 ## 2. API provider accounts
 
@@ -103,80 +111,3 @@ docs/COMMANDS.md §10.
   0 3 * * * cd /opt/aiagent && docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres pg_dump -U app aiagent | gzip > /opt/aiagent/backups/aiagent_$(date +\%F).sql.gz
   ```
   - [ ] Create `/opt/aiagent/backups/` and add a retention rule (e.g. `find ... -mtime +14 -delete`).
-
-## 5. Technical roadmap (prioritized)
-
-Deliberate scope cuts and hardening steps, ordered by risk. The ports are in
-place — each item is an adapter/use-case cycle away.
-
-### P1 — Core reliability (before real usage)
-
-- [x] **PostgreSQL adapter** (sqlx, ADR-007) — done. PostgreSQL whenever
-      `DATABASE_URL` is set (migrations at startup), in-memory fallback
-      otherwise; integration tests against compose locally / GitLab service in CI.
-- [x] **Job lifecycle robustness (ADR-016)** — done: `running` transition,
-      backend reaper (`JOB_TIMEOUT_MINUTES`), Celery retries with backoff,
-      idempotent end to end.
-- [x] **Rate limiting + quotas (ADR-017)** — done: per-user daily search quota
-      (`DAILY_SEARCH_QUOTA`), per-IP fixed-window limits on auth and API routes
-      (`RATE_LIMIT_AUTH_PER_MINUTE`, `RATE_LIMIT_API_PER_MINUTE`).
-- [x] **Refresh tokens (ADR-008)** — done: single-use rotation on `/refresh`,
-      SHA-256-hashed storage (migration 0002), HttpOnly cookie scoped to
-      `/api/auth`, revocation on `/logout`, expired-token purge by the reaper.
-      Frontend: silent session restore on reload + refresh-and-retry on 401
-      (`withAuth`), redirect to login when the session is gone.
-
-### P2 — Operability
-
-- [x] **End-to-end correlation (ADR-018)** — done: `X-Request-Id` middleware on
-      the Rust API, `job_id` propagated Rust → FastAPI → Celery → callbacks,
-      `LOG_FORMAT=json` structured logs on all three server processes
-      (enabled in `docker-compose.prod.yml`).
-- [x] **Security hygiene in CI (ADR-015 amendment)** — done: `audit` stage with
-      `cargo audit`, `pip-audit`, `npm audit`, gitleaks; runs on the weekly
-      schedule only (creation of the schedule: §3 above).
-
-### P3 — Agent product quality
-
-- [ ] **Date cascade stage 2 (ADR-011)**: fetch the page and read JSON-LD
-      `datePublished` / OpenGraph before falling back to the LLM — cheaper and
-      `high` confidence instead of `medium`.
-- [ ] **URL normalization + deduplication** in the agent domain (tracking params
-      make the same article count twice today).
-- [ ] Optional `RUN_LIVE_TESTS=1` integration tests for the Tavily and Claude
-      adapters (ADR-012).
-
-### P4 — Comfort (later)
-
-- [x] **E2E smoke test on the full compose stack in CI (ADR-021)** — done:
-      deterministic fake providers (`AGENT_PROVIDERS=fake`, keyless),
-      `scripts/e2e-smoke.sh` through nginx, `e2e` job in GitHub Actions and
-      the GitLab mirror. (Playwright browser-level tests remain a possible
-      upgrade.)
-- [x] **Dependency freshness without a platform bot (ADR-022)** — done:
-      `scripts/deps-report.sh` (native tools) run weekly by both CIs, plus an
-      inert portable `renovate.json` for forks that want automated update PRs
-      (connect the Mend app on GitHub, or a scheduled renovate container job
-      on GitLab/self-hosted, to activate it).
-- [x] **Live job updates over SSE (ADR-026)** — done: `GET
-      /api/searches/{id}/events` (DB-poll stream, closes on terminal status),
-      fetch-streaming client with automatic polling fallback.
-- [x] **Code coverage reporting in CI (ADR-023)** — done: cargo llvm-cov /
-      pytest-cov / vitest v8 in the test jobs, Codecov on GitHub (informational,
-      per-brick flags), native `coverage:` regex on the GitLab mirror.
-- [x] **Pre-commit hooks (lefthook, ADR-022 amendment)** — done: fast
-      format/lint per brick + gitleaks staged scan; `lefthook install` to opt in.
-- [x] **Graceful shutdown of the backend (ADR-024)** — done: SIGTERM/SIGINT
-      drain via `with_graceful_shutdown`.
-- [x] **Cross-language contract fixtures (ADR-025)** — done: `contracts/`
-      golden files asserted by both the Rust and Python suites.
-- [x] **Trivy image scanning (ADR-015 amendment)** — done: weekly HIGH/CRITICAL
-      CVE scan of the three published images in both CIs.
-- [ ] Distributed per-IP rate limiting **if** the backend ever scales
-      horizontally (ADR-017). Note: the per-user quota is already
-      multi-instance-safe (it counts rows in PostgreSQL); only the in-memory
-      IP limiter is per-instance, and its degradation is benign (effective
-      limit becomes N× the configured one). When needed, prefer rate limiting
-      at the reverse proxy/load balancer (zero app code) over a Redis-backed
-      limiter — the latter only pays off for fine-grained per-user rules. The
-      swap surface is a single file (`backend/src/adapters/http/rate_limit.rs`).

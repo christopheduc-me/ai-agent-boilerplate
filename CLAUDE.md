@@ -15,7 +15,7 @@ and MUST stay in sync with the code at all times:
   decision) updates `docs/ARCHITECTURE.md` **in the same change**.
 - A revisited decision gets a new ADR entry; never rewrite history.
 - Not-yet-implemented parts are marked *(planned)* in the document and tracked
-  in `TODO.md`. When implementing one, flip both.
+  in `ROADMAP.md`. When implementing one, flip both.
 - Before starting any structural work, read the relevant ADRs first.
 
 ## Architecture rules (summary — details in docs/ARCHITECTURE.md)

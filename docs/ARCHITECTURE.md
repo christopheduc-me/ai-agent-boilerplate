@@ -9,7 +9,7 @@
 > changed infrastructure, revisited decision) MUST update this document in the
 > same commit. When reality and this document disagree, fixing the discrepancy
 > is part of the change. Implementation gaps are marked *(planned)* here and
-> tracked in `TODO.md`.
+> tracked in `ROADMAP.md`.
 
 Last updated: 2026-07-07
 
@@ -446,7 +446,7 @@ effective limit becomes N× the configured one (benign degradation; the
 per-user quota stays exact at any scale since it counts PostgreSQL rows).
 If horizontal scaling makes that matter, prefer rate limiting at the reverse
 proxy/load balancer over a Redis-backed limiter in the backend — the latter
-only pays off for fine-grained per-user rules (see TODO.md P4).
+only pays off for fine-grained per-user rules (see ROADMAP.md P4).
 `X-Forwarded-For` is only trustworthy because the reverse proxy is the sole
 public entry point in production.
 
@@ -488,7 +488,7 @@ triggers): `cargo audit`, `pip-audit` (via `uv export`), `npm audit
 --audit-level=high`, and **gitleaks** over the full git history (`GIT_DEPTH: 0`).
 Scheduled pipelines skip every other job (`.not-on-schedule` rule), so the
 weekly run is audit-only and never blocks merge requests. The weekly schedule
-itself is created in the GitLab UI (see TODO.md §3).
+itself is created in the GitLab UI (see SETUP.md §3).
 
 ### ADR-019 — Open source on GitHub: GitHub Actions becomes the primary CI/CD (decided 2026-07-08, revisits ADR-015)
 
@@ -510,7 +510,7 @@ must be validated automatically, and `.gitlab-ci.yml` does not run on GitHub.
 2. **The boilerplate repository deploys nothing.** It is a source-code repo:
    forks deploy to their own infrastructure. The VPS deployment story (ADR-015)
    remains fully documented — compose production override, Caddy, provisioning
-   checklist in TODO.md §4, and a **reference deploy job in the GitLab CI
+   checklist in SETUP.md §4, and a **reference deploy job in the GitLab CI
    mirror** — but no GitHub Actions job touches any server.
 3. **`.gitlab-ci.yml` is kept as a documented mirror** of the pipeline for
    GitLab-hosted forks (including the reference `deploy:vps` job); it is not

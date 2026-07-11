@@ -132,8 +132,8 @@ docs/                           # ARCHITECTURE.md (27 ADRs), COMMANDS.md, diagra
   (ADR-001 → ADR-027), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/) — PlantUML sequence diagrams (auth flow).
-- [TODO.md](TODO.md) — manual setup checklist (CI, VPS, API keys) and the
-  prioritized technical roadmap.
+- [SETUP.md](SETUP.md) — manual setup checklist (local env, CI, VPS, API keys).
+- [ROADMAP.md](ROADMAP.md) — the prioritized technical roadmap.
 
 ## Deployment (for your fork)
 
@@ -141,7 +141,7 @@ This repository is source code only — **it deploys nothing itself**. Fork it
 and deploy on your own infrastructure: everything is provided for a
 single-VPS setup with docker compose behind Caddy (automatic TLS) —
 production compose override, step-by-step provisioning checklist
-([TODO.md](TODO.md) §4), and a reference CI deploy job in the GitLab mirror.
+([SETUP.md](SETUP.md) §4), and a reference CI deploy job in the GitLab mirror.
 Reproducible by design: images are pinned to the commit SHA, and a rollback is
 redeploying the previous tag. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 (ADR-015/019).
