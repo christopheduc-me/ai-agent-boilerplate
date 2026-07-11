@@ -4,10 +4,11 @@ import os
 from typing import Any
 
 from celery import Celery
-from celery.signals import setup_logging, worker_init
+from celery.signals import setup_logging, worker_init, worker_process_init
 
 from aiagent.config import forbid_placeholders, require_env
 from aiagent.logging_setup import configure_logging
+from aiagent.telemetry import configure_telemetry
 
 _redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 
@@ -16,6 +17,15 @@ _redis_url = os.environ.get("REDIS_URL", "redis://localhost:6379/0")
 def _configure_worker_logging(**_kwargs: Any) -> None:
     """Keep our structured logging (ADR-018) instead of Celery's hijack."""
     configure_logging()
+
+
+@worker_process_init.connect
+def _configure_worker_telemetry(**_kwargs: Any) -> None:
+    """Traces (ADR-029, opt-in): resume the trace context injected by the
+    producer into the task message, and propagate it again on the httpx
+    callbacks to the backend. Per child process, as the OTel Celery docs
+    require."""
+    configure_telemetry("agent-worker")
 
 
 @worker_init.connect

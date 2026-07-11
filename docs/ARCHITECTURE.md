@@ -11,7 +11,7 @@
 > is part of the change. Implementation gaps are marked *(planned)* here and
 > tracked in `ROADMAP.md`.
 
-Last updated: 2026-07-07
+Last updated: 2026-07-11
 
 **Language convention**: all documentation, code, comments, commit messages, and
 identifiers in this project are written in **English only**.
@@ -740,6 +740,58 @@ information beyond title/snippet/date.
    provider-confirmed dates, hollow + "(estimated)" for LLM-extracted ones),
    event badge, LLM summary (falling back to the snippet), and the undated
    section kept apart (ADR-011).
+
+### ADR-028 — Browser-level e2e tests with Playwright (decided 2026-07-11, extends ADR-021)
+
+**Context**: the ADR-021 smoke script exercises the full stack over raw HTTP
+but never runs the SPA itself — a broken build, router, store, or the SSE
+client (ADR-026) would slip through.
+
+**Decision**: **Playwright** specs in `frontend/e2e/` drive a real Chromium
+through nginx against the same fake-provider stack as the smoke script
+(`--profile full` + `AGENT_PROVIDERS=fake`; the stack must be up first — no
+`webServer` block, the system under test is the containerized one). Two
+journeys: register → search → live status → timeline assertions (month groups,
+estimated marker, badges, undated section), and login-again → previous
+searches (exercises the refresh-cookie flow, ADR-008). Wired into the existing
+`e2e` job on both CIs — on GitLab through the official Playwright image run on
+the dind daemon (`--network host`, sources `docker cp`'d in; keep the image
+tag in sync with `@playwright/test`). Locally: `npm run test:e2e`
+(`E2E_BASE_URL` overrides the default `http://localhost:8080`). Playwright
+specs are excluded from vitest and from coverage.
+
+### ADR-029 — Opt-in OpenTelemetry traces (decided 2026-07-11, extends ADR-018)
+
+**Context**: the ADR-018 correlation ids make `grep <job_id>` work across the
+four processes, but reconstructing latency and causality by hand from logs is
+tedious; distributed tracing is the standard answer. A boilerplate, however,
+must not force an observability stack on every fork.
+
+**Decision**: OpenTelemetry traces, **strictly opt-in** behind the standard
+`OTEL_EXPORTER_OTLP_ENDPOINT` variable — unset or empty (the default), nothing
+is installed and both bricks behave exactly as before.
+
+1. **Backend (Rust)**: `telemetry::layer()` adds an OTLP/HTTP export layer to
+   the existing `tracing` subscriber; the per-request `http_request` spans
+   (ADR-018 middleware) become exported spans for free. The dispatcher injects
+   the W3C `traceparent` header on `POST /tasks`, and buffered spans are
+   flushed on graceful shutdown (ADR-024).
+2. **Agent (Python)**: `configure_telemetry()` installs the OTLP tracer
+   provider plus the FastAPI (extracts `traceparent`), Celery (carries the
+   context producer → worker through the broker; instrumented per worker
+   process) and httpx (propagates it again on the result callbacks)
+   instrumentations. One search = one trace across all four hops.
+3. **Local trace backend**: `docker compose --profile observability` adds a
+   dev-only **Jaeger v2** (OTLP on 4318, UI on 16686); the app services pass
+   `OTEL_EXPORTER_OTLP_ENDPOINT` through from the environment. Production
+   forks point the variable at their own collector.
+4. **Test hygiene (ADR-012)**: unit tests assert the gate (disabled without
+   the variable, no header leakage) and the propagation path with an
+   exporter-less local provider — no collector, no network.
+
+Metrics and logs stay out of scope: traces are where the multi-process
+debugging pain is; the rest can follow the same opt-in pattern if a fork
+needs it.
 
 ---
 

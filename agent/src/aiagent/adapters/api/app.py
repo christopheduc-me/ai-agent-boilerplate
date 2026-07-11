@@ -16,9 +16,13 @@ from pydantic import BaseModel
 from aiagent.config import Settings, forbid_placeholders
 from aiagent.logging_setup import configure_logging
 from aiagent.tasks import run_research_task
+from aiagent.telemetry import configure_telemetry
 
 configure_logging()
 logger = logging.getLogger(__name__)
+# Traces (ADR-029, opt-in): joins the backend's trace and lets the Celery
+# instrumentation carry the context to the worker through the broker.
+TELEMETRY_ENABLED = configure_telemetry("agent-api")
 
 
 @asynccontextmanager
@@ -30,6 +34,10 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="aiagent task API", docs_url=None, redoc_url=None, lifespan=lifespan)
+if TELEMETRY_ENABLED:
+    from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
+
+    FastAPIInstrumentor.instrument_app(app)
 
 
 class TaskRequest(BaseModel):

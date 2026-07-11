@@ -21,26 +21,54 @@ use backend::domain::ports::{
 };
 use sqlx::postgres::PgPoolOptions;
 
-#[tokio::main]
-async fn main() {
+fn main() {
     // Loads ../.env (repo root) in development; harmless in containers.
     dotenvy::dotenv().ok();
 
     // Structured logs (ADR-018): LOG_FORMAT=json in production, pretty in dev.
+    // OpenTelemetry traces (ADR-029) are opt-in: the OTLP layer only exists
+    // when OTEL_EXPORTER_OTLP_ENDPOINT is set. The provider must be built
+    // outside the tokio runtime (its blocking export client would shut the
+    // batch processor down otherwise), hence the sync main.
+    use tracing_subscriber::layer::SubscriberExt;
+    use tracing_subscriber::util::SubscriberInitExt;
     let env_filter =
-        || tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+        tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into());
+    let (otel_provider, otel_layer) = match backend::telemetry::layer() {
+        Some((provider, layer)) => (Some(provider), Some(layer)),
+        None => (None, None),
+    };
+    let registry = tracing_subscriber::registry()
+        .with(env_filter)
+        .with(otel_layer);
     match std::env::var("LOG_FORMAT").as_deref() {
-        Ok("json") => tracing_subscriber::fmt()
-            .json()
-            .flatten_event(true)
-            .with_current_span(true)
-            .with_env_filter(env_filter())
+        Ok("json") => registry
+            .with(
+                tracing_subscriber::fmt::layer()
+                    .json()
+                    .flatten_event(true)
+                    .with_current_span(true),
+            )
             .init(),
-        _ => tracing_subscriber::fmt()
-            .with_env_filter(env_filter())
-            .init(),
+        _ => registry.with(tracing_subscriber::fmt::layer()).init(),
     }
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .expect("failed to build the tokio runtime")
+        .block_on(serve());
+
+    // Flush buffered spans before exiting (ADR-029).
+    if let Some(provider) = otel_provider {
+        if let Err(e) = provider.shutdown() {
+            eprintln!("failed to flush OpenTelemetry spans: {e}");
+        }
+    }
+    tracing::info!("backend stopped gracefully");
+}
+
+async fn serve() {
     // Parse + validate the environment (ADR-020: fail fast in production).
     let config = match AppConfig::from_env() {
         Ok(config) => config,
@@ -143,7 +171,6 @@ async fn main() {
         .with_graceful_shutdown(shutdown_signal())
         .await
         .expect("server error");
-    tracing::info!("backend stopped gracefully");
 }
 
 async fn shutdown_signal() {

@@ -1,5 +1,8 @@
 # Default profile (infra): PostgreSQL + Redis only — apps run locally for hot-reload.
 # Full stack: docker compose --profile full up --build
+# Traces (ADR-029): add --profile observability and point the services at Jaeger:
+#   OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
+#     docker compose --profile full --profile observability up
 services:
   postgres:
     image: postgres:16-alpine
@@ -37,6 +40,8 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
       JWT_SECRET: ${JWT_SECRET:-change-me}
       BIND_ADDR: 0.0.0.0:8000
+      # Traces (ADR-029): empty = disabled.
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "8000:8000"
     depends_on:
@@ -55,6 +60,7 @@ services:
     environment:
       REDIS_URL: redis://redis:6379/0
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:
       - "8001:8001"
     depends_on:
@@ -79,6 +85,7 @@ services:
       AGENT_MODEL_ID: ${AGENT_MODEL_ID:-claude-opus-4-8}
       # "fake" = deterministic keyless providers (e2e / keyless dev, ADR-021).
       AGENT_PROVIDERS: ${AGENT_PROVIDERS:-live}
+      OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     depends_on:
       redis:
         condition: service_healthy
@@ -95,6 +102,16 @@ services:
       - "8080:80"
     depends_on:
       - backend
+
+  # Local trace backend (ADR-029): Jaeger v2 receives OTLP natively on 4318
+  # and serves its UI on http://localhost:16686. Dev-only — production points
+  # OTEL_EXPORTER_OTLP_ENDPOINT at your own collector, if any.
+  jaeger:
+    profiles: ["observability"]
+    image: jaegertracing/jaeger:2.19.0
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318" # OTLP/HTTP (also for bricks running on the host)
 
 volumes:
   pgdata:

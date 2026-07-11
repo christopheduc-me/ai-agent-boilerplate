@@ -32,9 +32,14 @@ impl HttpJobDispatcher {
 #[async_trait]
 impl JobDispatcher for HttpJobDispatcher {
     async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError> {
+        // Distributed tracing (ADR-029): carry the W3C trace context so the
+        // agent joins the same trace. Empty when telemetry is disabled.
+        let mut trace_headers = reqwest::header::HeaderMap::new();
+        crate::telemetry::inject_trace_context(&mut trace_headers);
         let response = self
             .client
             .post(format!("{}/tasks", self.base_url))
+            .headers(trace_headers)
             .header("X-Internal-Token", &self.internal_token)
             // Correlation (ADR-018): the job id follows the work through
             // FastAPI, Celery, and the worker's callbacks.
@@ -80,9 +85,9 @@ mod tests {
     use std::sync::{Arc, Mutex};
     use uuid::Uuid;
 
-    type SeenHeaders = Arc<Mutex<Vec<(Option<String>, Option<String>)>>>;
+    type SeenHeaders = Arc<Mutex<Vec<(Option<String>, Option<String>, Option<String>)>>>;
 
-    /// Spawns a stub agent API capturing the auth + correlation headers.
+    /// Spawns a stub agent API capturing the auth, correlation and trace headers.
     async fn spawn_stub() -> (String, SeenHeaders) {
         let seen: SeenHeaders = Arc::new(Mutex::new(vec![]));
         let app = Router::new()
@@ -96,9 +101,11 @@ mod tests {
                                 .and_then(|v| v.to_str().ok())
                                 .map(str::to_string)
                         };
-                        seen.lock()
-                            .unwrap()
-                            .push((get("x-internal-token"), get("x-request-id")));
+                        seen.lock().unwrap().push((
+                            get("x-internal-token"),
+                            get("x-request-id"),
+                            get("traceparent"),
+                        ));
                         "queued"
                     },
                 ),
@@ -119,9 +126,40 @@ mod tests {
         dispatcher.dispatch(&job).await.unwrap();
 
         let calls = seen.lock().unwrap();
+        // No telemetry configured (ADR-029): no traceparent leaks out.
         assert_eq!(
             calls.as_slice(),
-            &[(Some("secret".into()), Some(job.id.to_string()))]
+            &[(Some("secret".into()), Some(job.id.to_string()), None)]
         );
+    }
+
+    #[tokio::test]
+    async fn dispatch_propagates_the_trace_context_when_telemetry_is_active() {
+        use opentelemetry::trace::TracerProvider as _;
+        use tracing::instrument::WithSubscriber;
+        use tracing::Instrument;
+        use tracing_subscriber::layer::SubscriberExt;
+
+        let (base_url, seen) = spawn_stub().await;
+        // Same shape as telemetry::layer(), minus the OTLP exporter.
+        opentelemetry::global::set_text_map_propagator(
+            opentelemetry_sdk::propagation::TraceContextPropagator::new(),
+        );
+        let provider = opentelemetry_sdk::trace::SdkTracerProvider::builder().build();
+        let subscriber = tracing_subscriber::registry()
+            .with(tracing_opentelemetry::layer().with_tracer(provider.tracer("test")));
+
+        async {
+            let dispatcher = HttpJobDispatcher::new(base_url, "secret".into());
+            let job = ResearchJob::new(Uuid::new_v4(), "keyword").unwrap();
+            let span = tracing::info_span!("http_request");
+            dispatcher.dispatch(&job).instrument(span).await.unwrap();
+        }
+        .with_subscriber(subscriber)
+        .await;
+
+        let calls = seen.lock().unwrap();
+        let traceparent = calls[0].2.as_deref().expect("traceparent propagated");
+        assert_eq!(traceparent.split('-').count(), 4);
     }
 }

@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-27-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-29-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
@@ -40,14 +40,16 @@ would otherwise rebuild from scratch on every agent project.
 - **Abuse protection** — per-user daily search quota (LLM calls cost money) and
   per-IP rate limiting on auth and API routes.
 - **Observability** — `X-Request-Id` correlation propagated across all four
-  processes, structured JSON logs behind a `LOG_FORMAT` switch.
+  processes, structured JSON logs behind a `LOG_FORMAT` switch, and opt-in
+  OpenTelemetry traces (one search = one distributed trace, local Jaeger via a
+  compose profile).
 - **Fully containerized** — multi-stage Dockerfiles, one compose file for dev
   (infra-only or full profile) and a production override with Caddy/TLS.
 - **CI** — GitHub Actions: lint + test on every PR, images published to GHCR
   on `main`, and weekly security audits (cargo/pip/npm audit + gitleaks). A
   GitLab CI mirror (`.gitlab-ci.yml`) ships for GitLab-hosted forks, including
   a reference VPS deploy job.
-- **Every decision written down** — 27 Architecture Decision Records in
+- **Every decision written down** — 29 Architecture Decision Records in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), including the rejected
   alternatives and the trade-offs.
 
@@ -111,6 +113,7 @@ docker compose --profile full up --build   # frontend on http://localhost:8080
 cd backend && cargo test         # domain + use cases with port fakes; +Postgres tests when DATABASE_URL is set
 cd agent && uv run pytest        # domain + use cases, Celery in eager mode
 cd frontend && npm test          # vitest + Vue Test Utils
+cd frontend && npm run test:e2e  # Playwright browser journey against the compose stack (keyless)
 ```
 
 ## Repository layout
@@ -124,13 +127,13 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (27 ADRs), COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (29 ADRs), COMMANDS.md, diagrams/
 ```
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-027), kept in sync with the code at all times.
+  (ADR-001 → ADR-029), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/) — PlantUML sequence diagrams (auth flow).
 - [SETUP.md](SETUP.md) — manual setup checklist (local env, CI, VPS, API keys).

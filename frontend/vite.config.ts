@@ -19,5 +19,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    // Playwright specs (e2e/) run against the compose stack, not under vitest.
+    exclude: ["e2e/**", "node_modules/**", "dist/**"],
   },
 });

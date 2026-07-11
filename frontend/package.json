@@ -8,6 +8,7 @@
     "build": "vite build",
     "preview": "vite preview",
     "test": "vitest run",
+    "test:e2e": "playwright test",
     "typecheck": "vue-tsc --noEmit",
     "lint": "eslint ."
   },
@@ -17,6 +18,7 @@
     "vue-router": "^4.5.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.1",
     "@types/node": "^22.20.0",
     "@vitejs/plugin-vue": "^5.2.0",
     "@vitest/coverage-v8": "^3.2.7",

@@ -149,7 +149,7 @@ RUN_LIVE_TESTS=1 uv run pytest              # includes live provider tests (none
 cd frontend
 npm test                                    # single run (CI mode)
 npx vitest                                  # watch mode
-npx vitest run src/components/__tests__/ResultList.spec.ts   # one file
+npx vitest run src/components/__tests__/ResultTimeline.spec.ts   # one file
 ```
 
 ### End-to-end (full compose stack, no API key — ADR-021)
@@ -167,6 +167,34 @@ docker compose --profile full down          # teardown (remember to revert .env)
 
 `AGENT_PROVIDERS=fake` also works for keyless local development (the worker
 starts without ANTHROPIC/TAVILY keys and returns deterministic results).
+
+### Browser tests (Playwright — ADR-028)
+
+Same stack as the smoke script (boot it first, see above), driven through a
+real Chromium:
+
+```sh
+cd frontend
+npx playwright install chromium             # one-time browser download
+npm run test:e2e                            # register -> search -> timeline
+E2E_BASE_URL=http://other-host:8080 npm run test:e2e   # any base URL
+npx playwright show-report                  # inspect a failed run
+```
+
+### Traces (OpenTelemetry + Jaeger — ADR-029, opt-in)
+
+```sh
+# Full stack + local Jaeger; one search = one trace across all four processes
+OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
+  docker compose --profile full --profile observability up -d --build --wait
+open http://localhost:16686                 # Jaeger UI
+
+# Hot-reload dev: run only Jaeger in Docker, point local bricks at it
+docker compose --profile observability up -d jaeger
+OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run   # same var for the agent
+```
+
+Unset (or empty), the variable disables telemetry entirely — the default.
 
 ---
 

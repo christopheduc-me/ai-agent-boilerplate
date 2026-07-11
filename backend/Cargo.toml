@@ -22,6 +22,10 @@ sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio",
 dotenvy = "0.15"
 sha2 = "0.11.0"
 futures-util = { version = "0.3.32", default-features = false, features = ["std"] }
+opentelemetry = "0.32.0"
+opentelemetry_sdk = "0.32.1"
+tracing-opentelemetry = "0.33.0"
+opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

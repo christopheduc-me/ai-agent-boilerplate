@@ -46,8 +46,14 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **E2E smoke test on the full compose stack in CI (ADR-021)** — done:
       deterministic fake providers (`AGENT_PROVIDERS=fake`, keyless),
       `scripts/e2e-smoke.sh` through nginx, `e2e` job in GitHub Actions and
-      the GitLab mirror. (Playwright browser-level tests remain a possible
-      upgrade.)
+      the GitLab mirror.
+- [x] **Browser-level e2e tests (Playwright, ADR-028)** — done: real Chromium
+      journeys (register → search → timeline, re-login → history) against the
+      same fake-provider stack, run by both CIs' `e2e` jobs.
+- [x] **Opt-in OpenTelemetry traces (ADR-029)** — done: gated on
+      `OTEL_EXPORTER_OTLP_ENDPOINT`, W3C context propagated backend → FastAPI
+      → Celery → callbacks, dev Jaeger behind `--profile observability`.
+      Metrics/logs export could follow the same pattern if a fork needs it.
 - [x] **Dependency freshness without a platform bot (ADR-022)** — done:
       `scripts/deps-report.sh` (native tools) run weekly by both CIs, plus an
       inert portable `renovate.json` for forks that want automated update PRs

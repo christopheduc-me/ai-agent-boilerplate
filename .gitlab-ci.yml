@@ -175,6 +175,18 @@ e2e:
     - docker compose --profile full up -d --build --wait
     # Ports are published on the dind service host ("docker").
     - scripts/e2e-smoke.sh http://docker:8080
+    # Browser tests (ADR-028) inside the official Playwright image, run on the
+    # dind daemon: --network host shares dind's network, where the stack's
+    # ports are published (nginx on :8080). $CI_PROJECT_DIR is not visible
+    # from dind, so the sources are docker-cp'd in. Keep the image tag in
+    # sync with @playwright/test in frontend/package.json.
+    - >
+      docker create --name playwright --network host
+      -e CI=1 -e E2E_BASE_URL=http://localhost:8080
+      mcr.microsoft.com/playwright:v1.61.1-noble
+      bash -c "cd /repo/frontend && npm ci && npx playwright test"
+    - docker cp "$CI_PROJECT_DIR" playwright:/repo
+    - docker start -a playwright
   after_script:
     - docker compose --profile full logs --tail=100 || true
 
