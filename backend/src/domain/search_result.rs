@@ -9,6 +9,22 @@ pub enum DateConfidence {
     Unknown,
 }
 
+/// Coarse classification of what a result reports, shown as a badge on the
+/// frontend timeline (ADR-027).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum EventType {
+    Announcement,
+    Release,
+    Funding,
+    Legal,
+    Incident,
+    Research,
+    Opinion,
+    #[default]
+    Other,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct SearchResult {
     pub title: String,
@@ -16,6 +32,11 @@ pub struct SearchResult {
     pub snippet: String,
     pub published_at: Option<DateTime<Utc>>,
     pub date_confidence: DateConfidence,
+    // Timeline enrichment (ADR-027); defaults keep older payloads parseable.
+    #[serde(default)]
+    pub event_type: EventType,
+    #[serde(default)]
+    pub summary: Option<String>,
     #[serde(default)]
     pub raw: serde_json::Value,
 }
@@ -44,8 +65,19 @@ mod tests {
             } else {
                 DateConfidence::Unknown
             },
+            event_type: EventType::default(),
+            summary: None,
             raw: serde_json::Value::Null,
         }
+    }
+
+    #[test]
+    fn older_payloads_without_enrichment_still_deserialize() {
+        // Pre-ADR-027 wire shape: no event_type, no summary.
+        let json = r#"{"title":"t","url":"https://t","snippet":"","published_at":null,"date_confidence":"unknown"}"#;
+        let parsed: SearchResult = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.event_type, EventType::Other);
+        assert_eq!(parsed.summary, None);
     }
 
     fn date(y: i32, m: u32, d: u32) -> DateTime<Utc> {

@@ -7,15 +7,17 @@ from aiagent.domain.models import (
     as_utc,
     sort_by_publication_date,
 )
-from aiagent.domain.ports import DateExtractor, ResultSink, SearchProvider
+from aiagent.domain.ports import HitEnricher, ResultSink, SearchProvider
 
 
-def _resolve(hit: RawSearchHit, date_extractor: DateExtractor) -> ResearchResult:
-    """Date cascade (ADR-011): provider metadata -> LLM extraction -> unknown."""
+def _resolve(hit: RawSearchHit, enricher: HitEnricher) -> ResearchResult:
+    """Enrichment (ADR-027) + date cascade (ADR-011): the provider's date wins
+    (high confidence); otherwise the LLM's date is used (medium); else unknown."""
+    enrichment = enricher.enrich(hit)
     if hit.published_at is not None:
         published_at, confidence = as_utc(hit.published_at), DateConfidence.HIGH
-    elif (extracted := date_extractor.extract_date(hit)) is not None:
-        published_at, confidence = as_utc(extracted), DateConfidence.MEDIUM
+    elif enrichment.published_at is not None:
+        published_at, confidence = as_utc(enrichment.published_at), DateConfidence.MEDIUM
     else:
         published_at, confidence = None, DateConfidence.UNKNOWN
     return ResearchResult(
@@ -24,6 +26,8 @@ def _resolve(hit: RawSearchHit, date_extractor: DateExtractor) -> ResearchResult
         snippet=hit.snippet,
         published_at=published_at,
         date_confidence=confidence,
+        event_type=enrichment.event_type,
+        summary=enrichment.summary,
         raw=hit.raw,
     )
 
@@ -32,10 +36,10 @@ def run_research(
     job_id: str,
     keyword: str,
     search: SearchProvider,
-    date_extractor: DateExtractor,
+    enricher: HitEnricher,
     sink: ResultSink,
 ) -> list[ResearchResult]:
-    """Marks the job running, searches, resolves dates, sorts, and delivers.
+    """Marks the job running, searches, enriches every hit, sorts, delivers.
 
     On failure the sink is notified (best effort) and the exception propagates
     so Celery retries the task; the whole flow is idempotent (`mark_started` is
@@ -44,7 +48,7 @@ def run_research(
     try:
         sink.mark_started(job_id)
         hits = search.search(keyword)
-        results = sort_by_publication_date([_resolve(hit, date_extractor) for hit in hits])
+        results = sort_by_publication_date([_resolve(hit, enricher) for hit in hits])
         sink.deliver(job_id, results)
         return results
     except Exception as exc:

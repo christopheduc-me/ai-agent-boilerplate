@@ -3,7 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { api, ApiError, type SearchJobDetail } from "@/api";
-import ResultList from "@/components/ResultList.vue";
+import ResultTimeline from "@/components/ResultTimeline.vue";
 import { useAuthStore } from "@/stores/auth";
 
 const props = defineProps<{ id: string }>();
@@ -67,7 +67,7 @@ onBeforeUnmount(() => {
       <span v-if="job.status === 'pending' || job.status === 'running'"> — live…</span>
     </p>
     <p v-if="job.error" class="error">{{ job.error }}</p>
-    <ResultList v-if="job.status === 'completed'" :results="job.results" />
+    <ResultTimeline v-if="job.status === 'completed'" :results="job.results" />
   </section>
   <p v-else>Loading…</p>
 </template>

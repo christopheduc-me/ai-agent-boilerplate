@@ -12,6 +12,20 @@ class DateConfidence(StrEnum):
     UNKNOWN = "unknown"
 
 
+class EventType(StrEnum):
+    """Coarse classification of what a result reports, shown as a badge on the
+    frontend timeline (ADR-027)."""
+
+    ANNOUNCEMENT = "announcement"
+    RELEASE = "release"
+    FUNDING = "funding"
+    LEGAL = "legal"
+    INCIDENT = "incident"
+    RESEARCH = "research"
+    OPINION = "opinion"
+    OTHER = "other"
+
+
 @dataclass(frozen=True)
 class RawSearchHit:
     """What a search provider returns before date resolution."""
@@ -24,14 +38,27 @@ class RawSearchHit:
 
 
 @dataclass(frozen=True)
+class HitEnrichment:
+    """What the LLM adds to a raw hit (ADR-027): a publication date when the
+    provider gave none (ADR-011 cascade), an event type, a one-line summary."""
+
+    published_at: datetime | None = None
+    event_type: EventType = EventType.OTHER
+    summary: str | None = None
+
+
+@dataclass(frozen=True)
 class ResearchResult:
-    """A hit with its resolved publication date (ADR-011)."""
+    """A hit with its resolved publication date (ADR-011) and its timeline
+    enrichment (ADR-027)."""
 
     title: str
     url: str
     snippet: str
     published_at: datetime | None
     date_confidence: DateConfidence
+    event_type: EventType = EventType.OTHER
+    summary: str | None = None
     raw: dict[str, Any] = field(default_factory=dict)
 
 

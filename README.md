@@ -10,16 +10,17 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-26-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-27-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
 with the plumbing real deployments need.
 
 The demo product is deliberately simple: users sign up, enter a keyword, and
-launch an AI agent that searches the web and ranks the results by publication
-date. The value is everything around it — the patterns you would otherwise
-rebuild from scratch on every agent project.
+launch an AI agent that searches the web, classifies and summarizes each
+finding, and renders everything as a **timeline** sorted by publication date
+(live-updated over SSE). The value is everything around it — the patterns you
+would otherwise rebuild from scratch on every agent project.
 
 ## What you get
 
@@ -46,7 +47,7 @@ rebuild from scratch on every agent project.
   on `main`, and weekly security audits (cargo/pip/npm audit + gitleaks). A
   GitLab CI mirror (`.gitlab-ci.yml`) ships for GitLab-hosted forks, including
   a reference VPS deploy job.
-- **Every decision written down** — 22 Architecture Decision Records in
+- **Every decision written down** — 27 Architecture Decision Records in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), including the rejected
   alternatives and the trade-offs.
 
@@ -56,7 +57,8 @@ rebuild from scratch on every agent project.
 Vue SPA ──▶ Rust API (Axum) ──▶ FastAPI micro-API ──▶ Redis ──▶ Celery worker
  (JWT)        │    ▲                (Celery client)              (LangChain agent)
               ▼    │                                              1. web search (Tavily)
-         PostgreSQL└──── HTTP callbacks (started/results/failure) 2. date extraction (Claude)
+         PostgreSQL└──── HTTP callbacks (started/results/failure) 2. per-hit enrichment (Claude):
+                                                                     date, event type, summary
                                                                   3. sort by publication date
 ```
 
@@ -121,13 +123,13 @@ agent/src/aiagent/domain/       # results, date normalization, sorting + ports (
 agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
-docs/                           # ARCHITECTURE.md (22 ADRs), COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (27 ADRs), COMMANDS.md, diagrams/
 ```
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-022), kept in sync with the code at all times.
+  (ADR-001 → ADR-027), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/) — PlantUML sequence diagrams (auth flow).
 - [TODO.md](TODO.md) — manual setup checklist (CI, VPS, API keys) and the

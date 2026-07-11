@@ -2,6 +2,15 @@
 
 export type DateConfidence = "high" | "medium" | "unknown";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
+export type EventType =
+  | "announcement"
+  | "release"
+  | "funding"
+  | "legal"
+  | "incident"
+  | "research"
+  | "opinion"
+  | "other";
 
 export interface SearchResult {
   title: string;
@@ -9,6 +18,8 @@ export interface SearchResult {
   snippet: string;
   published_at: string | null;
   date_confidence: DateConfidence;
+  event_type: EventType;
+  summary: string | null;
 }
 
 export interface SearchJob {

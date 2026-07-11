@@ -6,7 +6,7 @@ pub mod user;
 
 pub use job::{JobStatus, ResearchJob};
 pub use refresh_token::RefreshToken;
-pub use search_result::{sort_by_publication_date, DateConfidence, SearchResult};
+pub use search_result::{sort_by_publication_date, DateConfidence, EventType, SearchResult};
 pub use user::User;
 
 use chrono::{DateTime, SubsecRound, Utc};

@@ -5,23 +5,23 @@ import logging
 from aiagent.application import run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
-from aiagent.domain.ports import DateExtractor, SearchProvider
+from aiagent.domain.ports import HitEnricher, SearchProvider
 
 logger = logging.getLogger(__name__)
 
 
-def build_providers(settings: Settings) -> tuple[SearchProvider, DateExtractor]:
+def build_providers(settings: Settings) -> tuple[SearchProvider, HitEnricher]:
     """Selects the provider adapters (ADR-021): live (Tavily + Claude) by
     default, deterministic fakes with `AGENT_PROVIDERS=fake`."""
     if settings.providers == "fake":
-        from aiagent.adapters.fake import FakeDateExtractor, FakeSearchProvider
+        from aiagent.adapters.fake import FakeHitEnricher, FakeSearchProvider
 
-        return FakeSearchProvider(), FakeDateExtractor()
+        return FakeSearchProvider(), FakeHitEnricher()
 
-    from aiagent.adapters.llm import ClaudeDateExtractor
+    from aiagent.adapters.llm import ClaudeHitEnricher
     from aiagent.adapters.tavily import TavilySearchProvider
 
-    return TavilySearchProvider(), ClaudeDateExtractor(settings.agent_model_id)
+    return TavilySearchProvider(), ClaudeHitEnricher(settings.agent_model_id)
 
 
 @app.task(

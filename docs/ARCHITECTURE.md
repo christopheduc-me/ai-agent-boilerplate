@@ -711,6 +711,33 @@ Two deliberate implementation choices:
    server logs. A small incremental SSE parser (`createSSEParser`, unit
    tested) keeps the client dependency-free.
 
+### ADR-027 — Timeline: hit enrichment and chronological rendering (decided 2026-07-10)
+
+**Context**: the product's promise is chronological ("what happened about this
+keyword, in order"), but results were rendered as a flat list and carried no
+information beyond title/snippet/date.
+
+**Decision**:
+
+1. **The `DateExtractor` port becomes `HitEnricher`**: one LLM call per hit
+   returns `{published_date, event_type, summary}` as JSON. The ADR-011 date
+   cascade is unchanged (provider date wins → high; LLM date → medium; else
+   unknown), and the reply parsing is defensive — any malformed piece degrades
+   to its neutral value (`other`, no summary) instead of failing the job.
+   **Cost note**: every hit now triggers an LLM call (previously only undated
+   hits did) — that is the price of badges/summaries; the ADR-017 quota is the
+   budget guard, and fake providers keep tests/e2e free.
+2. **`event_type`** is a coarse closed enum (`announcement`, `release`,
+   `funding`, `legal`, `incident`, `research`, `opinion`, `other`), carried end
+   to end (agent → contract → backend column, migration 0003 → frontend
+   badge). Unknown values degrade to `other` on the backend (forward
+   compatibility); serde defaults keep pre-ADR-027 payloads parseable.
+3. **Frontend `ResultTimeline`** replaces the flat list: dated results grouped
+   by month, `date_confidence` made visible (solid marker for
+   provider-confirmed dates, hollow + "(estimated)" for LLM-extracted ones),
+   event badge, LLM summary (falling back to the snippet), and the undated
+   section kept apart (ADR-011).
+
 ---
 
 ## 4. API contracts (summary)
@@ -742,7 +769,7 @@ also enforces the per-user daily quota — ADR-017).
 | Method | Route | Description |
 |---|---|---|
 | POST | `/internal/jobs/{id}/started` | Worker picked the job up → status `running` (ADR-016) |
-| POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, raw}]` |
+| POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, raw}]` |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
 
 ---

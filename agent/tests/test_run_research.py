@@ -3,7 +3,13 @@ from datetime import UTC, datetime
 import pytest
 
 from aiagent.application import run_research
-from aiagent.domain.models import DateConfidence, RawSearchHit, ResearchResult
+from aiagent.domain.models import (
+    DateConfidence,
+    EventType,
+    HitEnrichment,
+    RawSearchHit,
+    ResearchResult,
+)
 
 
 class FakeSearch:
@@ -17,16 +23,20 @@ class FakeSearch:
         return self.hits
 
 
-class FakeDateExtractor:
-    """Returns a fixed date for hits whose title is in `known`."""
+class FakeEnricher:
+    """Returns a fixed date for hits whose title is in `known` (ADR-027)."""
 
     def __init__(self, known: dict[str, datetime] | None = None):
         self.known = known or {}
         self.seen: list[str] = []
 
-    def extract_date(self, hit: RawSearchHit) -> datetime | None:
+    def enrich(self, hit: RawSearchHit) -> HitEnrichment:
         self.seen.append(hit.title)
-        return self.known.get(hit.title)
+        return HitEnrichment(
+            published_at=self.known.get(hit.title),
+            event_type=EventType.RESEARCH,
+            summary=f"summary of {hit.title}",
+        )
 
 
 class RecordingSink:
@@ -62,17 +72,21 @@ def test_date_cascade_provider_then_llm_then_unknown() -> None:
             hit("undatable"),
         ]
     )
-    extractor = FakeDateExtractor(known={"from-llm": datetime(2025, 5, 5, tzinfo=UTC)})
+    enricher = FakeEnricher(known={"from-llm": datetime(2025, 5, 5, tzinfo=UTC)})
     sink = RecordingSink()
 
-    results = run_research("job-1", "keyword", search, extractor, sink)
+    results = run_research("job-1", "keyword", search, enricher, sink)
 
     by_title = {r.title: r for r in results}
     assert by_title["from-provider"].date_confidence == DateConfidence.HIGH
     assert by_title["from-llm"].date_confidence == DateConfidence.MEDIUM
     assert by_title["undatable"].date_confidence == DateConfidence.UNKNOWN
-    # The LLM is only consulted when the provider gave no date (cost control).
-    assert extractor.seen == ["from-llm", "undatable"]
+    # Every hit is enriched (event type + summary, ADR-027) — even dated ones.
+    assert enricher.seen == ["from-provider", "from-llm", "undatable"]
+    assert by_title["from-provider"].event_type == EventType.RESEARCH
+    assert by_title["undatable"].summary == "summary of undatable"
+    # The provider's date always wins over the LLM's (ADR-011).
+    assert by_title["from-provider"].published_at == datetime(2026, 1, 1, tzinfo=UTC)
 
 
 def test_delivers_results_sorted_newest_first() -> None:
@@ -85,7 +99,7 @@ def test_delivers_results_sorted_newest_first() -> None:
     )
     sink = RecordingSink()
 
-    run_research("job-1", "keyword", search, FakeDateExtractor(), sink)
+    run_research("job-1", "keyword", search, FakeEnricher(), sink)
 
     (job_id, delivered) = sink.delivered[0]
     assert job_id == "job-1"
@@ -95,7 +109,7 @@ def test_delivers_results_sorted_newest_first() -> None:
 def test_marks_the_job_started_before_searching() -> None:
     sink = RecordingSink()
 
-    run_research("job-1", "keyword", FakeSearch(), FakeDateExtractor(), sink)
+    run_research("job-1", "keyword", FakeSearch(), FakeEnricher(), sink)
 
     assert sink.started == ["job-1"]
 
@@ -105,7 +119,7 @@ def test_reports_failure_and_reraises_when_search_breaks() -> None:
     sink = RecordingSink()
 
     with pytest.raises(RuntimeError):
-        run_research("job-1", "keyword", search, FakeDateExtractor(), sink)
+        run_research("job-1", "keyword", search, FakeEnricher(), sink)
 
     assert sink.failures == [("job-1", "quota exceeded")]
     assert sink.delivered == []
@@ -117,4 +131,4 @@ def test_original_error_survives_when_failure_report_also_breaks() -> None:
     sink = RecordingSink(failure_error=ConnectionError("backend down"))
 
     with pytest.raises(RuntimeError, match="quota exceeded"):
-        run_research("job-1", "keyword", search, FakeDateExtractor(), sink)
+        run_research("job-1", "keyword", search, FakeEnricher(), sink)

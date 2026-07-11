@@ -11,7 +11,7 @@ from pathlib import Path
 
 from aiagent.adapters.api.app import TaskRequest
 from aiagent.adapters.sink import serialize_result
-from aiagent.domain.models import DateConfidence, ResearchResult
+from aiagent.domain.models import DateConfidence, EventType, ResearchResult
 
 CONTRACTS = Path(__file__).parents[2] / "contracts"
 
@@ -28,6 +28,8 @@ def test_agent_produces_the_results_callback_exactly() -> None:
             snippet="Date supplied by the search provider",
             published_at=datetime(2026, 5, 1, tzinfo=UTC),
             date_confidence=DateConfidence.HIGH,
+            event_type=EventType.RELEASE,
+            summary="Version 2.0 was released with breaking changes.",
             raw={"provider": "fixture"},
         ),
         ResearchResult(
@@ -36,6 +38,8 @@ def test_agent_produces_the_results_callback_exactly() -> None:
             snippet="Date extracted by the LLM",
             published_at=datetime(2025, 8, 20, 9, 30, tzinfo=UTC),
             date_confidence=DateConfidence.MEDIUM,
+            event_type=EventType.FUNDING,
+            summary="The company raised a Series A round.",
             raw={"provider": "fixture"},
         ),
         ResearchResult(
@@ -44,6 +48,8 @@ def test_agent_produces_the_results_callback_exactly() -> None:
             snippet="No publication date could be determined",
             published_at=None,
             date_confidence=DateConfidence.UNKNOWN,
+            event_type=EventType.OTHER,
+            summary=None,
             raw={"provider": "fixture"},
         ),
     ]

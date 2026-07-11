@@ -209,6 +209,8 @@ async fn results_roundtrip_with_replace_semantics() {
         } else {
             DateConfidence::Unknown
         },
+        event_type: backend::domain::EventType::Release,
+        summary: Some(format!("summary of {title}")),
         raw: serde_json::json!({"source": "test"}),
     };
 
@@ -231,4 +233,7 @@ async fn results_roundtrip_with_replace_semantics() {
     let titles: Vec<&str> = stored.iter().map(|r| r.title.as_str()).collect();
     assert_eq!(titles, vec!["new", "old", "no-date"]);
     assert_eq!(stored[0].raw["source"], "test");
+    // Timeline enrichment roundtrip (ADR-027).
+    assert_eq!(stored[0].event_type, backend::domain::EventType::Release);
+    assert_eq!(stored[0].summary.as_deref(), Some("summary of new"));
 }

@@ -8,7 +8,7 @@ LLM-extracted date (medium), unknown.
 
 from datetime import UTC, datetime
 
-from aiagent.domain.models import RawSearchHit
+from aiagent.domain.models import EventType, HitEnrichment, RawSearchHit
 
 
 class FakeSearchProvider:
@@ -46,10 +46,16 @@ class FakeSearchProvider:
         ]
 
 
-class FakeDateExtractor:
-    """Finds a date only for the hit designed to exercise the LLM stage."""
+class FakeHitEnricher:
+    """Deterministic enrichment: a date only for the hit designed to exercise
+    the LLM stage of the cascade, a stable event type and summary for all."""
 
-    def extract_date(self, hit: RawSearchHit) -> datetime | None:
+    def enrich(self, hit: RawSearchHit) -> HitEnrichment:
+        published_at = None
         if hit.title == "fake-llm-datable":
-            return datetime(2025, 8, 20, tzinfo=UTC)
-        return None
+            published_at = datetime(2025, 8, 20, tzinfo=UTC)
+        return HitEnrichment(
+            published_at=published_at,
+            event_type=EventType.ANNOUNCEMENT,
+            summary=f"Fake summary for {hit.title}",
+        )

@@ -76,6 +76,8 @@ mod tests {
             snippet: "...".into(),
             published_at: None,
             date_confidence: DateConfidence::Unknown,
+            event_type: crate::domain::EventType::default(),
+            summary: None,
             raw: serde_json::Value::Null,
         }
     }

@@ -6,6 +6,8 @@
       "snippet": "Date supplied by the search provider",
       "published_at": "2026-05-01T00:00:00+00:00",
       "date_confidence": "high",
+      "event_type": "release",
+      "summary": "Version 2.0 was released with breaking changes.",
       "raw": { "provider": "fixture" }
     },
     {
@@ -14,6 +16,8 @@
       "snippet": "Date extracted by the LLM",
       "published_at": "2025-08-20T09:30:00+00:00",
       "date_confidence": "medium",
+      "event_type": "funding",
+      "summary": "The company raised a Series A round.",
       "raw": { "provider": "fixture" }
     },
     {
@@ -22,6 +26,8 @@
       "snippet": "No publication date could be determined",
       "published_at": null,
       "date_confidence": "unknown",
+      "event_type": "other",
+      "summary": null,
       "raw": { "provider": "fixture" }
     }
   ]

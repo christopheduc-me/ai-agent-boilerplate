@@ -11,7 +11,9 @@ use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
-use crate::domain::{DateConfidence, JobStatus, RefreshToken, ResearchJob, SearchResult, User};
+use crate::domain::{
+    DateConfidence, EventType, JobStatus, RefreshToken, ResearchJob, SearchResult, User,
+};
 
 /// Runs the SQL migrations in `backend/migrations/` (idempotent).
 pub async fn run_migrations(pool: &PgPool) -> Result<(), PortError> {
@@ -86,6 +88,34 @@ fn job_from_row(row: &PgRow) -> Result<ResearchJob, PortError> {
     })
 }
 
+fn event_type_to_str(event_type: EventType) -> &'static str {
+    match event_type {
+        EventType::Announcement => "announcement",
+        EventType::Release => "release",
+        EventType::Funding => "funding",
+        EventType::Legal => "legal",
+        EventType::Incident => "incident",
+        EventType::Research => "research",
+        EventType::Opinion => "opinion",
+        EventType::Other => "other",
+    }
+}
+
+/// Unknown values degrade to `Other` (forward compatibility: a newer agent may
+/// write event types this backend version does not know yet).
+fn event_type_from_str(value: &str) -> EventType {
+    match value {
+        "announcement" => EventType::Announcement,
+        "release" => EventType::Release,
+        "funding" => EventType::Funding,
+        "legal" => EventType::Legal,
+        "incident" => EventType::Incident,
+        "research" => EventType::Research,
+        "opinion" => EventType::Opinion,
+        _ => EventType::Other,
+    }
+}
+
 fn result_from_row(row: &PgRow) -> Result<SearchResult, PortError> {
     Ok(SearchResult {
         title: row.get("title"),
@@ -93,6 +123,8 @@ fn result_from_row(row: &PgRow) -> Result<SearchResult, PortError> {
         snippet: row.get("snippet"),
         published_at: row.get("published_at"),
         date_confidence: confidence_from_str(row.get("date_confidence"))?,
+        event_type: event_type_from_str(row.get("event_type")),
+        summary: row.get("summary"),
         raw: row.get("raw"),
     })
 }
@@ -317,8 +349,8 @@ impl JobRepository for PostgresJobRepository {
             .map_err(db_err)?;
         for result in results {
             sqlx::query(
-                "INSERT INTO search_results (job_id, title, url, snippet, published_at, date_confidence, raw)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                "INSERT INTO search_results (job_id, title, url, snippet, published_at, date_confidence, event_type, summary, raw)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
             )
             .bind(job_id)
             .bind(&result.title)
@@ -326,6 +358,8 @@ impl JobRepository for PostgresJobRepository {
             .bind(&result.snippet)
             .bind(result.published_at)
             .bind(confidence_to_str(result.date_confidence))
+            .bind(event_type_to_str(result.event_type))
+            .bind(&result.summary)
             .bind(&result.raw)
             .execute(&mut *tx)
             .await
@@ -336,7 +370,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn results_for(&self, job_id: Uuid) -> Result<Vec<SearchResult>, PortError> {
         let rows = sqlx::query(
-            "SELECT title, url, snippet, published_at, date_confidence, raw
+            "SELECT title, url, snippet, published_at, date_confidence, event_type, summary, raw
              FROM search_results WHERE job_id = $1
              ORDER BY published_at DESC NULLS LAST",
         )

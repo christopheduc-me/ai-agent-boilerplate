@@ -1,19 +1,20 @@
 """Ports (hexagonal architecture): the use case depends only on these Protocols."""
 
-from datetime import datetime
 from typing import Protocol
 
-from aiagent.domain.models import RawSearchHit, ResearchResult
+from aiagent.domain.models import HitEnrichment, RawSearchHit, ResearchResult
 
 
 class SearchProvider(Protocol):
     def search(self, keyword: str) -> list[RawSearchHit]: ...
 
 
-class DateExtractor(Protocol):
-    """LLM-backed fallback used when the provider gives no publication date (ADR-011)."""
+class HitEnricher(Protocol):
+    """LLM-backed enrichment (ADR-027): one call per hit returning the
+    publication date (used only when the provider gave none, ADR-011), the
+    event type, and a one-line summary for the timeline."""
 
-    def extract_date(self, hit: RawSearchHit) -> datetime | None: ...
+    def enrich(self, hit: RawSearchHit) -> HitEnrichment: ...
 
 
 class ResultSink(Protocol):

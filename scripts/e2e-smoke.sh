@@ -67,5 +67,12 @@ EXPECTED="fake-dated-recent,fake-llm-datable,fake-dated-old,fake-undatable"
 CONFIDENCES=$(json_get "$DETAIL" '",".join(r["date_confidence"] for r in data["results"])')
 [ "$CONFIDENCES" = "high,medium,high,unknown" ] \
   || fail "unexpected confidences: $CONFIDENCES"
+# Timeline enrichment (ADR-027): event type + summary flow end to end.
+EVENT_TYPES=$(json_get "$DETAIL" '",".join(r["event_type"] for r in data["results"])')
+[ "$EVENT_TYPES" = "announcement,announcement,announcement,announcement" ] \
+  || fail "unexpected event types: $EVENT_TYPES"
+FIRST_SUMMARY=$(json_get "$DETAIL" 'data["results"][0]["summary"]')
+[ "$FIRST_SUMMARY" = "Fake summary for fake-dated-recent" ] \
+  || fail "unexpected summary: $FIRST_SUMMARY"
 
 say "E2E OK — status=$STATUS, results=[$TITLES]"

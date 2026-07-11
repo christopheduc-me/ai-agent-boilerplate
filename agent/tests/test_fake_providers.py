@@ -3,10 +3,10 @@
 import pytest
 from pydantic import ValidationError
 
-from aiagent.adapters.fake import FakeDateExtractor, FakeSearchProvider
+from aiagent.adapters.fake import FakeHitEnricher, FakeSearchProvider
 from aiagent.application import run_research
 from aiagent.config import Settings
-from aiagent.domain.models import DateConfidence
+from aiagent.domain.models import DateConfidence, EventType
 from aiagent.tasks import build_providers
 
 
@@ -27,9 +27,9 @@ class NullSink:
 
 
 def test_build_providers_selects_fakes() -> None:
-    search, extractor = build_providers(settings_with("fake"))
+    search, enricher = build_providers(settings_with("fake"))
     assert isinstance(search, FakeSearchProvider)
-    assert isinstance(extractor, FakeDateExtractor)
+    assert isinstance(enricher, FakeHitEnricher)
 
 
 def test_build_providers_live_requires_credentials(monkeypatch) -> None:
@@ -43,9 +43,7 @@ def test_build_providers_live_requires_credentials(monkeypatch) -> None:
 
 def test_fake_run_exercises_the_full_date_cascade() -> None:
     """One deterministic run covers high/medium/unknown confidence and sorting."""
-    results = run_research(
-        "job-1", "anything", FakeSearchProvider(), FakeDateExtractor(), NullSink()
-    )
+    results = run_research("job-1", "anything", FakeSearchProvider(), FakeHitEnricher(), NullSink())
 
     titles = [r.title for r in results]
     assert titles == [
@@ -58,6 +56,9 @@ def test_fake_run_exercises_the_full_date_cascade() -> None:
     assert by_title["fake-dated-recent"].date_confidence == DateConfidence.HIGH
     assert by_title["fake-llm-datable"].date_confidence == DateConfidence.MEDIUM
     assert by_title["fake-undatable"].date_confidence == DateConfidence.UNKNOWN
+    # Enrichment (ADR-027): deterministic event type and summary on every result.
+    assert all(r.event_type == EventType.ANNOUNCEMENT for r in results)
+    assert by_title["fake-undatable"].summary == "Fake summary for fake-undatable"
 
 
 def test_fake_search_is_deterministic() -> None:
