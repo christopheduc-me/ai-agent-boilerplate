@@ -123,6 +123,7 @@ agent/src/aiagent/domain/       # results, date normalization, sorting + ports (
 agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
+deploy/                         # production-only files for forks (compose override, Caddyfile)
 docs/                           # ARCHITECTURE.md (27 ADRs), COMMANDS.md, diagrams/
 ```
 

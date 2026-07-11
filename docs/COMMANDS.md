@@ -280,17 +280,17 @@ On the VPS (`/opt/aiagent/`, by hand or from your fork's deploy job):
 ```sh
 export CI_REGISTRY_IMAGE=ghcr.io/christopheduc-me/ai-agent-boilerplate IMAGE_TAG=<short_sha>
 
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full pull
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full pull
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full up -d
 
 # Rollback = redeploy the previous tag
-IMAGE_TAG=<previous_sha> docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full up -d
+IMAGE_TAG=<previous_sha> docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full up -d
 
 # Logs / status in production
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full ps
-docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full logs -f backend
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full ps
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full logs -f backend
 
 # Manual database backup (a daily cron does this, see ADR-015)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml exec postgres \
+docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml exec postgres \
   pg_dump -U app aiagent > backup_$(date +%F).sql
 ```

@@ -26,7 +26,7 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **End-to-end correlation (ADR-018)** — done: `X-Request-Id` middleware on
       the Rust API, `job_id` propagated Rust → FastAPI → Celery → callbacks,
       `LOG_FORMAT=json` structured logs on all three server processes
-      (enabled in `docker-compose.prod.yml`).
+      (enabled in `deploy/docker-compose.prod.yml`).
 - [x] **Security hygiene in CI (ADR-015 amendment)** — done: `audit` stage with
       `cargo audit`, `pip-audit`, `npm audit`, gitleaks; runs on the weekly
       schedule only (creation of the schedule: SETUP.md §3).

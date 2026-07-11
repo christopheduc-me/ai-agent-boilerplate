@@ -85,8 +85,10 @@ docs/COMMANDS.md §10.
 - [ ] DNS: point an A record of your domain to the VPS IP.
 - [ ] Create `/opt/aiagent/` owned by `deploy` and copy into it:
   - [ ] `docker-compose.yml`
-  - [ ] `docker-compose.prod.yml`
-  - [ ] `Caddyfile` — **replace `example.com` with the real domain**
+  - [ ] the `deploy/` directory as-is (keep the subdirectory — the compose
+        paths assume it):
+    - [ ] `deploy/docker-compose.prod.yml`
+    - [ ] `deploy/Caddyfile` — **replace `example.com` with the real domain**
   - [ ] `.env` (production) with strong values, written once by hand:
     ```
     INTERNAL_API_TOKEN=<openssl rand -hex 32>
@@ -104,10 +106,10 @@ docs/COMMANDS.md §10.
       docs/COMMANDS.md §10 for the exact commands), then check:
   ```sh
   curl https://<domain>/healthz        # via Caddy -> backend
-  docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile full ps
+  docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile full ps
   ```
 - [ ] Set up the daily PostgreSQL backup cron (see docs/COMMANDS.md §10), e.g.:
   ```
-  0 3 * * * cd /opt/aiagent && docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T postgres pg_dump -U app aiagent | gzip > /opt/aiagent/backups/aiagent_$(date +\%F).sql.gz
+  0 3 * * * cd /opt/aiagent && docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml exec -T postgres pg_dump -U app aiagent | gzip > /opt/aiagent/backups/aiagent_$(date +\%F).sql.gz
   ```
   - [ ] Create `/opt/aiagent/backups/` and add a retention rule (e.g. `find ... -mtime +14 -delete`).

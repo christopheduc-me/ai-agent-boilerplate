@@ -356,11 +356,14 @@ lint → test → build → publish → deploy
 - **Mechanism**: the `deploy` job connects to the VPS over SSH (protected CI
   variables: `DEPLOY_HOST`, `DEPLOY_USER`, `SSH_PRIVATE_KEY`) and runs
   `docker compose pull && docker compose up -d`.
-- **On the VPS**: a `/opt/aiagent/` directory holds the `docker-compose.yml`
-  (+ prod override) and the production `.env` (secrets entered once by hand,
-  never in the repository or in CI). The VPS authenticates against the GitLab
-  registry with a read-only **deploy token**.
-- **Prod override** (`docker-compose.prod.yml`): adds a **Caddy** reverse proxy
+- **On the VPS**: a `/opt/aiagent/` directory holds the `docker-compose.yml`,
+  the repo's `deploy/` directory (prod override + Caddyfile, copied as-is so
+  compose paths match) and the production `.env` (secrets entered once by
+  hand, never in the repository or in CI). The VPS authenticates against the
+  GitLab registry with a read-only **deploy token**.
+- **Prod override** (`deploy/docker-compose.prod.yml` — production-only files
+  are grouped under `deploy/`, they play no role in local development): adds a
+  **Caddy** reverse proxy
   in front (automatic TLS via Let's Encrypt, the only service exposing 80/443)
   in front of the frontend's nginx and the Rust API; pins image tags to
   `$CI_COMMIT_SHORT_SHA` (reproducible deployments, rollback = redeploy the
@@ -471,7 +474,7 @@ logs, diagnosing a production incident means eyeballing four unrelated streams.
    passes it into the Celery task, and the worker's sink returns it on every
    internal callback. `grep <job_id>` across the four services tells the whole
    story of one search.
-2. **Structured logs**: `LOG_FORMAT=json` (set in `docker-compose.prod.yml`)
+2. **Structured logs**: `LOG_FORMAT=json` (set in `deploy/docker-compose.prod.yml`)
    switches every process to one JSON object per line — `tracing-subscriber`'s
    JSON layer (events flattened, span fields included) on the Rust side, a
    stdlib `JsonFormatter` (no extra dependency) on the Python side, with
@@ -546,7 +549,7 @@ On failure the process logs one explicit line naming the component and every
 missing variable (pointing at `.env.example`) and exits with code 1 — under
 compose, the container stops immediately instead of looping on broken tasks.
 
-`APP_ENV=production` is set by `docker-compose.prod.yml`; development keeps the
+`APP_ENV=production` is set by `deploy/docker-compose.prod.yml`; development keeps the
 graceful fallbacks (in-memory persistence, noop dispatcher, dev secrets with a
 warning) so the clone-and-run experience stays intact. The check only fires in
 the worker process (Celery `worker_init` signal), so the agent-api container —
