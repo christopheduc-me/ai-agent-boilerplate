@@ -23,7 +23,8 @@ flags:
     paths: [frontend/]
 
 # Thin wiring shells: their logic lives in tested library modules
-# (backend::config, backend::healthcheck) — see ADR-023.
+# (backend::config, backend::healthcheck; the frontend bootstrap) — ADR-023.
 ignore:
   - backend/src/main.rs
   - "backend/src/bin/**"
+  - frontend/src/main.ts

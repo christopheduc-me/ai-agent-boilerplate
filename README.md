@@ -31,7 +31,7 @@ the patterns you would otherwise rebuild from scratch on every agent project.
   infrastructure dependencies; use cases depend on ports (Rust traits / Python
   Protocols); adapters implement them. Swapping the LLM, the search provider,
   or the database is configuration, not surgery.
-- **TDD throughout** — 85+ tests; the domain is tested with fakes of the ports,
+- **TDD throughout** — 190+ tests; the domain is tested with fakes of the ports,
   and **no test ever calls a paid service** (live provider tests are opt-in
   behind `RUN_LIVE_TESTS=1`).
 - **Reliable job lifecycle** — `pending → running → completed/failed` with a

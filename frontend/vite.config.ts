@@ -21,5 +21,12 @@ export default defineConfig({
     environment: "jsdom",
     // Playwright specs (e2e/) run against the compose stack, not under vitest.
     exclude: ["e2e/**", "node_modules/**", "dist/**"],
+    coverage: {
+      include: ["src/**"],
+      // Thin wiring shell (app bootstrap): same policy as backend/src/main.rs
+      // (ADR-023) — the logic lives in tested modules (router, stores, views).
+      // Test helpers measure nothing either.
+      exclude: ["src/main.ts", "src/**/__tests__/**"],
+    },
   },
 });
