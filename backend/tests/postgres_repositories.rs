@@ -10,7 +10,9 @@ use backend::adapters::persistence::postgres::{
     run_migrations, PostgresJobRepository, PostgresRefreshTokenRepository, PostgresUserRepository,
 };
 use backend::domain::ports::{JobRepository, RefreshTokenRepository, UserRepository};
-use backend::domain::{DateConfidence, JobStatus, RefreshToken, ResearchJob, SearchResult, User};
+use backend::domain::{
+    AgentStep, DateConfidence, JobMode, JobStatus, RefreshToken, ResearchJob, SearchResult, User,
+};
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -236,4 +238,40 @@ async fn results_roundtrip_with_replace_semantics() {
     // Timeline enrichment roundtrip (ADR-027).
     assert_eq!(stored[0].event_type, backend::domain::EventType::Release);
     assert_eq!(stored[0].summary.as_deref(), Some("summary of new"));
+}
+
+/// Agent mode + journal roundtrip (ADR-030): the mode survives persistence and
+/// steps are idempotent on (job_id, seq), returned in order.
+#[tokio::test]
+async fn agent_mode_and_steps_roundtrip() {
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let jobs = PostgresJobRepository::new(pool);
+
+    let job = ResearchJob::new(user.id, "agentic")
+        .unwrap()
+        .with_mode(JobMode::Agent);
+    jobs.insert(&job).await.unwrap();
+    let stored = jobs.find(job.id).await.unwrap().unwrap();
+    assert_eq!(stored.mode, JobMode::Agent);
+
+    let step = |seq: i32, kind: &str| AgentStep {
+        seq,
+        kind: kind.into(),
+        detail: "agentic".into(),
+        reason: "because".into(),
+        new_hits: 3,
+    };
+    jobs.append_step(job.id, &step(1, "search")).await.unwrap();
+    jobs.append_step(job.id, &step(1, "search")).await.unwrap(); // Celery retry
+    jobs.append_step(job.id, &step(2, "finish")).await.unwrap();
+
+    let steps = jobs.steps_for(job.id).await.unwrap();
+    assert_eq!(
+        steps
+            .iter()
+            .map(|s| (s.seq, s.kind.as_str(), s.new_hits))
+            .collect::<Vec<_>>(),
+        vec![(1, "search", 3), (2, "finish", 3)]
+    );
 }

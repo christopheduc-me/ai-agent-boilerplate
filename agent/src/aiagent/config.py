@@ -49,6 +49,9 @@ class Settings:
     # "live" (Tavily + Claude) or "fake" (deterministic in-process adapters,
     # no API key needed — e2e tests and keyless local development, ADR-021).
     providers: str
+    # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
+    # at most one policy LLM call plus one provider search.
+    agent_max_steps: int
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -58,4 +61,5 @@ class Settings:
             internal_api_token=os.environ.get("INTERNAL_API_TOKEN", "change-me"),
             agent_model_id=os.environ.get("AGENT_MODEL_ID", "claude-opus-4-8"),
             providers=os.environ.get("AGENT_PROVIDERS", "live"),
+            agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
         )

@@ -2,10 +2,10 @@
 
 import logging
 
-from aiagent.application import run_research
+from aiagent.application import run_agent_research, run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
-from aiagent.domain.ports import HitEnricher, SearchProvider
+from aiagent.domain.ports import AgentPolicy, HitEnricher, SearchProvider
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +24,18 @@ def build_providers(settings: Settings) -> tuple[SearchProvider, HitEnricher]:
     return TavilySearchProvider(), ClaudeHitEnricher(settings.agent_model_id)
 
 
+def build_policy(settings: Settings) -> AgentPolicy:
+    """Selects the decision-maker of the agentic loop (ADR-030)."""
+    if settings.providers == "fake":
+        from aiagent.adapters.fake import FakeAgentPolicy
+
+        return FakeAgentPolicy()
+
+    from aiagent.adapters.llm import ClaudeAgentPolicy
+
+    return ClaudeAgentPolicy(settings.agent_model_id)
+
+
 @app.task(
     name="aiagent.run_research",
     bind=False,
@@ -36,10 +48,12 @@ def build_providers(settings: Settings) -> tuple[SearchProvider, HitEnricher]:
     retry_backoff_max=600,
     retry_jitter=True,
 )
-def run_research_task(job_id: str, keyword: str, request_id: str | None = None) -> int:
+def run_research_task(
+    job_id: str, keyword: str, request_id: str | None = None, mode: str = "workflow"
+) -> int:
     settings = Settings.from_env()
     request_id = request_id or job_id
-    log_ctx = {"request_id": request_id, "job_id": job_id}
+    log_ctx = {"request_id": request_id, "job_id": job_id, "mode": mode}
     logger.info("research task started", extra=log_ctx)
 
     from aiagent.adapters.sink import HttpResultSink
@@ -50,7 +64,8 @@ def run_research_task(job_id: str, keyword: str, request_id: str | None = None) 
         request_id=request_id,
     )
     try:
-        search, date_extractor = build_providers(settings)
+        search, enricher = build_providers(settings)
+        policy = build_policy(settings) if mode == "agent" else None
     except Exception as exc:
         # Misconfiguration (missing API key...) must surface to the user as a failed job.
         logger.error("agent misconfigured", extra=log_ctx, exc_info=True)
@@ -58,7 +73,21 @@ def run_research_task(job_id: str, keyword: str, request_id: str | None = None) 
         raise
 
     try:
-        results = run_research(job_id, keyword, search, date_extractor, sink)
+        if policy is not None:
+            # Agent mode (ADR-030): the policy drives the loop; the sink also
+            # implements StepReporter for the live journal.
+            results = run_agent_research(
+                job_id,
+                keyword,
+                search,
+                enricher,
+                policy,
+                sink,
+                sink,
+                max_steps=settings.agent_max_steps,
+            )
+        else:
+            results = run_research(job_id, keyword, search, enricher, sink)
     except Exception:
         logger.error("research task failed", extra=log_ctx, exc_info=True)
         raise

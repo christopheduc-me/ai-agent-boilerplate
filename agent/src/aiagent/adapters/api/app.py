@@ -43,6 +43,9 @@ if TELEMETRY_ENABLED:
 class TaskRequest(BaseModel):
     job_id: str
     keyword: str
+    # "workflow" (fixed pipeline) or "agent" (decision loop, ADR-030); the
+    # default keeps pre-ADR-030 backends compatible.
+    mode: str = "workflow"
 
 
 @app.get("/healthz")
@@ -62,7 +65,7 @@ def enqueue_task(
         raise HTTPException(status_code=401, detail="invalid or missing internal token")
 
     request_id = x_request_id or body.job_id
-    run_research_task.delay(body.job_id, body.keyword, request_id=request_id)
+    run_research_task.delay(body.job_id, body.keyword, request_id=request_id, mode=body.mode)
     response.headers["X-Request-Id"] = request_id
     logger.info(
         "task queued",

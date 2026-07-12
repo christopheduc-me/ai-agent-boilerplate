@@ -24,11 +24,13 @@ def test_enqueue_requires_internal_token(monkeypatch) -> None:
 
 def test_enqueue_delegates_to_celery_with_correlation_id(monkeypatch) -> None:
     monkeypatch.setenv("INTERNAL_API_TOKEN", "right-token")
-    enqueued: list[tuple[str, str, str]] = []
+    enqueued: list[tuple[str, str, str, str]] = []
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id: enqueued.append((job_id, keyword, request_id)),
+        lambda job_id, keyword, request_id, mode: enqueued.append(
+            (job_id, keyword, request_id, mode)
+        ),
     )
 
     response = client.post(
@@ -40,7 +42,27 @@ def test_enqueue_delegates_to_celery_with_correlation_id(monkeypatch) -> None:
     assert response.status_code == 202
     assert response.json() == {"job_id": "j1", "state": "queued"}
     assert response.headers["x-request-id"] == "corr-42"
-    assert enqueued == [("j1", "rust", "corr-42")]
+    # The mode defaults to the pre-ADR-030 workflow behaviour.
+    assert enqueued == [("j1", "rust", "corr-42", "workflow")]
+
+
+def test_enqueue_forwards_the_agent_mode(monkeypatch) -> None:
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "right-token")
+    enqueued: list[str] = []
+    monkeypatch.setattr(
+        api_module.run_research_task,
+        "delay",
+        lambda job_id, keyword, request_id, mode: enqueued.append(mode),
+    )
+
+    response = client.post(
+        "/tasks",
+        json={"job_id": "j1", "keyword": "rust", "mode": "agent"},
+        headers={"X-Internal-Token": "right-token"},
+    )
+
+    assert response.status_code == 202
+    assert enqueued == ["agent"]
 
 
 def test_enqueue_falls_back_to_the_job_id_as_correlation_id(monkeypatch) -> None:
@@ -49,7 +71,7 @@ def test_enqueue_falls_back_to_the_job_id_as_correlation_id(monkeypatch) -> None
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id: enqueued.append(request_id),
+        lambda job_id, keyword, request_id, mode: enqueued.append(request_id),
     )
 
     response = client.post(

@@ -31,6 +31,22 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       `cargo audit`, `pip-audit`, `npm audit`, gitleaks; runs on the weekly
       schedule only (creation of the schedule: SETUP.md §3).
 
+## P2.5 — Agentic capabilities (ADR-030 follow-ups)
+
+- [x] **Agentic loop + live decision journal (ADR-030)** — done: `mode=agent`
+      end to end, `AgentPolicy`/`StepReporter` ports, step budget
+      (`AGENT_MAX_STEPS`), `agent_steps` journal streamed over SSE, two demo
+      blocks in the frontend.
+- [ ] **Result self-critique**: before delivering, the agent scores each hit's
+      relevance to the goal and flags coverage gaps in the journal (one more
+      policy action, fits the existing loop).
+- [ ] **Recurring searches with memory**: saved searches re-run by Celery
+      beat; the agent compares against previously seen URLs and decides
+      whether the delta is worth reporting.
+- [ ] **Human-in-the-loop clarification**: an `awaiting_input` job status —
+      the policy can ask the user a question (ambiguous goal), the job pauses,
+      the answer resumes the loop (SSE already streams the state).
+
 ## P3 — Agent product quality
 
 - [ ] **Date cascade stage 2 (ADR-011)**: fetch the page and read JSON-LD

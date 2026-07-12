@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
-use crate::domain::{RefreshToken, ResearchJob, SearchResult, User};
+use crate::domain::{AgentStep, RefreshToken, ResearchJob, SearchResult, User};
 
 #[derive(Default)]
 pub struct InMemoryUserRepository {
@@ -70,6 +70,7 @@ impl RefreshTokenRepository for InMemoryRefreshTokenRepository {
 pub struct InMemoryJobRepository {
     jobs: Mutex<HashMap<Uuid, ResearchJob>>,
     results: Mutex<HashMap<Uuid, Vec<SearchResult>>>,
+    steps: Mutex<HashMap<Uuid, Vec<AgentStep>>>,
 }
 
 #[async_trait]
@@ -140,6 +141,27 @@ impl JobRepository for InMemoryJobRepository {
     async fn results_for(&self, job_id: Uuid) -> Result<Vec<SearchResult>, PortError> {
         Ok(self
             .results
+            .lock()
+            .unwrap()
+            .get(&job_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn append_step(&self, job_id: Uuid, step: &AgentStep) -> Result<(), PortError> {
+        let mut steps = self.steps.lock().unwrap();
+        let journal = steps.entry(job_id).or_default();
+        // Idempotent on (job_id, seq): a Celery retry re-sends the same step.
+        if !journal.iter().any(|s| s.seq == step.seq) {
+            journal.push(step.clone());
+            journal.sort_by_key(|s| s.seq);
+        }
+        Ok(())
+    }
+
+    async fn steps_for(&self, job_id: Uuid) -> Result<Vec<AgentStep>, PortError> {
+        Ok(self
+            .steps
             .lock()
             .unwrap()
             .get(&job_id)

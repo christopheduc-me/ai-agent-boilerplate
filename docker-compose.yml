@@ -40,6 +40,10 @@ services:
       INTERNAL_API_TOKEN: ${INTERNAL_API_TOKEN:-change-me}
       JWT_SECRET: ${JWT_SECRET:-change-me}
       BIND_ADDR: 0.0.0.0:8000
+      # Abuse protection (ADR-017), passed through so e2e can loosen them.
+      DAILY_SEARCH_QUOTA: ${DAILY_SEARCH_QUOTA:-20}
+      RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
+      RATE_LIMIT_API_PER_MINUTE: ${RATE_LIMIT_API_PER_MINUTE:-120}
       # Traces (ADR-029): empty = disabled.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:

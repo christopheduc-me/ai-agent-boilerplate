@@ -4,7 +4,7 @@ use uuid::Uuid;
 
 use crate::domain::job::JobError;
 use crate::domain::ports::{JobDispatcher, JobRepository, PortError};
-use crate::domain::ResearchJob;
+use crate::domain::{JobMode, ResearchJob};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LaunchError {
@@ -43,14 +43,19 @@ impl LaunchSearch {
     /// Checks the quota, persists the job (status `pending`), then hands it to
     /// the agent. If dispatching fails, the job is kept and marked `failed` so
     /// the user gets feedback instead of a silently lost search.
-    pub async fn execute(&self, user_id: Uuid, keyword: &str) -> Result<ResearchJob, LaunchError> {
+    pub async fn execute(
+        &self,
+        user_id: Uuid,
+        keyword: &str,
+        mode: JobMode,
+    ) -> Result<ResearchJob, LaunchError> {
         let since = chrono::Utc::now() - chrono::Duration::hours(24);
         let used = self.jobs.count_created_since(user_id, since).await?;
         if used >= u64::from(self.daily_quota) {
             return Err(LaunchError::QuotaExceeded(self.daily_quota));
         }
 
-        let mut job = ResearchJob::new(user_id, keyword)?;
+        let mut job = ResearchJob::new(user_id, keyword)?.with_mode(mode);
         self.jobs.insert(&job).await?;
 
         if let Err(err) = self.dispatcher.dispatch(&job).await {
@@ -109,7 +114,10 @@ mod tests {
         let dispatcher = Arc::new(RecordingDispatcher::ok());
         let launch = LaunchSearch::new(jobs.clone(), dispatcher.clone(), TEST_QUOTA);
 
-        let job = launch.execute(Uuid::new_v4(), "rust axum").await.unwrap();
+        let job = launch
+            .execute(Uuid::new_v4(), "rust axum", JobMode::Workflow)
+            .await
+            .unwrap();
 
         assert_eq!(job.status, JobStatus::Pending);
         assert_eq!(*dispatcher.dispatched.lock().unwrap(), vec![job.id]);
@@ -126,7 +134,10 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
 
-        let err = launch.execute(user_id, "rust axum").await.unwrap_err();
+        let err = launch
+            .execute(user_id, "rust axum", JobMode::Workflow)
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, LaunchError::DispatchFailed));
         let stored = jobs.list_for_user(user_id).await.unwrap();
@@ -149,7 +160,10 @@ mod tests {
         );
         let user_id = Uuid::new_v4();
 
-        let err = launch.execute(user_id, "  ").await.unwrap_err();
+        let err = launch
+            .execute(user_id, "  ", JobMode::Workflow)
+            .await
+            .unwrap_err();
 
         assert!(matches!(
             err,
@@ -164,15 +178,27 @@ mod tests {
         let launch = LaunchSearch::new(jobs.clone(), Arc::new(RecordingDispatcher::ok()), 2);
         let user_id = Uuid::new_v4();
 
-        launch.execute(user_id, "one").await.unwrap();
-        launch.execute(user_id, "two").await.unwrap();
-        let err = launch.execute(user_id, "three").await.unwrap_err();
+        launch
+            .execute(user_id, "one", JobMode::Workflow)
+            .await
+            .unwrap();
+        launch
+            .execute(user_id, "two", JobMode::Workflow)
+            .await
+            .unwrap();
+        let err = launch
+            .execute(user_id, "three", JobMode::Workflow)
+            .await
+            .unwrap_err();
 
         assert!(matches!(err, LaunchError::QuotaExceeded(2)));
         assert_eq!(jobs.list_for_user(user_id).await.unwrap().len(), 2);
 
         // The quota is per user: another account is unaffected.
-        launch.execute(Uuid::new_v4(), "other").await.unwrap();
+        launch
+            .execute(Uuid::new_v4(), "other", JobMode::Workflow)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]
@@ -184,6 +210,9 @@ mod tests {
         jobs.insert(&old_job).await.unwrap();
 
         let launch = LaunchSearch::new(jobs, Arc::new(RecordingDispatcher::ok()), 1);
-        launch.execute(user_id, "today").await.unwrap();
+        launch
+            .execute(user_id, "today", JobMode::Workflow)
+            .await
+            .unwrap();
     }
 }

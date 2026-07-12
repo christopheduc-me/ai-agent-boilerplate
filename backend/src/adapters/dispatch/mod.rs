@@ -17,6 +17,7 @@ pub struct HttpJobDispatcher {
 struct TaskRequest<'a> {
     job_id: uuid::Uuid,
     keyword: &'a str,
+    mode: crate::domain::JobMode,
 }
 
 impl HttpJobDispatcher {
@@ -47,6 +48,7 @@ impl JobDispatcher for HttpJobDispatcher {
             .json(&TaskRequest {
                 job_id: job.id,
                 keyword: &job.keyword,
+                mode: job.mode,
             })
             .send()
             .await

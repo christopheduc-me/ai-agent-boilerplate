@@ -2,6 +2,8 @@
 
 export type DateConfidence = "high" | "medium" | "unknown";
 export type JobStatus = "pending" | "running" | "completed" | "failed";
+// Workflow = fixed pipeline; agent = LLM-driven decision loop (ADR-030).
+export type JobMode = "workflow" | "agent";
 export type EventType =
   | "announcement"
   | "release"
@@ -25,14 +27,25 @@ export interface SearchResult {
 export interface SearchJob {
   id: string;
   keyword: string;
+  mode: JobMode;
   status: JobStatus;
   error: string | null;
   created_at: string;
   completed_at: string | null;
 }
 
+// One decision of the agentic loop (ADR-030), shown in the live journal.
+export interface AgentStep {
+  seq: number;
+  kind: "search" | "finish" | string;
+  detail: string;
+  reason: string;
+  new_hits: number;
+}
+
 export interface SearchJobDetail extends SearchJob {
   results: SearchResult[];
+  steps: AgentStep[];
 }
 
 export class ApiError extends Error {
@@ -138,10 +151,10 @@ export const api = {
 
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
 
-  launchSearch: (keyword: string, token: string) =>
+  launchSearch: (keyword: string, token: string, mode: JobMode = "workflow") =>
     request<{ job_id: string }>(
       "/api/searches",
-      { method: "POST", body: JSON.stringify({ keyword }) },
+      { method: "POST", body: JSON.stringify({ keyword, mode }) },
       token,
     ),
 

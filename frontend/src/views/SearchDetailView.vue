@@ -3,6 +3,7 @@ import { onBeforeUnmount, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { api, ApiError, type SearchJobDetail } from "@/api";
+import AgentJournal from "@/components/AgentJournal.vue";
 import ResultTimeline from "@/components/ResultTimeline.vue";
 import { useAuthStore } from "@/stores/auth";
 
@@ -67,6 +68,12 @@ onBeforeUnmount(() => {
       <span v-if="job.status === 'pending' || job.status === 'running'"> — live…</span>
     </p>
     <p v-if="job.error" class="error">{{ job.error }}</p>
+    <!-- Agent mode (ADR-030): the decision journal streams in live over SSE. -->
+    <AgentJournal
+      v-if="job.mode === 'agent'"
+      :steps="job.steps"
+      :live="job.status === 'pending' || job.status === 'running'"
+    />
     <ResultTimeline v-if="job.status === 'completed'" :results="job.results" />
   </section>
   <p v-else>Loading…</p>

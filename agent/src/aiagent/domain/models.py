@@ -62,6 +62,42 @@ class ResearchResult:
     raw: dict[str, Any] = field(default_factory=dict)
 
 
+class AgentStepKind(StrEnum):
+    """What the agent decided at one step of the loop (ADR-030)."""
+
+    SEARCH = "search"
+    FINISH = "finish"
+
+
+@dataclass(frozen=True)
+class SearchAction:
+    """The policy wants to run (another) search with its own query."""
+
+    query: str
+    reason: str
+
+
+@dataclass(frozen=True)
+class FinishAction:
+    """The policy judges the goal reached (or not reachable) and stops."""
+
+    reason: str
+
+
+AgentAction = SearchAction | FinishAction
+
+
+@dataclass(frozen=True)
+class AgentStep:
+    """One executed decision, recorded for the live journal (ADR-030)."""
+
+    seq: int
+    kind: AgentStepKind
+    detail: str  # the query for SEARCH, empty for FINISH
+    reason: str  # the policy's own explanation, shown verbatim in the UI
+    new_hits: int = 0  # hits added by this step after URL deduplication
+
+
 def _sort_key(result: ResearchResult) -> tuple[int, float]:
     if result.published_at is None:
         # Unknown dates go last (displayed in a separate section, ADR-011).

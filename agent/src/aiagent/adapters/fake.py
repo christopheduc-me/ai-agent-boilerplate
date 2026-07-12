@@ -8,7 +8,15 @@ LLM-extracted date (medium), unknown.
 
 from datetime import UTC, datetime
 
-from aiagent.domain.models import EventType, HitEnrichment, RawSearchHit
+from aiagent.domain.models import (
+    AgentAction,
+    AgentStep,
+    EventType,
+    FinishAction,
+    HitEnrichment,
+    RawSearchHit,
+    SearchAction,
+)
 
 
 class FakeSearchProvider:
@@ -59,3 +67,19 @@ class FakeHitEnricher:
             event_type=EventType.ANNOUNCEMENT,
             summary=f"Fake summary for {hit.title}",
         )
+
+
+class FakeAgentPolicy:
+    """Deterministic policy (ADR-030) for keyless demos and e2e: search the
+    goal, refine once (the fake provider returns the same hits, so the journal
+    shows the deduplication at work), then stop with an explicit reason."""
+
+    def decide(self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]) -> AgentAction:
+        if len(steps) == 0:
+            return SearchAction(query=goal, reason="Start with the user's goal as the query")
+        if len(steps) == 1:
+            return SearchAction(
+                query=f"{goal} latest",
+                reason="Refine for recency to check whether anything newer exists",
+            )
+        return FinishAction(reason="The refined query added nothing new; coverage looks sufficient")

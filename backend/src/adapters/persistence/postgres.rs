@@ -12,7 +12,8 @@ use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
 use crate::domain::{
-    DateConfidence, EventType, JobStatus, RefreshToken, ResearchJob, SearchResult, User,
+    AgentStep, DateConfidence, EventType, JobMode, JobStatus, RefreshToken, ResearchJob,
+    SearchResult, User,
 };
 
 /// Runs the SQL migrations in `backend/migrations/` (idempotent).
@@ -45,6 +46,21 @@ fn status_from_str(value: &str) -> Result<JobStatus, PortError> {
         other => Err(PortError(format!(
             "unknown job status in database: {other}"
         ))),
+    }
+}
+
+fn mode_to_str(mode: JobMode) -> &'static str {
+    match mode {
+        JobMode::Workflow => "workflow",
+        JobMode::Agent => "agent",
+    }
+}
+
+/// Unknown values degrade to the default mode (forward compatibility).
+fn mode_from_str(value: &str) -> JobMode {
+    match value {
+        "agent" => JobMode::Agent,
+        _ => JobMode::Workflow,
     }
 }
 
@@ -81,6 +97,7 @@ fn job_from_row(row: &PgRow) -> Result<ResearchJob, PortError> {
         id: row.get("id"),
         user_id: row.get("user_id"),
         keyword: row.get("keyword"),
+        mode: mode_from_str(row.get("mode")),
         status: status_from_str(row.get("status"))?,
         error: row.get("error"),
         created_at: row.get("created_at"),
@@ -251,12 +268,13 @@ impl PostgresJobRepository {
 impl JobRepository for PostgresJobRepository {
     async fn insert(&self, job: &ResearchJob) -> Result<(), PortError> {
         sqlx::query(
-            "INSERT INTO research_jobs (id, user_id, keyword, status, error, created_at, completed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+            "INSERT INTO research_jobs (id, user_id, keyword, mode, status, error, created_at, completed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(job.id)
         .bind(job.user_id)
         .bind(&job.keyword)
+        .bind(mode_to_str(job.mode))
         .bind(status_to_str(job.status))
         .bind(&job.error)
         .bind(job.created_at)
@@ -283,7 +301,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn find(&self, id: Uuid) -> Result<Option<ResearchJob>, PortError> {
         let row = sqlx::query(
-            "SELECT id, user_id, keyword, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
              FROM research_jobs WHERE id = $1",
         )
         .bind(id)
@@ -295,7 +313,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
              FROM research_jobs WHERE user_id = $1 ORDER BY created_at DESC",
         )
         .bind(user_id)
@@ -327,7 +345,7 @@ impl JobRepository for PostgresJobRepository {
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
              FROM research_jobs
              WHERE status IN ('pending', 'running') AND created_at < $1",
         )
@@ -379,5 +397,45 @@ impl JobRepository for PostgresJobRepository {
         .await
         .map_err(db_err)?;
         rows.iter().map(result_from_row).collect()
+    }
+
+    async fn append_step(&self, job_id: Uuid, step: &AgentStep) -> Result<(), PortError> {
+        // Idempotent on (job_id, seq): a Celery retry re-sends the same step.
+        sqlx::query(
+            "INSERT INTO agent_steps (job_id, seq, kind, detail, reason, new_hits)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (job_id, seq) DO NOTHING",
+        )
+        .bind(job_id)
+        .bind(step.seq)
+        .bind(&step.kind)
+        .bind(&step.detail)
+        .bind(&step.reason)
+        .bind(step.new_hits)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn steps_for(&self, job_id: Uuid) -> Result<Vec<AgentStep>, PortError> {
+        let rows = sqlx::query(
+            "SELECT seq, kind, detail, reason, new_hits
+             FROM agent_steps WHERE job_id = $1 ORDER BY seq",
+        )
+        .bind(job_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .iter()
+            .map(|row| AgentStep {
+                seq: row.get("seq"),
+                kind: row.get("kind"),
+                detail: row.get("detail"),
+                reason: row.get("reason"),
+                new_hits: row.get("new_hits"),
+            })
+            .collect())
     }
 }

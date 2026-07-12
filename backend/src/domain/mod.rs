@@ -4,7 +4,7 @@ pub mod refresh_token;
 pub mod search_result;
 pub mod user;
 
-pub use job::{JobStatus, ResearchJob};
+pub use job::{AgentStep, JobMode, JobStatus, ResearchJob};
 pub use refresh_token::RefreshToken;
 pub use search_result::{sort_by_publication_date, DateConfidence, EventType, SearchResult};
 pub use user::User;

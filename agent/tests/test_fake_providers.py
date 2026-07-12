@@ -3,11 +3,18 @@
 import pytest
 from pydantic import ValidationError
 
-from aiagent.adapters.fake import FakeHitEnricher, FakeSearchProvider
+from aiagent.adapters.fake import FakeAgentPolicy, FakeHitEnricher, FakeSearchProvider
 from aiagent.application import run_research
 from aiagent.config import Settings
-from aiagent.domain.models import DateConfidence, EventType
-from aiagent.tasks import build_providers
+from aiagent.domain.models import (
+    AgentStep,
+    AgentStepKind,
+    DateConfidence,
+    EventType,
+    FinishAction,
+    SearchAction,
+)
+from aiagent.tasks import build_policy, build_providers
 
 
 def settings_with(providers: str) -> Settings:
@@ -17,6 +24,7 @@ def settings_with(providers: str) -> Settings:
         internal_api_token="t",
         agent_model_id="claude-opus-4-8",
         providers=providers,
+        agent_max_steps=5,
     )
 
 
@@ -64,3 +72,23 @@ def test_fake_run_exercises_the_full_date_cascade() -> None:
 def test_fake_search_is_deterministic() -> None:
     provider = FakeSearchProvider()
     assert provider.search("kw") == provider.search("kw")
+
+
+def test_fake_policy_searches_refines_then_finishes() -> None:
+    policy = FakeAgentPolicy()
+    first = policy.decide("rust", [], [])
+    assert first == SearchAction(query="rust", reason="Start with the user's goal as the query")
+
+    one_step = [AgentStep(seq=1, kind=AgentStepKind.SEARCH, detail="rust", reason="r", new_hits=4)]
+    second = policy.decide("rust", one_step, [])
+    assert isinstance(second, SearchAction) and second.query == "rust latest"
+
+    two_steps = one_step + [
+        AgentStep(seq=2, kind=AgentStepKind.SEARCH, detail="rust latest", reason="r", new_hits=0)
+    ]
+    assert isinstance(policy.decide("rust", two_steps, []), FinishAction)
+
+
+def test_build_policy_selects_the_fake(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PROVIDERS", "fake")
+    assert isinstance(build_policy(Settings.from_env()), FakeAgentPolicy)

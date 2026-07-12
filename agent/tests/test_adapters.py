@@ -6,18 +6,24 @@ import respx
 
 from aiagent.adapters.llm import (
     ENRICHMENT_PROMPT,
+    ClaudeAgentPolicy,
     ClaudeHitEnricher,
+    parse_action,
     parse_enrichment,
     parse_extracted_date,
 )
 from aiagent.adapters.sink import HttpResultSink, serialize_result
 from aiagent.adapters.tavily import hit_from_tavily
 from aiagent.domain.models import (
+    AgentStep,
+    AgentStepKind,
     DateConfidence,
     EventType,
+    FinishAction,
     HitEnrichment,
     RawSearchHit,
     ResearchResult,
+    SearchAction,
 )
 
 # ---------------------------------------------------------------- tavily mapping
@@ -229,3 +235,63 @@ def test_serialize_result_none_date() -> None:
         date_confidence=DateConfidence.UNKNOWN,
     )
     assert serialize_result(result)["published_at"] is None
+
+
+# ---------------------------------------------------------------- agent policy (ADR-030)
+
+
+def test_parse_action_search_and_finish() -> None:
+    assert parse_action('{"action": "search", "query": "rust 2026", "reason": "refine"}') == (
+        SearchAction(query="rust 2026", reason="refine")
+    )
+    assert parse_action('{"action": "finish", "reason": "coverage ok"}') == (
+        FinishAction(reason="coverage ok")
+    )
+
+
+def test_parse_action_degrades_to_finish() -> None:
+    # Anything malformed must stop the loop, never crash or burn budget.
+    assert isinstance(parse_action("I think I should search more"), FinishAction)
+    assert isinstance(parse_action('{"action": "search"}'), FinishAction)  # no query
+    assert isinstance(parse_action('{"action": "search", "query": "  "}'), FinishAction)
+    assert isinstance(parse_action('["search"]'), FinishAction)
+
+
+def test_parse_action_tolerates_code_fences() -> None:
+    fenced = '```json\n{"action": "search", "query": "q", "reason": "r"}\n```'
+    assert parse_action(fenced) == SearchAction(query="q", reason="r")
+
+
+def test_claude_policy_shows_the_transcript_and_parses_the_decision() -> None:
+    llm = FakeChatModel(content='{"action": "search", "query": "rust news", "reason": "start"}')
+    policy = ClaudeAgentPolicy("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+    steps = [AgentStep(seq=1, kind=AgentStepKind.SEARCH, detail="rust", reason="r", new_hits=2)]
+
+    action = policy.decide("rust", steps, [a_hit(title="Rust 1.99 released")])
+
+    assert action == SearchAction(query="rust news", reason="start")
+    prompt = llm.prompts[0]
+    assert "Goal: rust" in prompt
+    assert '- "rust" -> 2 new' in prompt
+    assert "- Rust 1.99 released" in prompt
+
+
+@respx.mock
+def test_sink_reports_agent_steps() -> None:
+    route = respx.post("http://backend:8000/internal/jobs/job-1/steps").mock(
+        return_value=httpx.Response(204)
+    )
+    sink = HttpResultSink("http://backend:8000", "secret")
+    step = AgentStep(seq=1, kind=AgentStepKind.SEARCH, detail="rust", reason="start", new_hits=4)
+
+    sink.report_step("job-1", step)
+
+    import json as _json
+
+    assert _json.loads(route.calls.last.request.content) == {
+        "seq": 1,
+        "kind": "search",
+        "detail": "rust",
+        "reason": "start",
+        "new_hits": 4,
+    }

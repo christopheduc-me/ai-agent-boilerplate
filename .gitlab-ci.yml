@@ -172,6 +172,9 @@ e2e:
   script:
     - cp .env.example .env
     - echo "AGENT_PROVIDERS=fake" >> .env
+    # Smoke + Playwright register/login several times a minute (limiter has
+    # its own unit tests).
+    - echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
     - docker compose --profile full up -d --build --wait
     # Ports are published on the dind service host ("docker").
     - scripts/e2e-smoke.sh http://docker:8080

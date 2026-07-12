@@ -11,7 +11,7 @@
 > is part of the change. Implementation gaps are marked *(planned)* here and
 > tracked in `ROADMAP.md`.
 
-Last updated: 2026-07-11
+Last updated: 2026-07-12
 
 **Language convention**: all documentation, code, comments, commit messages, and
 identifiers in this project are written in **English only**.
@@ -793,6 +793,52 @@ Metrics and logs stay out of scope: traces are where the multi-process
 debugging pain is; the rest can follow the same opt-in pattern if a fork
 needs it.
 
+### ADR-030 — Two research modes: the workflow and the agentic loop (decided 2026-07-12)
+
+**Context**: the original flow is a *workflow* — a fixed pipeline (one search,
+enrich, sort) where the LLM is a component the code calls. A boilerplate named
+"AI agent" should also demonstrate an actual **agent**: the LLM deciding the
+control flow. Both are legitimate patterns (per the standard workflow-vs-agent
+distinction) with different cost/determinism trade-offs, so the boilerplate
+now ships both, side by side, on the same plumbing.
+
+**Decision**:
+
+1. **A job has a `mode`** — `workflow` (unchanged pipeline) or `agent` —
+   carried end to end: `POST /api/searches` body → jobs table (migration
+   0004) → task request contract → Celery task routing. Serde/pydantic
+   defaults keep every pre-ADR-030 payload and client working.
+2. **The agentic loop** (`run_agent_research`, Python): a new **`AgentPolicy`
+   port** (LLM in production, scripted fake under `AGENT_PROVIDERS=fake`)
+   sees the goal, the transcript of its own decisions and the collected
+   titles, and returns the next action — `search(query, reason)` or
+   `finish(reason)`. The loop enforces the mechanics: URL deduplication
+   across searches, a **step budget** (`AGENT_MAX_STEPS`, default 5 — the
+   cost guard in the spirit of ADR-017; exhaustion forces a reasoned finish),
+   and the shared enrich/sort/deliver tail (ADR-011/027). The policy reply is
+   parsed defensively: anything malformed means finish, never a crash or a
+   burned budget.
+3. **The live decision journal**: every executed decision is reported through
+   a new **`StepReporter` port** → `POST /internal/jobs/{id}/steps` →
+   `agent_steps` table (idempotent on `(job_id, seq)`, ADR-016) → the job
+   detail payload → the SSE stream (ADR-026, no new streaming code). Journal
+   reporting is best-effort by contract: losing a step never fails the job.
+   Step `kind` stays an open string end to end so newer agents can add kinds
+   without breaking older backends.
+4. **Frontend: two demo blocks** on the searches view — "Workflow demo" vs
+   "Agent demo" — launching the same form into either mode; agent jobs render
+   an `AgentJournal` (query, dedup-aware hit count, the policy's own reason
+   verbatim, pulsing "thinking" indicator while live) above the shared
+   timeline.
+5. **Determinism for tests/e2e (ADR-021)**: `FakeAgentPolicy` scripts
+   search → refine (deduplicated to 0 new hits) → reasoned finish, so the
+   journal itself demonstrates deduplication and the smoke/Playwright suites
+   assert exact step sequences. New contract fixture:
+   `agent-step-callback.json` (ADR-025).
+
+Next agentic steps stay in ROADMAP.md: self-critique of results, recurring
+searches with memory, human-in-the-loop clarification.
+
 ---
 
 ## 4. API contracts (summary)
@@ -805,9 +851,9 @@ needs it.
 | POST | `/api/auth/login` | Login → access token (body) + refresh cookie |
 | POST | `/api/auth/refresh` | Rotates the refresh cookie → new access token |
 | POST | `/api/auth/logout` | Revokes the refresh token, clears the cookie |
-| POST | `/api/searches` | Launches a search `{keyword}` → `{job_id}` |
+| POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |
-| GET | `/api/searches/{id}` | Status + results sorted by date |
+| GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) |
 | GET | `/api/searches/{id}/events` | SSE stream of the same payload, one `update` event per change, closes on terminal status (ADR-026) |
 
 All `/api/*` routes can answer `429` (per-IP rate limit; `POST /api/searches`
@@ -817,7 +863,7 @@ also enforces the per-user daily quota — ADR-017).
 
 | Method | Route | Description |
 |---|---|---|
-| POST | `/tasks` | `{job_id, keyword}` → Celery enqueue |
+| POST | `/tasks` | `{job_id, keyword, mode}` → Celery enqueue |
 
 ### Internal (worker → Rust, shared token)
 
@@ -825,6 +871,7 @@ also enforces the per-user daily quota — ADR-017).
 |---|---|---|
 | POST | `/internal/jobs/{id}/started` | Worker picked the job up → status `running` (ADR-016) |
 | POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, raw}]` |
+| POST | `/internal/jobs/{id}/steps` | Records one agent-loop decision `{seq, kind, detail, reason, new_hits}` (ADR-030, idempotent on seq) |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
 
 ---
@@ -836,5 +883,7 @@ also enforces the per-user daily quota — ADR-017).
 - Upgrade the SSE change-detection (ADR-026) from per-connection DB polling to
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
-- Recurring keyword monitoring (Celery beat).
-- Observability: OpenTelemetry traces across the three components.
+- Recurring keyword monitoring (Celery beat) with memory across runs, so the
+  agent decides what is new and worth reporting (ADR-030's natural sequel).
+- Agent self-critique of results and human-in-the-loop clarification
+  (`awaiting_input` status) — see ROADMAP.md.

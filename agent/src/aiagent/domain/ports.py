@@ -2,11 +2,34 @@
 
 from typing import Protocol
 
-from aiagent.domain.models import HitEnrichment, RawSearchHit, ResearchResult
+from aiagent.domain.models import (
+    AgentAction,
+    AgentStep,
+    HitEnrichment,
+    RawSearchHit,
+    ResearchResult,
+)
 
 
 class SearchProvider(Protocol):
     def search(self, keyword: str) -> list[RawSearchHit]: ...
+
+
+class AgentPolicy(Protocol):
+    """The decision-maker of the agentic loop (ADR-030): given the goal and
+    everything done/found so far, picks the next action. In production an LLM;
+    in tests a scripted fake — the loop itself stays deterministic."""
+
+    def decide(
+        self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]
+    ) -> AgentAction: ...
+
+
+class StepReporter(Protocol):
+    """Publishes each executed decision for the live journal (ADR-030).
+    Best-effort by contract: a failed report never fails the job."""
+
+    def report_step(self, job_id: str, step: AgentStep) -> None: ...
 
 
 class HitEnricher(Protocol):

@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError};
-use crate::domain::{sort_by_publication_date, ResearchJob, SearchResult};
+use crate::domain::{sort_by_publication_date, AgentStep, ResearchJob, SearchResult};
 
 /// Read-side use cases. Ownership is enforced here: a user can only see their own jobs.
 pub struct SearchQueries {
@@ -19,13 +19,14 @@ impl SearchQueries {
         self.jobs.list_for_user(user_id).await
     }
 
-    /// Returns the job with its results sorted by publication date (ADR-011),
-    /// or `None` if the job does not exist or belongs to another user.
+    /// Returns the job with its results sorted by publication date (ADR-011)
+    /// and its agent journal (ADR-030, empty in workflow mode), or `None` if
+    /// the job does not exist or belongs to another user.
     pub async fn get(
         &self,
         user_id: Uuid,
         job_id: Uuid,
-    ) -> Result<Option<(ResearchJob, Vec<SearchResult>)>, PortError> {
+    ) -> Result<Option<(ResearchJob, Vec<SearchResult>, Vec<AgentStep>)>, PortError> {
         let Some(job) = self.jobs.find(job_id).await? else {
             return Ok(None);
         };
@@ -34,7 +35,8 @@ impl SearchQueries {
         }
         let mut results = self.jobs.results_for(job_id).await?;
         sort_by_publication_date(&mut results);
-        Ok(Some((job, results)))
+        let steps = self.jobs.steps_for(job_id).await?;
+        Ok(Some((job, results, steps)))
     }
 }
 

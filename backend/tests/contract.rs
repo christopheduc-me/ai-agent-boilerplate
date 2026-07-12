@@ -16,7 +16,7 @@ use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
-use backend::domain::ResearchJob;
+use backend::domain::{JobMode, ResearchJob};
 use http_body_util::BodyExt;
 use serde_json::Value;
 use tower::ServiceExt;
@@ -155,6 +155,37 @@ async fn backend_consumes_the_failure_callback_fixture() {
 }
 
 #[tokio::test]
+async fn backend_consumes_the_agent_step_callback_fixture() {
+    let app = app();
+    let (bearer, job_id) = user_with_job(&app).await;
+
+    let (status, _) = call(
+        &app,
+        post(
+            &format!("/internal/jobs/{job_id}/steps"),
+            fixture("agent-step-callback.json"),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+    assert_eq!(status, 204, "the fixture must deserialize as-is");
+
+    let (_, detail) = call(
+        &app,
+        Request::builder()
+            .uri(format!("/api/searches/{job_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let steps = detail["steps"].as_array().unwrap();
+    assert_eq!(steps.len(), 1);
+    assert_eq!(steps[0]["kind"], "search");
+    assert_eq!(steps[0]["new_hits"], 4);
+}
+
+#[tokio::test]
 async fn backend_produces_the_task_request_fixture() {
     // Stub agent API capturing the request body.
     let captured: Arc<std::sync::Mutex<Vec<Value>>> = Arc::default();
@@ -179,7 +210,9 @@ async fn backend_produces_the_task_request_fixture() {
     tokio::spawn(async move { axum::serve(listener, stub).await.unwrap() });
 
     let dispatcher = HttpJobDispatcher::new(format!("http://{addr}"), "secret".into());
-    let mut job = ResearchJob::new(Uuid::new_v4(), "rust hexagonal architecture").unwrap();
+    let mut job = ResearchJob::new(Uuid::new_v4(), "rust hexagonal architecture")
+        .unwrap()
+        .with_mode(JobMode::Agent);
     job.id = Uuid::parse_str("3fa85f64-5717-4562-b3fc-2c963f66afa6").unwrap();
     dispatcher.dispatch(&job).await.unwrap();
 

@@ -75,4 +75,32 @@ FIRST_SUMMARY=$(json_get "$DETAIL" 'data["results"][0]["summary"]')
 [ "$FIRST_SUMMARY" = "Fake summary for fake-dated-recent" ] \
   || fail "unexpected summary: $FIRST_SUMMARY"
 
-say "E2E OK — status=$STATUS, results=[$TITLES]"
+say "launch an agent-mode search (ADR-030)"
+LAUNCH=$(curl -sf -X POST "$BASE_URL/api/searches" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"e2e agent smoke","mode":"agent"}') || fail "launch agent search"
+AGENT_JOB=$(json_get "$LAUNCH" 'data["job_id"]')
+
+AGENT_STATUS="pending"
+for _ in $(seq 1 30); do
+  AGENT_DETAIL=$(curl -sf "$BASE_URL/api/searches/$AGENT_JOB" \
+    -H "authorization: Bearer $TOKEN") || fail "get agent search"
+  AGENT_STATUS=$(json_get "$AGENT_DETAIL" 'data["status"]')
+  [ "$AGENT_STATUS" = "completed" ] && break
+  [ "$AGENT_STATUS" = "failed" ] && fail "agent job failed"
+  sleep 2
+done
+[ "$AGENT_STATUS" = "completed" ] || fail "agent job still '$AGENT_STATUS'"
+
+say "checking the agent decision journal"
+MODE=$(json_get "$AGENT_DETAIL" 'data["mode"]')
+[ "$MODE" = "agent" ] || fail "unexpected mode: $MODE"
+STEP_KINDS=$(json_get "$AGENT_DETAIL" '",".join(s["kind"] for s in data["steps"])')
+# Fake policy: search -> refine (deduplicated to 0 new) -> reasoned finish.
+[ "$STEP_KINDS" = "search,search,finish" ] || fail "unexpected steps: $STEP_KINDS"
+NEW_HITS=$(json_get "$AGENT_DETAIL" '",".join(str(s["new_hits"]) for s in data["steps"])')
+[ "$NEW_HITS" = "4,0,0" ] || fail "unexpected new_hits: $NEW_HITS"
+AGENT_RESULTS=$(json_get "$AGENT_DETAIL" 'len(data["results"])')
+[ "$AGENT_RESULTS" = "4" ] || fail "unexpected agent result count: $AGENT_RESULTS"
+
+say "E2E OK — workflow results=[$TITLES]; agent steps=[$STEP_KINDS]"

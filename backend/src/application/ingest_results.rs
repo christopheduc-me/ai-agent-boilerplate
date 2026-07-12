@@ -3,7 +3,7 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError};
-use crate::domain::SearchResult;
+use crate::domain::{AgentStep, SearchResult};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -48,6 +48,17 @@ impl IngestResults {
         self.jobs.store_results(job_id, results).await?;
         job.complete();
         self.jobs.update(&job).await?;
+        Ok(())
+    }
+
+    /// Records one decision of the agentic loop (ADR-030). Idempotent on
+    /// `(job_id, seq)` — Celery retries re-send the same journal entries.
+    pub async fn record_step(&self, job_id: Uuid, step: &AgentStep) -> Result<(), IngestError> {
+        self.jobs
+            .find(job_id)
+            .await?
+            .ok_or(IngestError::JobNotFound)?;
+        self.jobs.append_step(job_id, step).await?;
         Ok(())
     }
 
@@ -148,6 +159,55 @@ mod tests {
         let ingest = IngestResults::new(jobs);
 
         let err = ingest.complete(Uuid::new_v4(), &[]).await.unwrap_err();
+        assert!(matches!(err, IngestError::JobNotFound));
+    }
+
+    fn a_step(seq: i32, kind: &str) -> AgentStep {
+        AgentStep {
+            seq,
+            kind: kind.into(),
+            detail: "rust".into(),
+            reason: "because".into(),
+            new_hits: 2,
+        }
+    }
+
+    #[tokio::test]
+    async fn records_agent_steps_idempotently() {
+        let (jobs, job) = repo_with_job().await;
+        let ingest = IngestResults::new(jobs.clone());
+
+        ingest
+            .record_step(job.id, &a_step(1, "search"))
+            .await
+            .unwrap();
+        ingest
+            .record_step(job.id, &a_step(1, "search"))
+            .await
+            .unwrap(); // retry
+        ingest
+            .record_step(job.id, &a_step(2, "finish"))
+            .await
+            .unwrap();
+
+        let steps = jobs.steps_for(job.id).await.unwrap();
+        assert_eq!(steps.len(), 2);
+        assert_eq!(
+            steps
+                .iter()
+                .map(|s| (s.seq, s.kind.as_str()))
+                .collect::<Vec<_>>(),
+            vec![(1, "search"), (2, "finish")]
+        );
+    }
+
+    #[tokio::test]
+    async fn step_for_an_unknown_job_is_an_error() {
+        let ingest = IngestResults::new(Arc::new(InMemoryJobRepository::default()));
+        let err = ingest
+            .record_step(Uuid::new_v4(), &a_step(1, "search"))
+            .await
+            .unwrap_err();
         assert!(matches!(err, IngestError::JobNotFound));
     }
 }

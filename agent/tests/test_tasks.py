@@ -81,3 +81,25 @@ def test_delivery_failure_reports_and_raises_for_celery_retry(fake_env) -> None:
 
     # Best-effort failure report before the exception propagates (ADR-016).
     assert failure.called
+
+
+@respx.mock
+def test_agent_mode_runs_the_loop_and_reports_the_journal(fake_env) -> None:
+    respx.post(f"{BACKEND}/internal/jobs/job-5/started").mock(return_value=httpx.Response(204))
+    steps = respx.post(f"{BACKEND}/internal/jobs/job-5/steps").mock(
+        return_value=httpx.Response(204)
+    )
+    results = respx.post(f"{BACKEND}/internal/jobs/job-5/results").mock(
+        return_value=httpx.Response(204)
+    )
+
+    count = run_research_task("job-5", "keyword", mode="agent")
+
+    # Fake policy: search -> refine (0 new, dedup) -> finish (ADR-030).
+    assert count == 4
+    assert steps.call_count == 3
+    assert results.called
+    import json as _json
+
+    kinds = [_json.loads(c.request.content)["kind"] for c in steps.calls]
+    assert kinds == ["search", "search", "finish"]

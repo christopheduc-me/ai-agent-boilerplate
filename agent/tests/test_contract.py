@@ -10,8 +10,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aiagent.adapters.api.app import TaskRequest
-from aiagent.adapters.sink import serialize_result
-from aiagent.domain.models import DateConfidence, EventType, ResearchResult
+from aiagent.adapters.sink import serialize_result, serialize_step
+from aiagent.domain.models import (
+    AgentStep,
+    AgentStepKind,
+    DateConfidence,
+    EventType,
+    ResearchResult,
+)
 
 CONTRACTS = Path(__file__).parents[2] / "contracts"
 
@@ -70,3 +76,19 @@ def test_agent_consumes_the_task_request_produced_by_the_backend() -> None:
     request = TaskRequest(**load("task-request.json"))
     assert request.job_id == "3fa85f64-5717-4562-b3fc-2c963f66afa6"
     assert request.keyword == "rust hexagonal architecture"
+
+
+def test_agent_produces_the_step_callback_exactly() -> None:
+    step = AgentStep(
+        seq=1,
+        kind=AgentStepKind.SEARCH,
+        detail="rust hexagonal architecture",
+        reason="Start with the user's goal as the query",
+        new_hits=4,
+    )
+    assert serialize_step(step) == load("agent-step-callback.json")
+
+
+def test_agent_consumes_the_task_request_mode() -> None:
+    request = TaskRequest(**load("task-request.json"))
+    assert request.mode == "agent"

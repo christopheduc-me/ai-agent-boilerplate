@@ -1,10 +1,10 @@
-"""ResultSink adapter: HTTP callback to the Rust backend (ADR-006)."""
+"""ResultSink + StepReporter adapter: HTTP callbacks to the Rust backend (ADR-006/030)."""
 
 from typing import Any
 
 import httpx
 
-from aiagent.domain.models import ResearchResult
+from aiagent.domain.models import AgentStep, ResearchResult
 
 
 def serialize_result(result: ResearchResult) -> dict[str, Any]:
@@ -17,6 +17,16 @@ def serialize_result(result: ResearchResult) -> dict[str, Any]:
         "event_type": result.event_type.value,
         "summary": result.summary,
         "raw": result.raw,
+    }
+
+
+def serialize_step(step: AgentStep) -> dict[str, Any]:
+    return {
+        "seq": step.seq,
+        "kind": step.kind.value,
+        "detail": step.detail,
+        "reason": step.reason,
+        "new_hits": step.new_hits,
     }
 
 
@@ -46,6 +56,15 @@ class HttpResultSink:
         response = self._client.post(
             f"{self._base_url}/internal/jobs/{job_id}/results",
             json={"results": [serialize_result(r) for r in results]},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+
+    def report_step(self, job_id: str, step: AgentStep) -> None:
+        # Live journal (ADR-030); the use case treats failures as best-effort.
+        response = self._client.post(
+            f"{self._base_url}/internal/jobs/{job_id}/steps",
+            json=serialize_step(step),
             headers=self._headers,
         )
         response.raise_for_status()

@@ -11,6 +11,30 @@ pub enum JobStatus {
     Failed,
 }
 
+/// How the research runs (ADR-030): the fixed pipeline, or the agentic loop
+/// where the LLM policy decides the queries and when to stop. The default
+/// keeps pre-ADR-030 clients and payloads working unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum JobMode {
+    #[default]
+    Workflow,
+    Agent,
+}
+
+/// One decision of the agentic loop (ADR-030), recorded for the live journal.
+/// `kind` stays an open string ("search" / "finish" today) so newer agents can
+/// introduce step kinds without breaking older backends.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AgentStep {
+    pub seq: i32,
+    pub kind: String,
+    pub detail: String,
+    pub reason: String,
+    #[serde(default)]
+    pub new_hits: i32,
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
     #[error("keyword must not be empty")]
@@ -22,6 +46,7 @@ pub struct ResearchJob {
     pub id: Uuid,
     pub user_id: Uuid,
     pub keyword: String,
+    pub mode: JobMode,
     pub status: JobStatus,
     pub error: Option<String>,
     pub created_at: DateTime<Utc>,
@@ -38,11 +63,17 @@ impl ResearchJob {
             id: Uuid::new_v4(),
             user_id,
             keyword: keyword.to_string(),
+            mode: JobMode::default(),
             status: JobStatus::Pending,
             error: None,
             created_at: super::now_utc(),
             completed_at: None,
         })
+    }
+
+    pub fn with_mode(mut self, mode: JobMode) -> Self {
+        self.mode = mode;
+        self
     }
 
     /// Worker picked the job up. Only a pending job transitions; anything else

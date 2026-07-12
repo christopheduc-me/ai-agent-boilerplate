@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{RefreshToken, ResearchJob, SearchResult, User};
+use super::{AgentStep, RefreshToken, ResearchJob, SearchResult, User};
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
 #[derive(Debug, thiserror::Error)]
@@ -37,6 +37,11 @@ pub trait JobRepository: Send + Sync {
     ) -> Result<Vec<ResearchJob>, PortError>;
     async fn store_results(&self, job_id: Uuid, results: &[SearchResult]) -> Result<(), PortError>;
     async fn results_for(&self, job_id: Uuid) -> Result<Vec<SearchResult>, PortError>;
+    /// Records one decision of the agentic loop (ADR-030). Idempotent on
+    /// `(job_id, seq)` so Celery retries never duplicate journal entries.
+    async fn append_step(&self, job_id: Uuid, step: &AgentStep) -> Result<(), PortError>;
+    /// The journal in `seq` order.
+    async fn steps_for(&self, job_id: Uuid) -> Result<Vec<AgentStep>, PortError>;
 }
 
 /// Persisted refresh tokens (ADR-008): stored hashed, single use (rotation).

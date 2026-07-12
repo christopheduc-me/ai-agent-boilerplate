@@ -10,7 +10,7 @@ from aiagent.domain.models import (
 from aiagent.domain.ports import HitEnricher, ResultSink, SearchProvider
 
 
-def _resolve(hit: RawSearchHit, enricher: HitEnricher) -> ResearchResult:
+def resolve_hit(hit: RawSearchHit, enricher: HitEnricher) -> ResearchResult:
     """Enrichment (ADR-027) + date cascade (ADR-011): the provider's date wins
     (high confidence); otherwise the LLM's date is used (medium); else unknown."""
     enrichment = enricher.enrich(hit)
@@ -48,7 +48,7 @@ def run_research(
     try:
         sink.mark_started(job_id)
         hits = search.search(keyword)
-        results = sort_by_publication_date([_resolve(hit, enricher) for hit in hits])
+        results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
         sink.deliver(job_id, results)
         return results
     except Exception as exc:

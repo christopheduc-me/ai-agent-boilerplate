@@ -31,7 +31,7 @@ use crate::domain::ports::{
     JobDispatcher, JobRepository, PasswordHasher, RefreshTokenRepository, TokenService,
     UserRepository,
 };
-use crate::domain::{JobStatus, ResearchJob, SearchResult};
+use crate::domain::{AgentStep, JobMode, JobStatus, ResearchJob, SearchResult};
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
 const REFRESH_COOKIE: &str = "refresh_token";
@@ -141,6 +141,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .merge(api_routes)
         .route("/internal/jobs/{id}/started", post(internal_started))
         .route("/internal/jobs/{id}/results", post(internal_results))
+        .route("/internal/jobs/{id}/steps", post(internal_step))
         .route("/internal/jobs/{id}/failure", post(internal_failure))
         // Outermost layer: every request gets a correlation span (ADR-018).
         .layer(axum::middleware::from_fn(request_id::request_id))
@@ -237,12 +238,17 @@ struct CredentialsRequest {
 #[derive(Deserialize)]
 struct CreateSearchRequest {
     keyword: String,
+    // Workflow (fixed pipeline) or agent (decision loop, ADR-030); defaulted
+    // so pre-ADR-030 clients keep working.
+    #[serde(default)]
+    mode: JobMode,
 }
 
 #[derive(Serialize)]
 struct JobView {
     id: Uuid,
     keyword: String,
+    mode: JobMode,
     status: JobStatus,
     error: Option<String>,
     created_at: DateTime<Utc>,
@@ -254,6 +260,7 @@ impl From<&ResearchJob> for JobView {
         Self {
             id: job.id,
             keyword: job.keyword.clone(),
+            mode: job.mode,
             status: job.status,
             error: job.error.clone(),
             created_at: job.created_at,
@@ -345,7 +352,11 @@ async fn create_search(
     AuthUser(user_id): AuthUser,
     Json(body): Json<CreateSearchRequest>,
 ) -> Response {
-    match state.launch.execute(user_id, &body.keyword).await {
+    match state
+        .launch
+        .execute(user_id, &body.keyword, body.mode)
+        .await
+    {
         Ok(job) => (StatusCode::ACCEPTED, Json(json!({ "job_id": job.id }))).into_response(),
         Err(LaunchError::InvalidJob(e)) => {
             error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
@@ -375,9 +386,15 @@ async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUse
 
 /// The job detail payload, shared by `GET /api/searches/{id}` and the SSE
 /// stream (ADR-026) so both surfaces always carry the same shape.
-pub(crate) fn job_detail_json(job: &ResearchJob, results: &[SearchResult]) -> serde_json::Value {
+pub(crate) fn job_detail_json(
+    job: &ResearchJob,
+    results: &[SearchResult],
+    steps: &[AgentStep],
+) -> serde_json::Value {
     let mut body = serde_json::to_value(JobView::from(job)).expect("serializable view");
     body["results"] = serde_json::to_value(results).expect("serializable results");
+    // The agent journal (ADR-030); always present, empty in workflow mode.
+    body["steps"] = serde_json::to_value(steps).expect("serializable steps");
     body
 }
 
@@ -387,7 +404,9 @@ async fn get_search(
     Path(job_id): Path<Uuid>,
 ) -> Response {
     match state.queries.get(user_id, job_id).await {
-        Ok(Some((job, results))) => Json(job_detail_json(&job, &results)).into_response(),
+        Ok(Some((job, results, steps))) => {
+            Json(job_detail_json(&job, &results, &steps)).into_response()
+        }
         Ok(None) => error_body(StatusCode::NOT_FOUND, "search not found"),
         Err(e) => {
             tracing::error!(error = %e, "get search failed");
@@ -452,6 +471,26 @@ async fn internal_results(
         Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
         Err(IngestError::Infrastructure(e)) => {
             tracing::error!(error = %e, "ingest results failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Records one agent-loop decision for the live journal (ADR-030).
+async fn internal_step(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(step): Json<AgentStep>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    match state.ingest.record_step(job_id, &step).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
+        Err(IngestError::Infrastructure(e)) => {
+            tracing::error!(error = %e, "record agent step failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

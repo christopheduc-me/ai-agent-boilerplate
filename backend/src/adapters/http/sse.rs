@@ -47,11 +47,12 @@ pub fn job_updates(
             return None;
         }
         loop {
-            let Ok(Some((job, results))) = state.queries.get(state.user_id, state.job_id).await
+            let Ok(Some((job, results, steps))) =
+                state.queries.get(state.user_id, state.job_id).await
             else {
                 return None; // job vanished or infrastructure error: end the stream
             };
-            let payload = super::job_detail_json(&job, &results).to_string();
+            let payload = super::job_detail_json(&job, &results, &steps).to_string();
             if state.last_payload.as_deref() != Some(&payload) {
                 state.last_payload = Some(payload.clone());
                 state.finished = job.is_finished();

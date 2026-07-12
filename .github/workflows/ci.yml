@@ -146,6 +146,10 @@ jobs:
         run: |
           cp .env.example .env
           echo "AGENT_PROVIDERS=fake" >> .env
+          # The smoke script + Playwright journeys all register/login within a
+          # minute; keep the per-IP auth limiter out of the way (it has its
+          # own unit tests).
+          echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
       - name: Boot the full stack
         run: docker compose --profile full up -d --build --wait
       - name: Run the smoke test

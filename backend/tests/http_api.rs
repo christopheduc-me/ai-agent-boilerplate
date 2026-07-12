@@ -499,3 +499,77 @@ async fn internal_endpoints_require_the_internal_token() {
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
+
+/// Agent mode (ADR-030): mode round-trips, the journal is recorded through the
+/// internal endpoint (idempotently) and served in the detail payload.
+#[tokio::test]
+async fn agent_mode_lifecycle_with_journal() {
+    let app = app();
+    let creds = json!({"email": "agent@example.com", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    let (status, body) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "rust", "mode": "agent"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "create agent search: {body}");
+    let job_id = body["job_id"].as_str().unwrap().to_string();
+
+    let step = |seq: i32, kind: &str| json!({"seq": seq, "kind": kind, "detail": "rust", "reason": "because", "new_hits": 2});
+    for payload in [step(1, "search"), step(1, "search"), step(2, "finish")] {
+        let (status, _) = send(
+            &app,
+            post_json(
+                &format!("/internal/jobs/{job_id}/steps"),
+                payload,
+                &[("x-internal-token", INTERNAL_TOKEN)],
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NO_CONTENT);
+    }
+
+    let (_, detail) = send(
+        &app,
+        get(
+            &format!("/api/searches/{job_id}"),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(detail["mode"], "agent");
+    let steps = detail["steps"].as_array().unwrap();
+    // The duplicated seq 1 (Celery retry) was ignored: idempotence (ADR-016).
+    assert_eq!(steps.len(), 2);
+    assert_eq!(steps[0]["kind"], "search");
+    assert_eq!(steps[1]["kind"], "finish");
+
+    // A workflow search keeps the default mode and an empty journal.
+    let (_, body) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "rust"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    let workflow_id = body["job_id"].as_str().unwrap().to_string();
+    let (_, detail) = send(
+        &app,
+        get(
+            &format!("/api/searches/{workflow_id}"),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(detail["mode"], "workflow");
+    assert_eq!(detail["steps"].as_array().unwrap().len(), 0);
+}
