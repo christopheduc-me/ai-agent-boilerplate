@@ -63,10 +63,11 @@ class ResearchResult:
 
 
 class AgentStepKind(StrEnum):
-    """What the agent decided at one step of the loop (ADR-030)."""
+    """What the agent decided at one step of the loop (ADR-030/031)."""
 
     SEARCH = "search"
     FINISH = "finish"
+    CRITIQUE = "critique"
 
 
 @dataclass(frozen=True)
@@ -85,6 +86,17 @@ class FinishAction:
 
 
 AgentAction = SearchAction | FinishAction
+
+
+@dataclass(frozen=True)
+class Critique:
+    """The agent's self-assessment of its own results (ADR-031), produced
+    before delivery: a verdict for the journal, the URLs judged off-topic
+    (dropped from the delivery), and at most one gap worth one repair search."""
+
+    assessment: str
+    irrelevant_urls: tuple[str, ...] = ()
+    gap_query: str | None = None
 
 
 @dataclass(frozen=True)

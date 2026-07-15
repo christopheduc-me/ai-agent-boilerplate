@@ -53,14 +53,17 @@ test("the agent demo streams the decision journal and renders the timeline", asy
   await page.getByTestId("agent-demo").getByPlaceholder(/Goal/).fill("agentic e2e");
   await page.getByRole("button", { name: "Run the agent" }).click();
 
-  // The decision journal (ADR-030) fills in live: two searches (the refined
-  // one deduplicated to 0 new results), then a reasoned finish.
+  // The decision journal (ADR-030/031) fills in live: two searches (the
+  // refined one deduplicated to 0 new results), a reasoned finish, then the
+  // self-critique review.
   const journal = page.getByTestId("agent-journal");
   await expect(journal).toBeVisible({ timeout: 30_000 });
-  await expect(journal.locator("li[data-kind]")).toHaveCount(3, { timeout: 30_000 });
+  await expect(journal.locator("li[data-kind]")).toHaveCount(4, { timeout: 30_000 });
   await expect(journal.locator("li[data-kind='search']").first()).toContainText("“agentic e2e”");
   await expect(journal.locator("li[data-kind='search']").nth(1)).toContainText("0 new results");
   await expect(journal.locator("li[data-kind='finish']")).toContainText("coverage looks sufficient");
+  await expect(journal.locator("li[data-kind='critique']")).toContainText("reviewed the results");
+  await expect(journal.locator("li[data-kind='critique']")).toContainText("All 4 results relate");
 
   // The loop's results land in the same timeline as the workflow mode.
   await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });

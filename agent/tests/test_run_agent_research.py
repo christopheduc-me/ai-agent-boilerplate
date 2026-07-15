@@ -9,6 +9,7 @@ from aiagent.domain.models import (
     AgentAction,
     AgentStep,
     AgentStepKind,
+    Critique,
     FinishAction,
     HitEnrichment,
     RawSearchHit,
@@ -170,3 +171,123 @@ def test_search_failure_reports_and_propagates() -> None:
             max_steps=5,
         )
     assert sink.failures == [("job-4", "provider down")]
+
+
+# ---------------------------------------------------------------- self-critique (ADR-031)
+
+
+class ScriptedCritic:
+    def __init__(self, critique: Critique) -> None:
+        self._critique = critique
+        self.seen: list[tuple[str, int]] = []
+
+    def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
+        self.seen.append((goal, len(hits)))
+        return self._critique
+
+
+def test_critique_runs_after_finish_and_drops_off_topic_hits() -> None:
+    search = MappedSearch({"q": [hit("https://a"), hit("https://off-topic")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    critic = ScriptedCritic(
+        Critique(
+            assessment="One result is unrelated to the goal.",
+            irrelevant_urls=("https://off-topic", "https://never-collected"),
+        )
+    )
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-5",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        critic=critic,
+        max_steps=5,
+    )
+
+    # The off-topic hit is dropped from the delivery, and the journal says so.
+    assert [r.url for r in results] == ["https://a"]
+    assert critic.seen == [("goal", 2)]
+    last = reporter.steps[-1]
+    assert last.kind is AgentStepKind.CRITIQUE
+    assert last.seq == 3  # search, finish, critique
+    assert "unrelated" in last.reason and "dropped 1 off-topic" in last.reason
+
+
+def test_critique_gap_triggers_one_repair_search_within_budget() -> None:
+    search = MappedSearch({"q": [hit("https://a")], "q recent": [hit("https://fresh")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    critic = ScriptedCritic(Critique(assessment="No recent source.", gap_query="q recent"))
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-6",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        critic=critic,
+        max_steps=5,
+    )
+
+    assert search.queries == ["q", "q recent"]
+    assert {r.url for r in results} == {"https://a", "https://fresh"}
+    kinds = [s.kind for s in reporter.steps]
+    assert kinds == [
+        AgentStepKind.SEARCH,
+        AgentStepKind.FINISH,
+        AgentStepKind.CRITIQUE,
+        AgentStepKind.SEARCH,
+    ]
+    repair = reporter.steps[-1]
+    assert repair.detail == "q recent" and repair.new_hits == 1
+    assert "self-critique" in repair.reason
+
+
+def test_critique_gap_is_ignored_when_the_search_budget_is_spent() -> None:
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason="1"), SearchAction(query="q", reason="2")]
+    )
+    critic = ScriptedCritic(Critique(assessment="Gap remains.", gap_query="q more"))
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    run_agent_research(
+        "job-7",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        critic=critic,
+        max_steps=2,
+    )
+
+    # Two searches allowed: the gap named by the critique is not searched.
+    assert search.queries == ["q", "q"]
+    assert [s.kind for s in reporter.steps] == [
+        AgentStepKind.SEARCH,
+        AgentStepKind.SEARCH,
+        AgentStepKind.FINISH,
+        AgentStepKind.CRITIQUE,
+    ]
+
+
+def test_without_a_critic_the_loop_behaves_as_before() -> None:
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-8", "goal", search, NeutralEnricher(), policy, sink, reporter, max_steps=5
+    )
+
+    assert len(results) == 1
+    assert [s.kind for s in reporter.steps] == [AgentStepKind.SEARCH, AgentStepKind.FINISH]

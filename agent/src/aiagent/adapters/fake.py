@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
+    Critique,
     EventType,
     FinishAction,
     HitEnrichment,
@@ -83,3 +84,17 @@ class FakeAgentPolicy:
                 reason="Refine for recency to check whether anything newer exists",
             )
         return FinishAction(reason="The refined query added nothing new; coverage looks sufficient")
+
+
+class FakeResultCritic:
+    """Deterministic self-critique (ADR-031): a stable verdict, nothing
+    dropped, no gap — the e2e journal shows the review step without changing
+    the delivered fake results."""
+
+    def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
+        return Critique(
+            assessment=(
+                f"All {len(hits)} results relate to the goal; "
+                "one could not be dated and is listed separately."
+            )
+        )

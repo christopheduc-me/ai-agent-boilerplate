@@ -21,6 +21,7 @@ from aiagent.domain.models import (
 from aiagent.domain.ports import (
     AgentPolicy,
     HitEnricher,
+    ResultCritic,
     ResultSink,
     SearchProvider,
     StepReporter,
@@ -37,6 +38,53 @@ def _report(reporter: StepReporter, job_id: str, step: AgentStep) -> None:
         logger.warning("failed to report agent step", extra={"job_id": job_id}, exc_info=True)
 
 
+def _self_critique(
+    job_id: str,
+    goal: str,
+    hits: list[RawSearchHit],
+    steps: list[AgentStep],
+    search: SearchProvider,
+    critic: ResultCritic,
+    reporter: StepReporter,
+    max_steps: int,
+) -> list[RawSearchHit]:
+    """The review pass (ADR-031): drop what the critic judged off-topic,
+    journal the verdict, and fill at most one named gap if budget remains."""
+    critique = critic.critique(goal, hits)
+    kept = [h for h in hits if h.url not in critique.irrelevant_urls]
+    dropped = len(hits) - len(kept)
+    reason = critique.assessment
+    if dropped:
+        plural = "s" if dropped > 1 else ""
+        reason = f"{reason} (dropped {dropped} off-topic result{plural})"
+    step = AgentStep(
+        seq=steps[-1].seq + 1 if steps else 1,
+        kind=AgentStepKind.CRITIQUE,
+        detail=critique.gap_query or "",
+        reason=reason,
+        new_hits=0,
+    )
+    steps.append(step)
+    _report(reporter, job_id, step)
+
+    searches_done = sum(1 for s in steps if s.kind is AgentStepKind.SEARCH)
+    if critique.gap_query and searches_done < max_steps:
+        found = search.search(critique.gap_query)
+        seen_urls = {h.url for h in kept}
+        new = [h for h in found if h.url not in seen_urls]
+        kept.extend(new)
+        repair = AgentStep(
+            seq=step.seq + 1,
+            kind=AgentStepKind.SEARCH,
+            detail=critique.gap_query,
+            reason="Repair pass: filling the gap named by the self-critique",
+            new_hits=len(new),
+        )
+        steps.append(repair)
+        _report(reporter, job_id, repair)
+    return kept
+
+
 def run_agent_research(
     job_id: str,
     goal: str,
@@ -45,10 +93,16 @@ def run_agent_research(
     policy: AgentPolicy,
     sink: ResultSink,
     reporter: StepReporter,
+    critic: ResultCritic | None = None,
     max_steps: int = 5,
 ) -> list[ResearchResult]:
     """Runs the decision loop, then enriches, sorts and delivers like the
-    workflow mode. Failure semantics are identical to `run_research`."""
+    workflow mode. Failure semantics are identical to `run_research`.
+
+    With a critic (ADR-031), the agent reviews its own results once before
+    delivery: off-topic hits are dropped, and if the critique names a gap and
+    the search budget is not spent, one repair search runs — never more, so
+    the cost stays bounded by `max_steps` searches plus one critique call."""
     try:
         sink.mark_started(job_id)
         hits: list[RawSearchHit] = []
@@ -87,6 +141,9 @@ def run_agent_research(
             )
             steps.append(step)
             _report(reporter, job_id, step)
+
+        if critic is not None:
+            hits = _self_critique(job_id, goal, hits, steps, search, critic, reporter, max_steps)
 
         results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
         sink.deliver(job_id, results)

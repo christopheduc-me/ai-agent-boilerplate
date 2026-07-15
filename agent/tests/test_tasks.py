@@ -97,9 +97,9 @@ def test_agent_mode_runs_the_loop_and_reports_the_journal(fake_env) -> None:
 
     # Fake policy: search -> refine (0 new, dedup) -> finish (ADR-030).
     assert count == 4
-    assert steps.call_count == 3
+    assert steps.call_count == 4
     assert results.called
     import json as _json
 
     kinds = [_json.loads(c.request.content)["kind"] for c in steps.calls]
-    assert kinds == ["search", "search", "finish"]
+    assert kinds == ["search", "search", "finish", "critique"]

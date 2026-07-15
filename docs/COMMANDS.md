@@ -157,6 +157,7 @@ npx vitest run src/components/__tests__/ResultTimeline.spec.ts   # one file
 ```sh
 # Boot the fully containerized stack with the deterministic fake providers
 echo "AGENT_PROVIDERS=fake" >> .env        # or export it in the shell
+echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env  # e2e registers several accounts/minute (ADR-017)
 docker compose --profile full up -d --build --wait
 
 scripts/e2e-smoke.sh                        # register -> login -> search -> results

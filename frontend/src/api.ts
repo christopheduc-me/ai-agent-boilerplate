@@ -34,10 +34,11 @@ export interface SearchJob {
   completed_at: string | null;
 }
 
-// One decision of the agentic loop (ADR-030), shown in the live journal.
+// One decision of the agentic loop (ADR-030/031), shown in the live journal.
+// The kind stays open: newer agents may add step kinds before the frontend.
 export interface AgentStep {
   seq: number;
-  kind: "search" | "finish" | string;
+  kind: "search" | "finish" | "critique" | string;
   detail: string;
   reason: string;
   new_hits: number;

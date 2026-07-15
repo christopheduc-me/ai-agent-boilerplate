@@ -3,7 +3,12 @@
 import pytest
 from pydantic import ValidationError
 
-from aiagent.adapters.fake import FakeAgentPolicy, FakeHitEnricher, FakeSearchProvider
+from aiagent.adapters.fake import (
+    FakeAgentPolicy,
+    FakeHitEnricher,
+    FakeResultCritic,
+    FakeSearchProvider,
+)
 from aiagent.application import run_research
 from aiagent.config import Settings
 from aiagent.domain.models import (
@@ -14,7 +19,7 @@ from aiagent.domain.models import (
     FinishAction,
     SearchAction,
 )
-from aiagent.tasks import build_policy, build_providers
+from aiagent.tasks import build_critic, build_policy, build_providers
 
 
 def settings_with(providers: str) -> Settings:
@@ -92,3 +97,14 @@ def test_fake_policy_searches_refines_then_finishes() -> None:
 def test_build_policy_selects_the_fake(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PROVIDERS", "fake")
     assert isinstance(build_policy(Settings.from_env()), FakeAgentPolicy)
+
+
+def test_fake_critic_returns_a_stable_non_destructive_review() -> None:
+    critique = FakeResultCritic().critique("rust", FakeSearchProvider().search("rust"))
+    assert "All 4 results" in critique.assessment
+    assert critique.irrelevant_urls == () and critique.gap_query is None
+
+
+def test_build_critic_selects_the_fake(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_PROVIDERS", "fake")
+    assert isinstance(build_critic(Settings.from_env()), FakeResultCritic)

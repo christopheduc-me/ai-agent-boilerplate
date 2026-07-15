@@ -37,9 +37,9 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       end to end, `AgentPolicy`/`StepReporter` ports, step budget
       (`AGENT_MAX_STEPS`), `agent_steps` journal streamed over SSE, two demo
       blocks in the frontend.
-- [ ] **Result self-critique**: before delivering, the agent scores each hit's
-      relevance to the goal and flags coverage gaps in the journal (one more
-      policy action, fits the existing loop).
+- [x] **Result self-critique (ADR-031)** — done: a `ResultCritic` port reviews
+      the hits before delivery (verdict journaled as a `critique` step,
+      off-topic URLs dropped, at most one budget-bounded repair search).
 - [ ] **Recurring searches with memory**: saved searches re-run by Celery
       beat; the agent compares against previously seen URLs and decides
       whether the delta is worth reporting.

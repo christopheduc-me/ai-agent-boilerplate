@@ -1,12 +1,14 @@
 <script setup lang="ts">
-// Live decision journal of the agentic loop (ADR-030): one entry per policy
-// decision, streamed over SSE while the agent works. Rendering only — the
-// reasons come verbatim from the agent.
+// Live decision journal of the agentic loop (ADR-030/031): one entry per
+// policy decision — searches, the finish, the self-critique review — streamed
+// over SSE while the agent works. Rendering only — the reasons come verbatim
+// from the agent.
 import type { AgentStep } from "@/api";
 
 defineProps<{ steps: AgentStep[]; live: boolean }>();
 
-const icon = (kind: string): string => (kind === "finish" ? "✔" : "🔍");
+const icons: Record<string, string> = { finish: "✔", critique: "🧐" };
+const icon = (kind: string): string => icons[kind] ?? "🔍";
 </script>
 
 <template>
@@ -21,6 +23,7 @@ const icon = (kind: string): string => (kind === "finish" ? "✔" : "🔍");
               searched <strong>“{{ step.detail }}”</strong>
               <span class="hits">→ {{ step.new_hits }} new result{{ step.new_hits === 1 ? "" : "s" }}</span>
             </template>
+            <template v-else-if="step.kind === 'critique'">reviewed the results</template>
             <template v-else>finished</template>
           </p>
           <p class="reason">{{ step.reason }}</p>

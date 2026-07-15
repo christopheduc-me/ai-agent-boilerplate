@@ -96,10 +96,16 @@ say "checking the agent decision journal"
 MODE=$(json_get "$AGENT_DETAIL" 'data["mode"]')
 [ "$MODE" = "agent" ] || fail "unexpected mode: $MODE"
 STEP_KINDS=$(json_get "$AGENT_DETAIL" '",".join(s["kind"] for s in data["steps"])')
-# Fake policy: search -> refine (deduplicated to 0 new) -> reasoned finish.
-[ "$STEP_KINDS" = "search,search,finish" ] || fail "unexpected steps: $STEP_KINDS"
+# Fake policy + critic (ADR-030/031): search -> refine (deduplicated to 0 new)
+# -> reasoned finish -> self-critique review.
+[ "$STEP_KINDS" = "search,search,finish,critique" ] || fail "unexpected steps: $STEP_KINDS"
 NEW_HITS=$(json_get "$AGENT_DETAIL" '",".join(str(s["new_hits"]) for s in data["steps"])')
-[ "$NEW_HITS" = "4,0,0" ] || fail "unexpected new_hits: $NEW_HITS"
+[ "$NEW_HITS" = "4,0,0,0" ] || fail "unexpected new_hits: $NEW_HITS"
+CRITIQUE=$(json_get "$AGENT_DETAIL" 'data["steps"][-1]["reason"]')
+case "$CRITIQUE" in
+  "All 4 results relate to the goal"*) ;;
+  *) fail "unexpected critique reason: $CRITIQUE" ;;
+esac
 AGENT_RESULTS=$(json_get "$AGENT_DETAIL" 'len(data["results"])')
 [ "$AGENT_RESULTS" = "4" ] || fail "unexpected agent result count: $AGENT_RESULTS"
 

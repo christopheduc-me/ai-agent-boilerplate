@@ -5,7 +5,7 @@ import logging
 from aiagent.application import run_agent_research, run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
-from aiagent.domain.ports import AgentPolicy, HitEnricher, SearchProvider
+from aiagent.domain.ports import AgentPolicy, HitEnricher, ResultCritic, SearchProvider
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +34,18 @@ def build_policy(settings: Settings) -> AgentPolicy:
     from aiagent.adapters.llm import ClaudeAgentPolicy
 
     return ClaudeAgentPolicy(settings.agent_model_id)
+
+
+def build_critic(settings: Settings) -> ResultCritic:
+    """Selects the self-critique reviewer (ADR-031)."""
+    if settings.providers == "fake":
+        from aiagent.adapters.fake import FakeResultCritic
+
+        return FakeResultCritic()
+
+    from aiagent.adapters.llm import ClaudeResultCritic
+
+    return ClaudeResultCritic(settings.agent_model_id)
 
 
 @app.task(
@@ -66,6 +78,7 @@ def run_research_task(
     try:
         search, enricher = build_providers(settings)
         policy = build_policy(settings) if mode == "agent" else None
+        critic = build_critic(settings) if mode == "agent" else None
     except Exception as exc:
         # Misconfiguration (missing API key...) must surface to the user as a failed job.
         logger.error("agent misconfigured", extra=log_ctx, exc_info=True)
@@ -74,8 +87,9 @@ def run_research_task(
 
     try:
         if policy is not None:
-            # Agent mode (ADR-030): the policy drives the loop; the sink also
-            # implements StepReporter for the live journal.
+            # Agent mode (ADR-030/031): the policy drives the loop, the critic
+            # reviews the results before delivery; the sink also implements
+            # StepReporter for the live journal.
             results = run_agent_research(
                 job_id,
                 keyword,
@@ -84,6 +98,7 @@ def run_research_task(
                 policy,
                 sink,
                 sink,
+                critic=critic,
                 max_steps=settings.agent_max_steps,
             )
         else:

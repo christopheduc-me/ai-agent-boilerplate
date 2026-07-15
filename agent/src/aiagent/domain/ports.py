@@ -5,6 +5,7 @@ from typing import Protocol
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
+    Critique,
     HitEnrichment,
     RawSearchHit,
     ResearchResult,
@@ -23,6 +24,14 @@ class AgentPolicy(Protocol):
     def decide(
         self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]
     ) -> AgentAction: ...
+
+
+class ResultCritic(Protocol):
+    """Self-critique before delivery (ADR-031): judges the collected hits
+    against the goal. In production an LLM; a malformed reply must degrade to
+    a neutral critique inside the adapter, never fail the job."""
+
+    def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique: ...
 
 
 class StepReporter(Protocol):

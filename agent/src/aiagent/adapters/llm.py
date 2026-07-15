@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
+    Critique,
     EventType,
     FinishAction,
     HitEnrichment,
@@ -162,3 +163,68 @@ class ClaudeAgentPolicy:
         response = self._llm.invoke(prompt)
         content = response.content if isinstance(response.content, str) else str(response.content)
         return parse_action(content)
+
+
+CRITIQUE_PROMPT = """\
+You are reviewing the results a research agent collected for a goal, before
+they are delivered. Reply with a single JSON object, nothing else:
+
+{{"assessment": "...", "irrelevant_urls": [...], "gap_query": "..." or null}}
+
+- "assessment": one or two sentences judging how well the results cover the
+  goal (shown to the user verbatim).
+- "irrelevant_urls": the URLs of results clearly unrelated to the goal (empty
+  list if none). Be conservative: only drop obvious noise.
+- "gap_query": if one important angle is missing, a single search query that
+  would fill it; otherwise null.
+
+Goal: {goal}
+
+Results ({count}):
+{listing}
+"""
+
+
+def parse_critique(text: str) -> Critique:
+    """Parses the critic's JSON reply defensively: anything malformed becomes
+    a neutral critique (no drops, no gap) — the review must never fail a job."""
+    cleaned = text.strip()
+    if cleaned.startswith("```"):
+        cleaned = cleaned.strip("`")
+        cleaned = cleaned.removeprefix("json").strip()
+    try:
+        payload = json.loads(cleaned)
+    except ValueError:
+        return Critique(assessment="self-critique unavailable (reply was not valid JSON)")
+    if not isinstance(payload, dict):
+        return Critique(assessment="self-critique unavailable (reply was not a JSON object)")
+
+    assessment = payload.get("assessment")
+    if not isinstance(assessment, str) or not assessment.strip():
+        assessment = "no assessment given"
+    urls = payload.get("irrelevant_urls")
+    irrelevant = tuple(u for u in urls if isinstance(u, str)) if isinstance(urls, list) else ()
+    gap = payload.get("gap_query")
+    gap_query = gap.strip() if isinstance(gap, str) and gap.strip() else None
+    return Critique(assessment=assessment.strip(), irrelevant_urls=irrelevant, gap_query=gap_query)
+
+
+class ClaudeResultCritic:
+    """Live ResultCritic (ADR-031) — one call reviewing the whole result set;
+    same injectable-`llm` pattern as the other Claude adapters."""
+
+    def __init__(self, model_id: str, llm: "BaseChatModel | None" = None) -> None:
+        if llm is not None:
+            self._llm = llm
+            return
+        from langchain_anthropic import ChatAnthropic
+
+        # `model` / `max_tokens` are pydantic aliases mypy cannot see.
+        self._llm = ChatAnthropic(model=model_id, max_tokens=512)  # type: ignore[call-arg]
+
+    def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
+        listing = "\n".join(f"- {h.title} — {h.url}\n  {h.snippet}" for h in hits[:30]) or "- none"
+        prompt = CRITIQUE_PROMPT.format(goal=goal, count=len(hits), listing=listing)
+        response = self._llm.invoke(prompt)
+        content = response.content if isinstance(response.content, str) else str(response.content)
+        return parse_critique(content)

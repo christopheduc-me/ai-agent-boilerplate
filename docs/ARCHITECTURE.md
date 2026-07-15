@@ -839,6 +839,33 @@ now ships both, side by side, on the same plumbing.
 Next agentic steps stay in ROADMAP.md: self-critique of results, recurring
 searches with memory, human-in-the-loop clarification.
 
+### ADR-031 — Result self-critique before delivery (decided 2026-07-12, extends ADR-030)
+
+**Context**: the ADR-030 loop decides *how to search* but delivers whatever it
+collected. A credible agent also judges its own output — "I searched" versus
+"I checked that what I found actually answers the goal".
+
+**Decision**: a **`ResultCritic` port** (one LLM call in production, a stable
+fake under `AGENT_PROVIDERS=fake`) reviews the collected hits against the goal
+once, after the policy finishes and before delivery. The critique returns:
+
+1. an **assessment** (one-two sentences), journaled verbatim as a new
+   `critique` step — no backend or contract change needed: the step `kind` is
+   an open string end to end (ADR-030) and the frontend renders unknown kinds
+   generically;
+2. **irrelevant URLs**, dropped from the delivery (the journal reason gets a
+   "(dropped N off-topic result(s))" suffix). The prompt tells the critic to
+   be conservative — only obvious noise;
+3. at most **one gap query**: if set and the `AGENT_MAX_STEPS` search budget
+   is not exhausted, the loop runs a single **repair search** (journaled as a
+   normal `search` step) and delivers — no re-critique, so the total cost is
+   bounded by `max_steps` searches + one critique call.
+
+Parsing is defensive like every LLM reply in this codebase: a malformed
+critique degrades to a neutral review (nothing dropped, no gap) and the job
+delivers normally. The critic is optional in the use case signature
+(`critic=None` keeps the exact ADR-030 behaviour), wired only in agent mode.
+
 ---
 
 ## 4. API contracts (summary)

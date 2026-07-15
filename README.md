@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-30-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-31-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
@@ -21,8 +21,9 @@ launch a research that classifies and summarizes each finding and renders
 everything as a **timeline** sorted by publication date (live-updated over
 SSE) — in either of two modes, side by side. **Workflow**: the fixed pipeline
 (one search, enrich, sort). **Agent**: an agentic loop where the LLM picks its
-own queries, judges coverage, refines and decides when to stop, streaming its
-**decision journal** live to the browser. The value is everything around it —
+own queries, judges coverage, refines, decides when to stop and reviews its own
+results before delivering, streaming its **decision journal** live to the
+browser. The value is everything around it —
 the patterns you would otherwise rebuild from scratch on every agent project.
 
 ## What you get
@@ -56,7 +57,7 @@ the patterns you would otherwise rebuild from scratch on every agent project.
   deterministic workflow or an LLM-driven decision loop (budget-capped, URL
   deduplication, live decision journal over SSE), so the boilerplate
   demonstrates both canonical patterns and the trade-off between them.
-- **Every decision written down** — 30 Architecture Decision Records in
+- **Every decision written down** — 31 Architecture Decision Records in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), including the rejected
   alternatives and the trade-offs.
 
@@ -134,13 +135,13 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (30 ADRs), COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (31 ADRs), COMMANDS.md, diagrams/
 ```
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-030), kept in sync with the code at all times.
+  (ADR-001 → ADR-031), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/) — PlantUML sequence diagrams (auth flow).
 - [SETUP.md](SETUP.md) — manual setup checklist (local env, CI, VPS, API keys).

@@ -8,7 +8,9 @@ from aiagent.adapters.llm import (
     ENRICHMENT_PROMPT,
     ClaudeAgentPolicy,
     ClaudeHitEnricher,
+    ClaudeResultCritic,
     parse_action,
+    parse_critique,
     parse_enrichment,
     parse_extracted_date,
 )
@@ -17,6 +19,7 @@ from aiagent.adapters.tavily import hit_from_tavily
 from aiagent.domain.models import (
     AgentStep,
     AgentStepKind,
+    Critique,
     DateConfidence,
     EventType,
     FinishAction,
@@ -295,3 +298,41 @@ def test_sink_reports_agent_steps() -> None:
         "reason": "start",
         "new_hits": 4,
     }
+
+
+# ---------------------------------------------------------------- self-critique (ADR-031)
+
+
+def test_parse_critique_full_payload() -> None:
+    reply = (
+        '{"assessment": "Good coverage.", '
+        '"irrelevant_urls": ["https://spam", 42], "gap_query": " q recent "}'
+    )
+    critique = parse_critique(reply)
+    assert critique.assessment == "Good coverage."
+    assert critique.irrelevant_urls == ("https://spam",)  # non-strings ignored
+    assert critique.gap_query == "q recent"
+
+
+def test_parse_critique_tolerates_fences_and_nulls() -> None:
+    fenced = '```json\n{"assessment": "ok", "irrelevant_urls": [], "gap_query": null}\n```'
+    assert parse_critique(fenced) == Critique(assessment="ok")
+
+
+def test_parse_critique_degrades_to_a_neutral_review() -> None:
+    for bad in ("prose, not JSON", "[1, 2]", '{"irrelevant_urls": "not-a-list"}'):
+        critique = parse_critique(bad)
+        assert critique.irrelevant_urls == () and critique.gap_query is None
+
+
+def test_claude_critic_lists_the_results_and_parses_the_verdict() -> None:
+    llm = FakeChatModel(
+        content='{"assessment": "One gap.", "irrelevant_urls": [], "gap_query": "rust 2026"}'
+    )
+    critic = ClaudeResultCritic("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+
+    critique = critic.critique("rust", [a_hit(title="Rust 1.99 released")])
+
+    assert critique == Critique(assessment="One gap.", gap_query="rust 2026")
+    prompt = llm.prompts[0]
+    assert "Goal: rust" in prompt and "- Rust 1.99 released" in prompt
