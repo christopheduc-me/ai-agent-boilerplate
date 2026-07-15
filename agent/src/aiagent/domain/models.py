@@ -85,7 +85,16 @@ class FinishAction:
     reason: str
 
 
-AgentAction = SearchAction | FinishAction
+@dataclass(frozen=True)
+class AskAction:
+    """The policy finds the goal ambiguous and asks the user one clarification
+    question (ADR-032). The job pauses until the answer re-dispatches it."""
+
+    question: str
+    reason: str
+
+
+AgentAction = SearchAction | FinishAction | AskAction
 
 
 @dataclass(frozen=True)

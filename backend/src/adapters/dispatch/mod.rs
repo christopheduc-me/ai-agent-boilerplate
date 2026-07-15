@@ -17,6 +17,9 @@ pub struct HttpJobDispatcher {
 struct TaskRequest<'a> {
     job_id: uuid::Uuid,
     keyword: &'a str,
+    /// The user's answer to the agent's clarification question (ADR-032);
+    /// null on the first dispatch.
+    clarification: Option<&'a str>,
     mode: crate::domain::JobMode,
 }
 
@@ -48,6 +51,7 @@ impl JobDispatcher for HttpJobDispatcher {
             .json(&TaskRequest {
                 job_id: job.id,
                 keyword: &job.keyword,
+                clarification: job.answer.as_deref(),
                 mode: job.mode,
             })
             .send()

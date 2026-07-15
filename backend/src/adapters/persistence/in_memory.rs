@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
-use crate::domain::{AgentStep, RefreshToken, ResearchJob, SearchResult, User};
+use crate::domain::{AgentStep, JobStatus, RefreshToken, ResearchJob, SearchResult, User};
 
 #[derive(Default)]
 pub struct InMemoryUserRepository {
@@ -125,7 +125,11 @@ impl JobRepository for InMemoryJobRepository {
             .lock()
             .unwrap()
             .values()
-            .filter(|j| !j.is_finished() && j.created_at < cutoff)
+            // awaiting_input is paused on the user, not stuck (ADR-032):
+            // the reaper only targets pending/running.
+            .filter(|j| {
+                matches!(j.status, JobStatus::Pending | JobStatus::Running) && j.created_at < cutoff
+            })
             .cloned()
             .collect())
     }
@@ -167,5 +171,10 @@ impl JobRepository for InMemoryJobRepository {
             .get(&job_id)
             .cloned()
             .unwrap_or_default())
+    }
+
+    async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError> {
+        self.steps.lock().unwrap().remove(&job_id);
+        Ok(())
     }
 }

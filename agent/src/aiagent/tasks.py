@@ -61,7 +61,11 @@ def build_critic(settings: Settings) -> ResultCritic:
     retry_jitter=True,
 )
 def run_research_task(
-    job_id: str, keyword: str, request_id: str | None = None, mode: str = "workflow"
+    job_id: str,
+    keyword: str,
+    request_id: str | None = None,
+    mode: str = "workflow",
+    clarification: str | None = None,
 ) -> int:
     settings = Settings.from_env()
     request_id = request_id or job_id
@@ -87,20 +91,32 @@ def run_research_task(
 
     try:
         if policy is not None:
-            # Agent mode (ADR-030/031): the policy drives the loop, the critic
-            # reviews the results before delivery; the sink also implements
-            # StepReporter for the live journal.
-            results = run_agent_research(
+            # Agent mode (ADR-030/031/032): the policy drives the loop, the
+            # critic reviews the results before delivery, and the sink also
+            # implements StepReporter + ClarificationRequester. The user's
+            # answer (if any) is folded into the goal for the policy.
+            goal = keyword
+            if clarification:
+                goal = f'{keyword} (user clarification: "{clarification}")'
+            outcome = run_agent_research(
                 job_id,
-                keyword,
+                goal,
                 search,
                 enricher,
                 policy,
                 sink,
                 sink,
                 critic=critic,
+                clarifier=sink,
+                clarification=clarification,
                 max_steps=settings.agent_max_steps,
             )
+            if outcome is None:
+                # Paused (ADR-032): the job awaits the user's answer; a fresh
+                # task will be dispatched when it arrives.
+                logger.info("research task paused awaiting user input", extra=log_ctx)
+                return 0
+            results = outcome
         else:
             results = run_research(job_id, keyword, search, enricher, sink)
     except Exception:

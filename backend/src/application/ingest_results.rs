@@ -62,6 +62,20 @@ impl IngestResults {
         Ok(())
     }
 
+    /// The agent asked a clarification question (ADR-032): the job pauses in
+    /// `awaiting_input`. Idempotent like every worker notification.
+    pub async fn request_input(&self, job_id: Uuid, question: &str) -> Result<(), IngestError> {
+        let mut job = self
+            .jobs
+            .find(job_id)
+            .await?
+            .ok_or(IngestError::JobNotFound)?;
+        job.request_input(question)
+            .map_err(|e| IngestError::Infrastructure(PortError(e.to_string())))?;
+        self.jobs.update(&job).await?;
+        Ok(())
+    }
+
     pub async fn fail(&self, job_id: Uuid, error: String) -> Result<(), IngestError> {
         let mut job = self
             .jobs
@@ -199,6 +213,22 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![(1, "search"), (2, "finish")]
         );
+    }
+
+    #[tokio::test]
+    async fn request_input_pauses_a_running_job() {
+        let (jobs, job) = repo_with_job().await;
+        let ingest = IngestResults::new(jobs.clone());
+        ingest.start(job.id).await.unwrap();
+
+        ingest
+            .request_input(job.id, "The animal or the car?")
+            .await
+            .unwrap();
+
+        let stored = jobs.find(job.id).await.unwrap().unwrap();
+        assert_eq!(stored.status, JobStatus::AwaitingInput);
+        assert_eq!(stored.question.as_deref(), Some("The animal or the car?"));
     }
 
     #[tokio::test]

@@ -70,6 +70,38 @@ test("the agent demo streams the decision journal and renders the timeline", asy
   await expect(page.getByTestId("unknown-date-section")).toBeVisible();
 });
 
+test("the agent asks for clarification and resumes with the answer", async ({ page }) => {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "No account yet? Sign up" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-s3cret-password");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  // The fake policy asks when the goal contains "ambiguous" (ADR-032).
+  await expect(page.getByRole("heading", { name: "Agent demo" })).toBeVisible();
+  await page.getByTestId("agent-demo").getByPlaceholder(/Goal/).fill("ambiguous e2e goal");
+  await page.getByRole("button", { name: "Run the agent" }).click();
+
+  const request = page.getByTestId("clarification-request");
+  await expect(request).toBeVisible({ timeout: 30_000 });
+  await expect(request).toContainText("Your goal looks ambiguous");
+  await expect(page.getByText("Status:")).toContainText("awaiting_input");
+
+  await request.getByPlaceholder("Your answer").fill("the cars");
+  await request.getByRole("button", { name: "Answer" }).click();
+
+  // The dialog collapses into a recap and the resumed loop completes.
+  await expect(page.getByTestId("clarification-recap")).toContainText("“the cars”", {
+    timeout: 30_000,
+  });
+  await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
+  const journal = page.getByTestId("agent-journal");
+  await expect(journal.locator("li[data-kind]")).toHaveCount(4, { timeout: 30_000 });
+  await expect(page.getByTestId("unknown-date-section")).toBeVisible();
+});
+
 test("a returning user logs in and finds the previous searches", async ({ page }) => {
   const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
   const password = "e2e-s3cret-password";

@@ -219,3 +219,52 @@ async fn backend_produces_the_task_request_fixture() {
     let expected: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
     assert_eq!(captured.lock().unwrap().as_slice(), &[expected]);
 }
+
+#[tokio::test]
+async fn backend_consumes_the_question_callback_fixture() {
+    let app = app();
+    let (bearer, job_id) = user_with_job(&app).await;
+    // The question arrives while the job runs (ADR-032).
+    call(
+        &app,
+        post(
+            &format!("/internal/jobs/{job_id}/started"),
+            String::new(),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+
+    let (status, _) = call(
+        &app,
+        post(
+            &format!("/internal/jobs/{job_id}/question"),
+            fixture("question-callback.json"),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+    assert_eq!(status, 204, "the fixture must deserialize as-is");
+
+    let (_, detail) = call(
+        &app,
+        Request::builder()
+            .uri(format!("/api/searches/{job_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(detail["status"], "awaiting_input");
+    assert!(detail["question"].as_str().unwrap().contains("ambiguous"));
+}
+
+#[tokio::test]
+async fn backend_produces_the_task_request_with_a_null_clarification() {
+    // The fixture is what the dispatcher sends on the FIRST dispatch: the
+    // clarification is null until the user answers (ADR-032). The full
+    // capture already runs in backend_produces_the_task_request_fixture.
+    let fixture: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
+    assert!(fixture["clarification"].is_null());
+    assert_eq!(fixture["mode"], "agent");
+}

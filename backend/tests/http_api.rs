@@ -573,3 +573,104 @@ async fn agent_mode_lifecycle_with_journal() {
     assert_eq!(detail["mode"], "workflow");
     assert_eq!(detail["steps"].as_array().unwrap().len(), 0);
 }
+
+/// Human-in-the-loop lifecycle (ADR-032): the agent asks, the job pauses, the
+/// user answers, the job is re-dispatched with a fresh journal.
+#[tokio::test]
+async fn clarification_lifecycle() {
+    let app = app();
+    let creds = json!({"email": "hitl@test.dev", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let bearer = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    let (_, launched) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "jaguar", "mode": "agent"}),
+            &[("authorization", &bearer)],
+        ),
+    )
+    .await;
+    let job_id = launched["job_id"].as_str().unwrap().to_string();
+
+    // Worker starts, records a step, then asks for clarification.
+    let internal = [("x-internal-token", INTERNAL_TOKEN)];
+    send(
+        &app,
+        post_json(
+            &format!("/internal/jobs/{job_id}/started"),
+            json!({}),
+            &internal,
+        ),
+    )
+    .await;
+    send(
+        &app,
+        post_json(
+            &format!("/internal/jobs/{job_id}/steps"),
+            json!({"seq": 1, "kind": "search", "detail": "jaguar", "reason": "r", "new_hits": 2}),
+            &internal,
+        ),
+    )
+    .await;
+    let (status, _) = send(
+        &app,
+        post_json(
+            &format!("/internal/jobs/{job_id}/question"),
+            json!({"question": "The animal or the car?"}),
+            &internal,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, detail) = send(
+        &app,
+        get(
+            &format!("/api/searches/{job_id}"),
+            &[("authorization", &bearer)],
+        ),
+    )
+    .await;
+    assert_eq!(detail["status"], "awaiting_input");
+    assert_eq!(detail["question"], "The animal or the car?");
+
+    // Answering an already-answered / non-awaiting job later conflicts; the
+    // happy path requeues and clears the journal (replace semantics).
+    let (status, _) = send(
+        &app,
+        post_json(
+            &format!("/api/searches/{job_id}/answer"),
+            json!({"answer": "the car"}),
+            &[("authorization", &bearer)],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+
+    let (_, detail) = send(
+        &app,
+        get(
+            &format!("/api/searches/{job_id}"),
+            &[("authorization", &bearer)],
+        ),
+    )
+    .await;
+    assert_eq!(detail["status"], "pending");
+    assert_eq!(detail["answer"], "the car");
+    assert_eq!(detail["question"], "The animal or the car?");
+    assert!(detail["steps"].as_array().unwrap().is_empty());
+
+    let (status, _) = send(
+        &app,
+        post_json(
+            &format!("/api/searches/{job_id}/answer"),
+            json!({"answer": "again"}),
+            &[("authorization", &bearer)],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}

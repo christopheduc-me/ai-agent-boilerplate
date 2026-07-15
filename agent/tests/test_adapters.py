@@ -19,6 +19,7 @@ from aiagent.adapters.tavily import hit_from_tavily
 from aiagent.domain.models import (
     AgentStep,
     AgentStepKind,
+    AskAction,
     Critique,
     DateConfidence,
     EventType,
@@ -336,3 +337,28 @@ def test_claude_critic_lists_the_results_and_parses_the_verdict() -> None:
     assert critique == Critique(assessment="One gap.", gap_query="rust 2026")
     prompt = llm.prompts[0]
     assert "Goal: rust" in prompt and "- Rust 1.99 released" in prompt
+
+
+# ---------------------------------------------------------------- clarification (ADR-032)
+
+
+def test_parse_action_ask() -> None:
+    assert parse_action('{"action": "ask", "question": "Animal or car?", "reason": "r"}') == (
+        AskAction(question="Animal or car?", reason="r")
+    )
+    # A blank question is useless: degrade to finish, never burn the pause.
+    assert isinstance(parse_action('{"action": "ask", "question": "  "}'), FinishAction)
+
+
+@respx.mock
+def test_sink_requests_clarification() -> None:
+    route = respx.post("http://backend:8000/internal/jobs/job-1/question").mock(
+        return_value=httpx.Response(204)
+    )
+    sink = HttpResultSink("http://backend:8000", "secret")
+
+    sink.request_clarification("job-1", "Animal or car?")
+
+    import json as _json
+
+    assert _json.loads(route.calls.last.request.content) == {"question": "Animal or car?"}

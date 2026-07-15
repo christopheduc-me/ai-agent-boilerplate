@@ -92,3 +92,15 @@ def test_agent_produces_the_step_callback_exactly() -> None:
 def test_agent_consumes_the_task_request_mode() -> None:
     request = TaskRequest(**load("task-request.json"))
     assert request.mode == "agent"
+
+
+def test_agent_consumes_the_task_request_clarification() -> None:
+    request = TaskRequest(**load("task-request.json"))
+    assert request.clarification is None  # first dispatch: no answer yet
+
+
+def test_agent_produces_the_question_callback_shape() -> None:
+    # HttpResultSink.request_clarification posts {"question": <str>} (ADR-032).
+    fixture = load("question-callback.json")
+    assert set(fixture.keys()) == {"question"}
+    assert isinstance(fixture["question"], str) and fixture["question"]

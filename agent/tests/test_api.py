@@ -28,7 +28,7 @@ def test_enqueue_delegates_to_celery_with_correlation_id(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode: enqueued.append(
+        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(
             (job_id, keyword, request_id, mode)
         ),
     )
@@ -52,7 +52,7 @@ def test_enqueue_forwards_the_agent_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode: enqueued.append(mode),
+        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(mode),
     )
 
     response = client.post(
@@ -71,7 +71,7 @@ def test_enqueue_falls_back_to_the_job_id_as_correlation_id(monkeypatch) -> None
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode: enqueued.append(request_id),
+        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(request_id),
     )
 
     response = client.post(
@@ -82,3 +82,26 @@ def test_enqueue_falls_back_to_the_job_id_as_correlation_id(monkeypatch) -> None
 
     assert response.status_code == 202
     assert enqueued == ["j1"]
+
+
+def test_enqueue_forwards_the_clarification(monkeypatch) -> None:
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "right-token")
+    enqueued: list[str | None] = []
+    monkeypatch.setattr(
+        api_module.run_research_task,
+        "delay",
+        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(clarification),
+    )
+
+    client.post(
+        "/tasks",
+        json={"job_id": "j1", "keyword": "jaguar", "mode": "agent", "clarification": "the car"},
+        headers={"X-Internal-Token": "right-token"},
+    )
+    client.post(
+        "/tasks",
+        json={"job_id": "j2", "keyword": "rust"},
+        headers={"X-Internal-Token": "right-token"},
+    )
+
+    assert enqueued == ["the car", None]

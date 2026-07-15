@@ -5,6 +5,8 @@ then re-raises exceptions instead of scheduling retries, which is exactly what
 these tests assert.
 """
 
+import json
+
 import httpx
 import pytest
 import respx
@@ -102,4 +104,31 @@ def test_agent_mode_runs_the_loop_and_reports_the_journal(fake_env) -> None:
     import json as _json
 
     kinds = [_json.loads(c.request.content)["kind"] for c in steps.calls]
+    assert kinds == ["search", "search", "finish", "critique"]
+
+
+@respx.mock
+def test_agent_mode_pauses_on_an_ambiguous_goal_and_resumes_with_the_answer(fake_env) -> None:
+    respx.post(f"{BACKEND}/internal/jobs/job-6/started").mock(return_value=httpx.Response(204))
+    question = respx.post(f"{BACKEND}/internal/jobs/job-6/question").mock(
+        return_value=httpx.Response(204)
+    )
+    steps = respx.post(f"{BACKEND}/internal/jobs/job-6/steps").mock(
+        return_value=httpx.Response(204)
+    )
+    results = respx.post(f"{BACKEND}/internal/jobs/job-6/results").mock(
+        return_value=httpx.Response(204)
+    )
+
+    # First run: the fake policy asks, the job pauses, nothing is delivered.
+    count = run_research_task("job-6", "ambiguous topic", mode="agent")
+    assert count == 0
+    assert question.called and not results.called
+    assert json.loads(question.calls.last.request.content)["question"].startswith("Your goal")
+
+    # Re-dispatch with the user's answer: the loop runs to completion.
+    count = run_research_task("job-6", "ambiguous topic", mode="agent", clarification="cars")
+    assert count == 4
+    assert results.called
+    kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
     assert kinds == ["search", "search", "finish", "critique"]

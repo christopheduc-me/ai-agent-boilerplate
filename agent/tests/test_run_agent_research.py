@@ -9,6 +9,7 @@ from aiagent.domain.models import (
     AgentAction,
     AgentStep,
     AgentStepKind,
+    AskAction,
     Critique,
     FinishAction,
     HitEnrichment,
@@ -291,3 +292,77 @@ def test_without_a_critic_the_loop_behaves_as_before() -> None:
 
     assert len(results) == 1
     assert [s.kind for s in reporter.steps] == [AgentStepKind.SEARCH, AgentStepKind.FINISH]
+
+
+# ---------------------------------------------------------------- clarification (ADR-032)
+
+
+class RecordingClarifier:
+    def __init__(self) -> None:
+        self.questions: list[tuple[str, str]] = []
+
+    def request_clarification(self, job_id: str, question: str) -> None:
+        self.questions.append((job_id, question))
+
+
+def test_ask_pauses_the_job_without_delivering() -> None:
+    search = MappedSearch({})
+    policy = ScriptedPolicy([AskAction(question="Animal or car?", reason="ambiguous")])
+    sink, reporter, clarifier = RecordingSink(), RecordingReporter(), RecordingClarifier()
+
+    outcome = run_agent_research(
+        "job-9",
+        "jaguar",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        clarifier=clarifier,
+        max_steps=5,
+    )
+
+    assert outcome is None  # paused: nothing delivered, no failure
+    assert clarifier.questions == [("job-9", "Animal or car?")]
+    assert sink.delivered == [] and sink.failures == []
+    assert search.queries == []
+
+
+def test_ask_after_an_answer_degrades_to_finish() -> None:
+    # The guard against question ping-pong: one clarification per job.
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason="r"), AskAction(question="again?", reason="r")]
+    )
+    sink, reporter, clarifier = RecordingSink(), RecordingReporter(), RecordingClarifier()
+
+    outcome = run_agent_research(
+        "job-10",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        clarifier=clarifier,
+        clarification="the car",
+        max_steps=5,
+    )
+
+    assert outcome is not None and len(outcome) == 1  # delivered normally
+    assert clarifier.questions == []
+    assert reporter.steps[-1].kind is AgentStepKind.FINISH
+
+
+def test_ask_without_a_clarifier_degrades_to_finish() -> None:
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason="r"), AskAction(question="hm?", reason="r")]
+    )
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    outcome = run_agent_research(
+        "job-11", "goal", search, NeutralEnricher(), policy, sink, reporter, max_steps=5
+    )
+
+    assert outcome is not None and sink.delivered == [("job-11", 1)]

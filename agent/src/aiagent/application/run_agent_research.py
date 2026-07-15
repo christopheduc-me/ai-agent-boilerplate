@@ -11,8 +11,11 @@ import logging
 
 from aiagent.application.run_research import resolve_hit
 from aiagent.domain.models import (
+    AgentAction,
     AgentStep,
     AgentStepKind,
+    AskAction,
+    FinishAction,
     RawSearchHit,
     ResearchResult,
     SearchAction,
@@ -20,6 +23,7 @@ from aiagent.domain.models import (
 )
 from aiagent.domain.ports import (
     AgentPolicy,
+    ClarificationRequester,
     HitEnricher,
     ResultCritic,
     ResultSink,
@@ -85,6 +89,20 @@ def _self_critique(
     return kept
 
 
+def _ask_guard(
+    action: AgentAction,
+    clarifier: ClarificationRequester | None,
+    clarification: str | None,
+) -> AgentAction:
+    """One clarification per job (ADR-032): once answered (or without a
+    clarifier wired), a repeated ask degrades to a finish — no ping-pong."""
+    if isinstance(action, AskAction) and (clarifier is None or clarification is not None):
+        return FinishAction(
+            reason="the policy asked for clarification again; finishing with what was found"
+        )
+    return action
+
+
 def run_agent_research(
     job_id: str,
     goal: str,
@@ -94,15 +112,21 @@ def run_agent_research(
     sink: ResultSink,
     reporter: StepReporter,
     critic: ResultCritic | None = None,
+    clarifier: ClarificationRequester | None = None,
+    clarification: str | None = None,
     max_steps: int = 5,
-) -> list[ResearchResult]:
+) -> list[ResearchResult] | None:
     """Runs the decision loop, then enriches, sorts and delivers like the
     workflow mode. Failure semantics are identical to `run_research`.
 
     With a critic (ADR-031), the agent reviews its own results once before
     delivery: off-topic hits are dropped, and if the critique names a gap and
     the search budget is not spent, one repair search runs — never more, so
-    the cost stays bounded by `max_steps` searches plus one critique call."""
+    the cost stays bounded by `max_steps` searches plus one critique call.
+
+    With a clarifier (ADR-032), the policy may ask the user one question:
+    the job pauses (returns None — nothing delivered), and the user's answer
+    re-dispatches it with `clarification` set."""
     try:
         sink.mark_started(job_id)
         hits: list[RawSearchHit] = []
@@ -110,7 +134,13 @@ def run_agent_research(
         steps: list[AgentStep] = []
 
         for seq in range(1, max_steps + 1):
-            action = policy.decide(goal, steps, hits)
+            action = _ask_guard(policy.decide(goal, steps, hits), clarifier, clarification)
+            if isinstance(action, AskAction):
+                # Pause (ADR-032): the backend flips the job to awaiting_input;
+                # the answer restarts the loop from scratch (fresh journal).
+                assert clarifier is not None  # enforced by _ask_guard
+                clarifier.request_clarification(job_id, action.question)
+                return None
             if isinstance(action, SearchAction):
                 found = search.search(action.query)
                 new = [h for h in found if h.url not in seen_urls]

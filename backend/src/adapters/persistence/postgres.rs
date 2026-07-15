@@ -32,6 +32,7 @@ fn status_to_str(status: JobStatus) -> &'static str {
     match status {
         JobStatus::Pending => "pending",
         JobStatus::Running => "running",
+        JobStatus::AwaitingInput => "awaiting_input",
         JobStatus::Completed => "completed",
         JobStatus::Failed => "failed",
     }
@@ -41,6 +42,7 @@ fn status_from_str(value: &str) -> Result<JobStatus, PortError> {
     match value {
         "pending" => Ok(JobStatus::Pending),
         "running" => Ok(JobStatus::Running),
+        "awaiting_input" => Ok(JobStatus::AwaitingInput),
         "completed" => Ok(JobStatus::Completed),
         "failed" => Ok(JobStatus::Failed),
         other => Err(PortError(format!(
@@ -100,6 +102,8 @@ fn job_from_row(row: &PgRow) -> Result<ResearchJob, PortError> {
         mode: mode_from_str(row.get("mode")),
         status: status_from_str(row.get("status"))?,
         error: row.get("error"),
+        question: row.get("question"),
+        answer: row.get("answer"),
         created_at: row.get("created_at"),
         completed_at: row.get("completed_at"),
     })
@@ -268,8 +272,8 @@ impl PostgresJobRepository {
 impl JobRepository for PostgresJobRepository {
     async fn insert(&self, job: &ResearchJob) -> Result<(), PortError> {
         sqlx::query(
-            "INSERT INTO research_jobs (id, user_id, keyword, mode, status, error, created_at, completed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            "INSERT INTO research_jobs (id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
         )
         .bind(job.id)
         .bind(job.user_id)
@@ -277,6 +281,8 @@ impl JobRepository for PostgresJobRepository {
         .bind(mode_to_str(job.mode))
         .bind(status_to_str(job.status))
         .bind(&job.error)
+        .bind(&job.question)
+        .bind(&job.answer)
         .bind(job.created_at)
         .bind(job.completed_at)
         .execute(&self.pool)
@@ -287,11 +293,15 @@ impl JobRepository for PostgresJobRepository {
 
     async fn update(&self, job: &ResearchJob) -> Result<(), PortError> {
         sqlx::query(
-            "UPDATE research_jobs SET status = $2, error = $3, completed_at = $4 WHERE id = $1",
+            "UPDATE research_jobs
+             SET status = $2, error = $3, question = $4, answer = $5, completed_at = $6
+             WHERE id = $1",
         )
         .bind(job.id)
         .bind(status_to_str(job.status))
         .bind(&job.error)
+        .bind(&job.question)
+        .bind(&job.answer)
         .bind(job.completed_at)
         .execute(&self.pool)
         .await
@@ -301,7 +311,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn find(&self, id: Uuid) -> Result<Option<ResearchJob>, PortError> {
         let row = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
              FROM research_jobs WHERE id = $1",
         )
         .bind(id)
@@ -313,7 +323,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
              FROM research_jobs WHERE user_id = $1 ORDER BY created_at DESC",
         )
         .bind(user_id)
@@ -345,7 +355,7 @@ impl JobRepository for PostgresJobRepository {
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
              FROM research_jobs
              WHERE status IN ('pending', 'running') AND created_at < $1",
         )
@@ -437,5 +447,14 @@ impl JobRepository for PostgresJobRepository {
                 new_hits: row.get("new_hits"),
             })
             .collect())
+    }
+
+    async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError> {
+        sqlx::query("DELETE FROM agent_steps WHERE job_id = $1")
+            .bind(job_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 }

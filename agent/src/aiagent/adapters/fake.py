@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
+    AskAction,
     Critique,
     EventType,
     FinishAction,
@@ -76,6 +77,14 @@ class FakeAgentPolicy:
     shows the deduplication at work), then stop with an explicit reason."""
 
     def decide(self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]) -> AgentAction:
+        # Deterministic HITL trigger (ADR-032): a goal containing "ambiguous"
+        # asks for clarification once; the task appends the user's answer to
+        # the goal on resume, which disarms the trigger.
+        if len(steps) == 0 and "ambiguous" in goal and "(user clarification:" not in goal:
+            return AskAction(
+                question="Your goal looks ambiguous — which meaning do you want?",
+                reason="The goal can be read several ways; asking before spending searches",
+            )
         if len(steps) == 0:
             return SearchAction(query=goal, reason="Start with the user's goal as the query")
         if len(steps) == 1:

@@ -85,6 +85,16 @@ describe("api client", () => {
     expect(JSON.parse(fetchMock.mock.calls[1][1].body).mode).toBe("agent");
   });
 
+  it("answerSearch posts the clarification answer (ADR-032)", async () => {
+    fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
+
+    await api.answerSearch("j1", "the car", "tok");
+
+    const [url, options] = fetchMock.mock.calls[0];
+    expect(url).toBe("/api/searches/j1/answer");
+    expect(JSON.parse(options.body)).toEqual({ answer: "the car" });
+  });
+
   it("returns undefined on 204 responses", async () => {
     fetchMock.mockResolvedValue(new Response(null, { status: 204 }));
 

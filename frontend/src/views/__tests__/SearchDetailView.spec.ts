@@ -8,11 +8,17 @@ import { makePinia, makeRouter } from "./helpers";
 
 vi.mock("@/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/api")>();
-  return { ...original, api: { streamSearch: vi.fn(), getSearch: vi.fn() } };
+  return {
+    ...original,
+    api: { streamSearch: vi.fn(), getSearch: vi.fn(), answerSearch: vi.fn() },
+  };
 });
 
 const { api } = await import("@/api");
-const mocked = api as unknown as Record<"streamSearch" | "getSearch", ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<
+  "streamSearch" | "getSearch" | "answerSearch",
+  ReturnType<typeof vi.fn>
+>;
 
 const completedAgentJob: SearchJobDetail = {
   id: "j1",
@@ -20,6 +26,8 @@ const completedAgentJob: SearchJobDetail = {
   mode: "agent",
   status: "completed",
   error: null,
+  question: null,
+  answer: null,
   created_at: "2026-07-01T00:00:00Z",
   completed_at: "2026-07-01T00:00:10Z",
   steps: [
@@ -95,6 +103,36 @@ describe("SearchDetailView", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("shows the agent's question and submits the answer (ADR-032)", async () => {
+    const awaiting: SearchJobDetail = {
+      ...completedAgentJob,
+      status: "awaiting_input",
+      question: "The animal or the car?",
+      steps: [],
+      results: [],
+    };
+    // The stream stays open while the job waits (not a terminal status).
+    mocked.streamSearch.mockImplementation((_id, _token, onUpdate) => {
+      onUpdate(awaiting);
+      return new Promise(() => {});
+    });
+    mocked.answerSearch.mockResolvedValue(undefined);
+    mocked.getSearch.mockResolvedValue({ ...awaiting, status: "pending", answer: "the car" });
+    const { wrapper } = await mountView();
+
+    const block = wrapper.find("[data-testid=clarification-request]");
+    expect(block.text()).toContain("The animal or the car?");
+
+    await block.find("input").setValue("the car");
+    await block.find("form").trigger("submit");
+    await flushPromises();
+
+    expect(mocked.answerSearch).toHaveBeenCalledWith("j1", "the car", "tok");
+    // The dialog recap replaces the form once the job resumed.
+    expect(wrapper.find("[data-testid=clarification-request]").exists()).toBe(false);
+    expect(wrapper.find("[data-testid=clarification-recap]").text()).toContain("“the car”");
   });
 
   it("redirects to login when the stream answers 401", async () => {

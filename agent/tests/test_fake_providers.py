@@ -14,6 +14,7 @@ from aiagent.config import Settings
 from aiagent.domain.models import (
     AgentStep,
     AgentStepKind,
+    AskAction,
     DateConfidence,
     EventType,
     FinishAction,
@@ -108,3 +109,13 @@ def test_fake_critic_returns_a_stable_non_destructive_review() -> None:
 def test_build_critic_selects_the_fake(monkeypatch) -> None:
     monkeypatch.setenv("AGENT_PROVIDERS", "fake")
     assert isinstance(build_critic(Settings.from_env()), FakeResultCritic)
+
+
+def test_fake_policy_asks_once_on_an_ambiguous_goal() -> None:
+    policy = FakeAgentPolicy()
+    first = policy.decide("ambiguous topic", [], [])
+    assert isinstance(first, AskAction)
+
+    # The task folds the answer into the goal on resume: no second question.
+    resumed = policy.decide('ambiguous topic (user clarification: "cars")', [], [])
+    assert isinstance(resumed, SearchAction)

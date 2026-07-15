@@ -26,6 +26,13 @@ class AgentPolicy(Protocol):
     ) -> AgentAction: ...
 
 
+class ClarificationRequester(Protocol):
+    """Pauses the job with a question for the user (ADR-032) — in production
+    the `POST /internal/jobs/{id}/question` callback."""
+
+    def request_clarification(self, job_id: str, question: str) -> None: ...
+
+
 class ResultCritic(Protocol):
     """Self-critique before delivery (ADR-031): judges the collected hits
     against the goal. In production an LLM; a malformed reply must degrade to

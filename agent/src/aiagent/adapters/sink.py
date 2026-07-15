@@ -60,6 +60,15 @@ class HttpResultSink:
         )
         response.raise_for_status()
 
+    def request_clarification(self, job_id: str, question: str) -> None:
+        # HITL (ADR-032): pauses the job with a question for the user.
+        response = self._client.post(
+            f"{self._base_url}/internal/jobs/{job_id}/question",
+            json={"question": question},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+
     def report_step(self, job_id: str, step: AgentStep) -> None:
         # Live journal (ADR-030); the use case treats failures as best-effort.
         response = self._client.post(

@@ -18,14 +18,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::json;
 use uuid::Uuid;
 
+use crate::application::answer_clarification::AnswerError;
 use crate::application::ingest_results::IngestError;
 use crate::application::launch_search::LaunchError;
 use crate::application::login_user::LoginError;
 use crate::application::refresh_session::RefreshError;
 use crate::application::register_user::RegisterError;
 use crate::application::{
-    IngestResults, LaunchSearch, LoginUser, RefreshSession, RegisterUser, SearchQueries,
-    SessionTokens,
+    AnswerClarification, IngestResults, LaunchSearch, LoginUser, RefreshSession, RegisterUser,
+    SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
     JobDispatcher, JobRepository, PasswordHasher, RefreshTokenRepository, TokenService,
@@ -42,6 +43,7 @@ pub struct AppState {
     login: Arc<LoginUser>,
     refresh: Arc<RefreshSession>,
     launch: Arc<LaunchSearch>,
+    answer: Arc<AnswerClarification>,
     ingest: Arc<IngestResults>,
     queries: Arc<SearchQueries>,
     tokens: Arc<dyn TokenService>,
@@ -96,9 +98,10 @@ impl AppState {
             )),
             launch: Arc::new(LaunchSearch::new(
                 jobs.clone(),
-                dispatcher,
+                dispatcher.clone(),
                 daily_search_quota,
             )),
+            answer: Arc::new(AnswerClarification::new(jobs.clone(), dispatcher)),
             ingest: Arc::new(IngestResults::new(jobs.clone())),
             queries: Arc::new(SearchQueries::new(jobs)),
             tokens,
@@ -129,6 +132,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
     let api_routes = Router::new()
         .route("/api/searches", post(create_search).get(list_searches))
         .route("/api/searches/{id}", get(get_search))
+        .route("/api/searches/{id}/answer", post(answer_search))
         .route("/api/searches/{id}/events", get(search_events))
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
@@ -142,6 +146,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .route("/internal/jobs/{id}/started", post(internal_started))
         .route("/internal/jobs/{id}/results", post(internal_results))
         .route("/internal/jobs/{id}/steps", post(internal_step))
+        .route("/internal/jobs/{id}/question", post(internal_question))
         .route("/internal/jobs/{id}/failure", post(internal_failure))
         // Outermost layer: every request gets a correlation span (ADR-018).
         .layer(axum::middleware::from_fn(request_id::request_id))
@@ -251,6 +256,9 @@ struct JobView {
     mode: JobMode,
     status: JobStatus,
     error: Option<String>,
+    // Clarification dialog (ADR-032), null until the agent asks / the user answers.
+    question: Option<String>,
+    answer: Option<String>,
     created_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
 }
@@ -263,6 +271,8 @@ impl From<&ResearchJob> for JobView {
             mode: job.mode,
             status: job.status,
             error: job.error.clone(),
+            question: job.question.clone(),
+            answer: job.answer.clone(),
             created_at: job.created_at,
             completed_at: job.completed_at,
         }
@@ -277,6 +287,16 @@ struct ResultsRequest {
 #[derive(Deserialize)]
 struct FailureRequest {
     error: String,
+}
+
+#[derive(Deserialize)]
+struct QuestionRequest {
+    question: String,
+}
+
+#[derive(Deserialize)]
+struct AnswerRequest {
+    answer: String,
 }
 
 // ---------------------------------------------------------------- public handlers
@@ -379,6 +399,32 @@ async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUse
         Ok(jobs) => Json(jobs.iter().map(JobView::from).collect::<Vec<_>>()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "list searches failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// The user answers the agent's clarification question (ADR-032).
+async fn answer_search(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(job_id): Path<Uuid>,
+    Json(body): Json<AnswerRequest>,
+) -> Response {
+    match state.answer.execute(user_id, job_id, &body.answer).await {
+        Ok(_) => StatusCode::NO_CONTENT.into_response(),
+        Err(AnswerError::NotFound) => error_body(StatusCode::NOT_FOUND, "search not found"),
+        Err(AnswerError::InvalidAnswer(crate::domain::job::JobError::NotAwaitingInput)) => {
+            error_body(StatusCode::CONFLICT, "search is not awaiting an answer")
+        }
+        Err(AnswerError::InvalidAnswer(e)) => {
+            error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
+        }
+        Err(AnswerError::DispatchFailed) => {
+            error_body(StatusCode::BAD_GATEWAY, "failed to reach the agent")
+        }
+        Err(AnswerError::Infrastructure(e)) => {
+            tracing::error!(error = %e, "answer clarification failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }
@@ -491,6 +537,26 @@ async fn internal_step(
         Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
         Err(IngestError::Infrastructure(e)) => {
             tracing::error!(error = %e, "record agent step failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// The agent asked the user a clarification question (ADR-032).
+async fn internal_question(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<QuestionRequest>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    match state.ingest.request_input(job_id, &body.question).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
+        Err(IngestError::Infrastructure(e)) => {
+            tracing::error!(error = %e, "record clarification question failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

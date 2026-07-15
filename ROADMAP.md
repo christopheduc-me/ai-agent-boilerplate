@@ -43,9 +43,9 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [ ] **Recurring searches with memory**: saved searches re-run by Celery
       beat; the agent compares against previously seen URLs and decides
       whether the delta is worth reporting.
-- [ ] **Human-in-the-loop clarification**: an `awaiting_input` job status —
-      the policy can ask the user a question (ambiguous goal), the job pauses,
-      the answer resumes the loop (SSE already streams the state).
+- [x] **Human-in-the-loop clarification (ADR-032)** — done: the policy can ask
+      one question (`awaiting_input` status, reaper-exempt), the answer
+      re-dispatches the job with the clarification and a fresh journal.
 
 ## P3 — Agent product quality
 

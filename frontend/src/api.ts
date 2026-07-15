@@ -1,7 +1,7 @@
 // Thin typed client for the Rust backend (public API contracts, ARCHITECTURE.md §4).
 
 export type DateConfidence = "high" | "medium" | "unknown";
-export type JobStatus = "pending" | "running" | "completed" | "failed";
+export type JobStatus = "pending" | "running" | "awaiting_input" | "completed" | "failed";
 // Workflow = fixed pipeline; agent = LLM-driven decision loop (ADR-030).
 export type JobMode = "workflow" | "agent";
 export type EventType =
@@ -30,6 +30,9 @@ export interface SearchJob {
   mode: JobMode;
   status: JobStatus;
   error: string | null;
+  // Clarification dialog (ADR-032): the agent's question and the user's answer.
+  question: string | null;
+  answer: string | null;
   created_at: string;
   completed_at: string | null;
 }
@@ -160,6 +163,14 @@ export const api = {
     ),
 
   listSearches: (token: string) => request<SearchJob[]>("/api/searches", {}, token),
+
+  // Answers the agent's clarification question (ADR-032): the job resumes.
+  answerSearch: (id: string, answer: string, token: string) =>
+    request<void>(
+      `/api/searches/${id}/answer`,
+      { method: "POST", body: JSON.stringify({ answer }) },
+      token,
+    ),
 
   getSearch: (id: string, token: string) =>
     request<SearchJobDetail>(`/api/searches/${id}`, {}, token),

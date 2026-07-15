@@ -11,7 +11,7 @@
 > is part of the change. Implementation gaps are marked *(planned)* here and
 > tracked in `ROADMAP.md`.
 
-Last updated: 2026-07-12
+Last updated: 2026-07-15
 
 **Language convention**: all documentation, code, comments, commit messages, and
 identifiers in this project are written in **English only**.
@@ -866,6 +866,35 @@ critique degrades to a neutral review (nothing dropped, no gap) and the job
 delivers normally. The critic is optional in the use case signature
 (`critic=None` keeps the exact ADR-030 behaviour), wired only in agent mode.
 
+### ADR-032 — Human-in-the-loop clarification (decided 2026-07-12, extends ADR-030)
+
+**Context**: an ambiguous goal ("jaguar") makes the agent burn its search
+budget on the wrong meaning. A distinctive agent capability is knowing when to
+ask instead of guessing.
+
+**Decision**: the policy gains an **`ask` action** — one short question when
+the goal is genuinely ambiguous and no clarification is present yet.
+
+1. **Pause**: on `ask`, the loop calls the new `ClarificationRequester` port
+   (`POST /internal/jobs/{id}/question`), the job transitions to the new
+   **`awaiting_input` status** (migration 0005: status constraint + `question`
+   / `answer` columns) and the Celery task ends — a worker never blocks
+   waiting for a human. The **reaper ignores `awaiting_input`** (ADR-016
+   amendment): the job is paused on the user, not stuck.
+2. **Resume**: the user answers via `POST /api/searches/{id}/answer` (owner
+   +`awaiting_input` only, else 409). The backend stores the answer, clears
+   the journal (replace semantics: the resumed loop starts fresh), flips the
+   job back to `pending` and re-dispatches with `clarification` in the task
+   request (ADR-025 fixture updated). The task folds the answer into the goal
+   — the `AgentPolicy` protocol is unchanged.
+3. **One question per job** (cost guard): once a clarification is present (or
+   without a clarifier wired), a repeated `ask` degrades to `finish` — no
+   question ping-pong. Determinism (ADR-021): the fake policy asks exactly
+   when the goal contains "ambiguous" and no clarification yet.
+4. **Frontend**: `awaiting_input` renders the question with an answer form in
+   the detail view (the SSE stream stays open — not a terminal status); after
+   the answer, the dialog stays visible as a recap.
+
 ---
 
 ## 4. API contracts (summary)
@@ -880,7 +909,8 @@ delivers normally. The critic is optional in the use case signature
 | POST | `/api/auth/logout` | Revokes the refresh token, clears the cookie |
 | POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |
-| GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) |
+| GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |
+| POST | `/api/searches/{id}/answer` | Answers the agent's clarification `{answer}` → job resumes (ADR-032; 409 unless `awaiting_input`) |
 | GET | `/api/searches/{id}/events` | SSE stream of the same payload, one `update` event per change, closes on terminal status (ADR-026) |
 
 All `/api/*` routes can answer `429` (per-IP rate limit; `POST /api/searches`
@@ -890,7 +920,7 @@ also enforces the per-user daily quota — ADR-017).
 
 | Method | Route | Description |
 |---|---|---|
-| POST | `/tasks` | `{job_id, keyword, mode}` → Celery enqueue |
+| POST | `/tasks` | `{job_id, keyword, mode, clarification?}` → Celery enqueue |
 
 ### Internal (worker → Rust, shared token)
 
@@ -899,6 +929,7 @@ also enforces the per-user daily quota — ADR-017).
 | POST | `/internal/jobs/{id}/started` | Worker picked the job up → status `running` (ADR-016) |
 | POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, raw}]` |
 | POST | `/internal/jobs/{id}/steps` | Records one agent-loop decision `{seq, kind, detail, reason, new_hits}` (ADR-030, idempotent on seq) |
+| POST | `/internal/jobs/{id}/question` | The agent asks the user `{question}` → status `awaiting_input` (ADR-032) |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
 
 ---
@@ -911,6 +942,5 @@ also enforces the per-user daily quota — ADR-017).
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
 - Recurring keyword monitoring (Celery beat) with memory across runs, so the
-  agent decides what is new and worth reporting (ADR-030's natural sequel).
-- Agent self-critique of results and human-in-the-loop clarification
-  (`awaiting_input` status) — see ROADMAP.md.
+  agent decides what is new and worth reporting (ADR-030's natural sequel) —
+  see ROADMAP.md.

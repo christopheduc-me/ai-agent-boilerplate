@@ -7,6 +7,11 @@ use uuid::Uuid;
 pub enum JobStatus {
     Pending,
     Running,
+    /// The agent asked the user a clarification question (ADR-032): the job is
+    /// paused — not stuck, so the reaper leaves it alone — until the answer
+    /// arrives and re-dispatches it.
+    #[serde(rename = "awaiting_input")]
+    AwaitingInput,
     Completed,
     Failed,
 }
@@ -39,6 +44,12 @@ pub struct AgentStep {
 pub enum JobError {
     #[error("keyword must not be empty")]
     EmptyKeyword,
+    #[error("question must not be empty")]
+    EmptyQuestion,
+    #[error("answer must not be empty")]
+    EmptyAnswer,
+    #[error("job is not awaiting input")]
+    NotAwaitingInput,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -49,6 +60,10 @@ pub struct ResearchJob {
     pub mode: JobMode,
     pub status: JobStatus,
     pub error: Option<String>,
+    /// Clarification dialog (ADR-032): the agent's question and, once the
+    /// user replied, the answer forwarded back to the agent on re-dispatch.
+    pub question: Option<String>,
+    pub answer: Option<String>,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -66,6 +81,8 @@ impl ResearchJob {
             mode: JobMode::default(),
             status: JobStatus::Pending,
             error: None,
+            question: None,
+            answer: None,
             created_at: super::now_utc(),
             completed_at: None,
         })
@@ -100,6 +117,36 @@ impl ResearchJob {
         self.status = JobStatus::Failed;
         self.error = Some(error);
         self.completed_at = Some(super::now_utc());
+    }
+
+    /// The agent asked a clarification question (ADR-032). Only a running job
+    /// pauses; a repeat of the same notification (Celery retry) is a no-op,
+    /// and a question never reopens a finished job.
+    pub fn request_input(&mut self, question: &str) -> Result<(), JobError> {
+        let question = question.trim();
+        if question.is_empty() {
+            return Err(JobError::EmptyQuestion);
+        }
+        if self.status == JobStatus::Running || self.status == JobStatus::Pending {
+            self.status = JobStatus::AwaitingInput;
+            self.question = Some(question.to_string());
+        }
+        Ok(())
+    }
+
+    /// The user answered (ADR-032): the job goes back to `pending` for
+    /// re-dispatch, carrying the answer as the clarification.
+    pub fn provide_answer(&mut self, answer: &str) -> Result<(), JobError> {
+        let answer = answer.trim();
+        if answer.is_empty() {
+            return Err(JobError::EmptyAnswer);
+        }
+        if self.status != JobStatus::AwaitingInput {
+            return Err(JobError::NotAwaitingInput);
+        }
+        self.answer = Some(answer.to_string());
+        self.status = JobStatus::Pending;
+        Ok(())
     }
 
     pub fn is_finished(&self) -> bool {
@@ -169,6 +216,64 @@ mod tests {
         job.fail("late duplicate".into());
         assert_eq!(job.status, JobStatus::Completed);
         assert!(job.error.is_none());
+    }
+
+    #[test]
+    fn request_input_pauses_a_running_job_idempotently() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.start();
+        job.request_input("Animal or car?").unwrap();
+        assert_eq!(job.status, JobStatus::AwaitingInput);
+        assert_eq!(job.question.as_deref(), Some("Animal or car?"));
+
+        job.request_input("Animal or car?").unwrap(); // Celery retry
+        assert_eq!(job.status, JobStatus::AwaitingInput);
+    }
+
+    #[test]
+    fn request_input_never_reopens_a_finished_job() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.complete();
+        job.request_input("late question").unwrap();
+        assert_eq!(job.status, JobStatus::Completed);
+        assert!(job.question.is_none());
+    }
+
+    #[test]
+    fn empty_question_is_rejected() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.start();
+        assert_eq!(job.request_input("  "), Err(JobError::EmptyQuestion));
+    }
+
+    #[test]
+    fn provide_answer_requeues_the_job_with_the_answer() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.start();
+        job.request_input("Animal or car?").unwrap();
+
+        job.provide_answer(" the car ").unwrap();
+
+        assert_eq!(job.status, JobStatus::Pending);
+        assert_eq!(job.answer.as_deref(), Some("the car"));
+        assert_eq!(job.question.as_deref(), Some("Animal or car?"));
+    }
+
+    #[test]
+    fn provide_answer_requires_the_awaiting_state_and_a_non_empty_answer() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        assert_eq!(job.provide_answer("cars"), Err(JobError::NotAwaitingInput));
+        job.start();
+        job.request_input("q?").unwrap();
+        assert_eq!(job.provide_answer("   "), Err(JobError::EmptyAnswer));
+    }
+
+    #[test]
+    fn awaiting_input_is_not_a_terminal_state() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.start();
+        job.request_input("q?").unwrap();
+        assert!(!job.is_finished());
     }
 
     #[test]

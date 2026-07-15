@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
+    AskAction,
     Critique,
     EventType,
     FinishAction,
@@ -103,10 +104,14 @@ Decide your next action and reply with a single JSON object, nothing else:
 
 - to search (again): {{"action": "search", "query": "...", "reason": "..."}}
 - to stop:           {{"action": "finish", "reason": "..."}}
+- if the goal is genuinely ambiguous AND no clarification is present below,
+  you may ask the user ONE short question before searching:
+  {{"action": "ask", "question": "...", "reason": "..."}}
 
 Rules: refine or vary the query instead of repeating one that brought nothing
 new; stop as soon as coverage looks sufficient or further searches stop adding
-results. "reason" is one short sentence, shown to the user as your journal.
+results. Never ask once a clarification is present. "reason" is one short
+sentence, shown to the user as your journal.
 
 Goal: {goal}
 
@@ -137,6 +142,9 @@ def parse_action(text: str) -> AgentAction:
     query = payload.get("query")
     if payload.get("action") == "search" and isinstance(query, str) and query.strip():
         return SearchAction(query=query.strip(), reason=reason)
+    question = payload.get("question")
+    if payload.get("action") == "ask" and isinstance(question, str) and question.strip():
+        return AskAction(question=question.strip(), reason=reason)
     return FinishAction(reason=reason)
 
 

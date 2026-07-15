@@ -1,3 +1,4 @@
+pub mod answer_clarification;
 pub mod fail_stale_jobs;
 pub mod ingest_results;
 pub mod launch_search;
@@ -6,6 +7,7 @@ pub mod queries;
 pub mod refresh_session;
 pub mod register_user;
 
+pub use answer_clarification::AnswerClarification;
 pub use fail_stale_jobs::FailStaleJobs;
 pub use ingest_results::IngestResults;
 pub use launch_search::LaunchSearch;

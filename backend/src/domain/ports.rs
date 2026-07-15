@@ -42,6 +42,9 @@ pub trait JobRepository: Send + Sync {
     async fn append_step(&self, job_id: Uuid, step: &AgentStep) -> Result<(), PortError>;
     /// The journal in `seq` order.
     async fn steps_for(&self, job_id: Uuid) -> Result<Vec<AgentStep>, PortError>;
+    /// Replace semantics on resume (ADR-032): answering a clarification
+    /// re-runs the loop from scratch, so the journal starts fresh too.
+    async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError>;
 }
 
 /// Persisted refresh tokens (ADR-008): stored hashed, single use (rotation).

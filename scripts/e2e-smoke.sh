@@ -109,4 +109,44 @@ esac
 AGENT_RESULTS=$(json_get "$AGENT_DETAIL" 'len(data["results"])')
 [ "$AGENT_RESULTS" = "4" ] || fail "unexpected agent result count: $AGENT_RESULTS"
 
-say "E2E OK — workflow results=[$TITLES]; agent steps=[$STEP_KINDS]"
+say "launch an ambiguous agent search (HITL, ADR-032)"
+HITL=$(curl -sf -X POST "$BASE_URL/api/searches" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"ambiguous smoke topic","mode":"agent"}') || fail "launch HITL search"
+HITL_ID=$(json_get "$HITL" 'data["job_id"]')
+
+HITL_STATUS="pending"
+for _ in $(seq 1 30); do
+  HITL_DETAIL=$(curl -sf "$BASE_URL/api/searches/$HITL_ID" \
+    -H "authorization: Bearer $TOKEN") || fail "get HITL search"
+  HITL_STATUS=$(json_get "$HITL_DETAIL" 'data["status"]')
+  [ "$HITL_STATUS" = "awaiting_input" ] && break
+  [ "$HITL_STATUS" = "failed" ] && fail "HITL job failed"
+  sleep 2
+done
+[ "$HITL_STATUS" = "awaiting_input" ] || fail "HITL job never paused (status: $HITL_STATUS)"
+QUESTION=$(json_get "$HITL_DETAIL" 'data["question"]')
+case "$QUESTION" in
+  "Your goal looks ambiguous"*) ;;
+  *) fail "unexpected question: $QUESTION" ;;
+esac
+
+say "answer the clarification and wait for completion"
+curl -sf -X POST "$BASE_URL/api/searches/$HITL_ID/answer" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"answer":"the cars"}' >/dev/null || fail "answer clarification"
+for _ in $(seq 1 30); do
+  HITL_DETAIL=$(curl -sf "$BASE_URL/api/searches/$HITL_ID" \
+    -H "authorization: Bearer $TOKEN") || fail "get HITL search"
+  HITL_STATUS=$(json_get "$HITL_DETAIL" 'data["status"]')
+  [ "$HITL_STATUS" = "completed" ] && break
+  sleep 2
+done
+[ "$HITL_STATUS" = "completed" ] || fail "HITL job still '$HITL_STATUS' after the answer"
+[ "$(json_get "$HITL_DETAIL" 'data["answer"]')" = "the cars" ] || fail "answer not stored"
+[ "$(json_get "$HITL_DETAIL" 'len(data["results"])')" = "4" ] || fail "HITL results missing"
+HITL_KINDS=$(json_get "$HITL_DETAIL" '",".join(s["kind"] for s in data["steps"])')
+# Fresh journal after the resume (replace semantics): the full loop + critique.
+[ "$HITL_KINDS" = "search,search,finish,critique" ] || fail "unexpected HITL steps: $HITL_KINDS"
+
+say "E2E OK — workflow results=[$TITLES]; agent steps=[$STEP_KINDS]; HITL answered and completed"
