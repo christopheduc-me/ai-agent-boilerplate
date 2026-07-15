@@ -1,0 +1,74 @@
+@startuml hexagonal-architecture
+' Hexagonal architecture of both server bricks (ADR-002/004): pure cores,
+' use cases depending on ports, adapters implementing them. Every port has a
+' production adapter AND a test/keyless twin (fakes + in-memory, ADR-021) —
+' swapping the LLM, the search provider or the database is configuration,
+' not surgery.
+
+skinparam componentStyle rectangle
+skinparam packageStyle rectangle
+
+actor User
+component "Vue SPA\n(views · Pinia store · typed api client)" as SPA
+User -right-> SPA
+
+package "Rust backend (hexagonal)" {
+  component "Axum HTTP adapter (inbound)\n/api/* (JWT) · /internal/* (shared token)\nSSE · rate limiting · request-id" as Axum
+
+  package "core — zero infrastructure deps" {
+    component "Use cases\nRegister / Login / Refresh\nLaunchSearch · AnswerClarification\nIngestResults · FailStaleJobs (reaper)\nSearchQueries" as UC
+    component "Ports (traits)\nUserRepository · JobRepository\nRefreshTokenRepository · JobDispatcher\nPasswordHasher · TokenService" as RPorts
+    UC -right-> RPorts : depend on
+  }
+
+  component "PostgreSQL (sqlx)\nmigrations at startup" as PG
+  component "In-memory\n(dev fallback + tests)" as Mem
+  component "argon2id + JWT" as AuthAdp
+  component "HttpJobDispatcher" as HttpDisp
+  component "NoopJobDispatcher\n(dev without the agent)" as Noop
+
+  Axum -right-> UC
+  PG .up.> RPorts : implement
+  Mem .up.> RPorts
+  AuthAdp .up.> RPorts
+  HttpDisp .up.> RPorts
+  Noop .up.> RPorts
+}
+
+package "Python agent (hexagonal)" {
+  component "FastAPI /tasks + Celery tasks\n(inbound, thin glue — no business logic)" as Glue
+
+  package "core — zero framework deps" {
+    component "Use cases\nrun_research (workflow)\nrun_agent_research (agentic loop)" as PyUC
+    component "Ports (Protocols)\nSearchProvider · HitEnricher\nAgentPolicy · ResultCritic\nResultSink · StepReporter\nClarificationRequester" as PPorts
+    PyUC -right-> PPorts : depend on
+  }
+
+  component "Tavily\n(SearchProvider)" as Tavily
+  component "Claude via langchain\n(enricher · policy · critic)" as Claude
+  component "Deterministic fakes\n(every port — keyless, ADR-021)" as Fakes
+  component "HttpResultSink\n(sink · steps · question callbacks)" as Sink
+
+  Glue -right-> PyUC
+  Tavily .up.> PPorts : implement
+  Claude .up.> PPorts
+  Fakes .up.> PPorts
+  Sink .up.> PPorts
+}
+
+database "PostgreSQL" as PGDB
+queue "Redis\n(Celery broker)" as Redis
+
+SPA -down-> Axum : /api/* (JWT)
+PG -down-> PGDB
+HttpDisp -down-> Glue : POST /tasks {job_id, keyword,\nmode, clarification}
+Glue -left-> Redis : enqueue / consume
+Sink -up-> Axum : /internal/jobs/{id}/*\nstarted · results · steps · question · failure
+
+note as N1
+  The cores import no axum/sqlx/reqwest (Rust) and
+  no celery/fastapi/httpx/langchain (Python):
+  they are unit-tested with fakes of the ports (ADR-012).
+end note
+
+@enduml

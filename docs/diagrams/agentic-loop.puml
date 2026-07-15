@@ -1,0 +1,78 @@
+@startuml agentic-loop
+' The agentic research loop (ADR-030) with self-critique (ADR-031) and
+' human-in-the-loop clarification (ADR-032). The LLM policy drives the control
+' flow; the loop only enforces the mechanics: URL deduplication, the step
+' budget (AGENT_MAX_STEPS, cost guard), the live journal, and the shared
+' enrich/sort/deliver tail. Contrast: the workflow mode is one fixed
+' search -> enrich -> sort pipeline with no decisions.
+
+start
+:mark job started
+(POST /internal/jobs/{id}/started);
+
+repeat
+  :policy.decide(goal, journal, hits)
+  <b>the LLM picks the next action</b>;
+  note right
+    Defensive parsing everywhere:
+    a malformed reply means **finish**,
+    never a crash or a burned budget.
+  end note
+  switch (action?)
+  case (search)
+    :provider.search(query);
+    :deduplicate by URL
+    keep only new hits;
+    :journal step «search»
+    (query, reason, new_hits);
+  case (ask — ADR-032)
+    if (clarification already present\nor no clarifier wired?) then (yes)
+      :degrade to finish
+      «one question per job»;
+      break
+    else (no)
+      :POST /internal/jobs/{id}/question
+      job -> awaiting_input;
+      stop
+      note right
+        **Paused.** The task ends here;
+        the user's answer re-dispatches
+        the job with the clarification
+        and a fresh journal.
+      end note
+    endif
+  case (finish)
+    :journal step «finish» (reason);
+    break
+  endswitch
+repeat while (steps < AGENT_MAX_STEPS?) is (yes)
+
+if (loop ended by an explicit finish?) then (yes)
+else (no — budget exhausted)
+  :journal a forced «finish»
+  ("step budget exhausted");
+endif
+
+partition "Self-critique (ADR-031) — agent mode only" {
+  :critic.critique(goal, hits)
+  one LLM call over the whole set;
+  :drop the URLs judged off-topic;
+  :journal step «critique» (assessment);
+  if (gap named AND search budget left?) then (yes)
+    :one repair search
+    journal step «search»
+    «never re-critiqued — bounded cost»;
+  else (no)
+  endif
+}
+
+partition "Shared tail (same as workflow mode)" {
+  :enrich every hit (ADR-027)
+  date cascade (ADR-011) + event type + summary;
+  :sort by publication date, undated last;
+  :deliver (POST /internal/jobs/{id}/results)
+  job -> completed;
+}
+stop
+
+@enduml

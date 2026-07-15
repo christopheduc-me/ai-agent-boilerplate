@@ -143,8 +143,9 @@ docs/                           # ARCHITECTURE.md (32 ADRs), COMMANDS.md, diagra
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
   (ADR-001 → ADR-032), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
-- [docs/diagrams/](docs/diagrams/) — PlantUML sequence diagrams (auth flow,
-  human-in-the-loop clarification).
+- [docs/diagrams/](docs/diagrams/README.md) — PlantUML diagrams with an
+  illustrated index: hexagonal architecture, job lifecycle state machine,
+  the agentic loop, human-in-the-loop and auth flows.
 - [SETUP.md](SETUP.md) — manual setup checklist (local env, CI, VPS, API keys).
 - [ROADMAP.md](ROADMAP.md) — the prioritized technical roadmap.
 

@@ -237,6 +237,10 @@ cd frontend && npm run build                # dist/
 docker build -t aiagent/backend ./backend
 docker build -t aiagent/agent ./agent
 docker build -t aiagent/frontend ./frontend
+
+# Diagrams: regenerate the committed SVG renders after editing a .puml
+# (index with all renders: docs/diagrams/README.md)
+plantuml -tsvg docs/diagrams/*.puml
 ```
 
 ---

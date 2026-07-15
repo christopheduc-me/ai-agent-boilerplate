@@ -1,0 +1,49 @@
+@startuml job-lifecycle-states
+' Job lifecycle state machine (ADR-016 + ADR-032).
+' Every transition is a worker callback, a user action, or the reaper —
+' and every one is idempotent: late or duplicated notifications are harmless.
+
+hide empty description
+
+state pending : persisted, dispatched to the agent
+state running : worker picked the job up
+state awaiting_input : the agent asked the user\na clarification question (ADR-032)
+state completed : results stored\n(replace semantics)
+state failed : error stored
+
+[*] --> pending : POST /api/searches\n(quota checked, ADR-017)
+
+pending --> running : POST /internal/jobs/{id}/started
+pending --> failed : dispatch to the agent failed
+pending --> awaiting_input : /question\n(race: question before "started")
+
+running --> completed : POST /internal/jobs/{id}/results
+running --> failed : POST /internal/jobs/{id}/failure
+running --> awaiting_input : POST /internal/jobs/{id}/question\n«worker task ends — never blocks»
+
+awaiting_input --> pending : POST /api/searches/{id}/answer\nanswer stored, journal cleared,\nre-dispatch with the clarification
+
+pending --> failed : reaper timeout\n(JOB_TIMEOUT_MINUTES)
+running --> failed : reaper timeout
+
+failed --> completed : late /results\n«completion always wins:\nresults after a timeout are still valuable»
+
+completed --> [*]
+failed --> [*]
+
+note right of awaiting_input
+  **Reaper-exempt** (ADR-032): paused on
+  the user, not stuck. The job waits
+  indefinitely for the answer.
+end note
+
+note bottom of completed
+  Idempotence (ADR-016):
+  * "started" on a non-pending job: no-op
+  * a failure never clobbers "completed"
+  * re-delivered results replace, never duplicate
+  * repeated /question while awaiting: no-op
+  * /answer outside awaiting_input: 409
+end note
+
+@enduml
