@@ -895,6 +895,8 @@ the goal is genuinely ambiguous and no clarification is present yet.
    the detail view (the SSE stream stays open — not a terminal status); after
    the answer, the dialog stays visible as a recap.
 
+Full sequence diagram: `docs/diagrams/hitl-clarification-flow.puml`.
+
 ---
 
 ## 4. API contracts (summary)

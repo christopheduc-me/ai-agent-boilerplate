@@ -1,0 +1,74 @@
+@startuml hitl-clarification-flow
+' Human-in-the-loop clarification (ADR-032): the agent policy asks the user
+' ONE question when the goal is ambiguous; the job pauses in awaiting_input
+' (never a blocked worker), the answer re-dispatches it with the clarification.
+' Builds on the agentic loop + live journal (ADR-030) and self-critique (ADR-031).
+
+skinparam sequenceMessageAlign left
+
+actor User
+box "Browser"
+  participant "Vue SPA\n(SearchDetailView)" as Front
+end box
+box "Backend"
+  participant "Rust API\n(Axum)" as API
+  database "PostgreSQL\n(research_jobs, agent_steps)" as DB
+end box
+box "Agent"
+  participant "FastAPI\n(/tasks)" as FastAPI
+  participant "Celery worker\n(agentic loop)" as Worker
+end box
+
+== Launch (agent mode, ambiguous goal) ==
+User -> Front : goal: "jaguar" — Run the agent
+Front -> API : POST /api/searches\n{keyword: "jaguar", mode: "agent"}
+API -> DB : INSERT job (status=pending)
+API -> FastAPI : POST /tasks {job_id, keyword,\nmode: "agent", clarification: null}
+FastAPI -> Worker : Celery enqueue
+API --> Front : 202 {job_id}
+Front -> API : GET /api/searches/{id}/events  «SSE, ADR-026»
+
+== The policy asks instead of guessing ==
+Worker -> API : POST /internal/jobs/{id}/started
+API -> DB : status = running
+Worker -> Worker : policy.decide(goal, steps, hits)\n-> ask("The animal or the car?")
+note right of Worker
+  LLM policy (ADR-030). It may ask only if
+  no clarification is present yet — the loop
+  degrades a repeated ask to finish
+  (one question per job, cost guard).
+end note
+Worker -> API : POST /internal/jobs/{id}/question\n{question}  «ClarificationRequester port»
+API -> DB : status = awaiting_input\nquestion stored
+Worker -> Worker : task ends (return)\n«a worker never blocks on a human»
+
+note over API, DB
+  The reaper (ADR-016) ignores awaiting_input:
+  the job is paused on the user, not stuck.
+end note
+
+== The user answers ==
+API --> Front : SSE update {status: awaiting_input, question}
+Front -> User : 🙋 "The agent asks: The animal or the car?"\n+ answer form
+User -> Front : "the car" — Answer
+Front -> API : POST /api/searches/{id}/answer\n{answer: "the car"}  (JWT, owner only)
+API -> DB : answer stored, status = pending\nDELETE agent_steps  «fresh journal (replace semantics)»
+API -> FastAPI : POST /tasks {job_id, keyword,\nmode: "agent", clarification: "the car"}  «re-dispatch»
+FastAPI -> Worker : Celery enqueue
+API --> Front : 204
+note right of API
+  409 if the job is not awaiting_input
+  (double answer, late submit).
+end note
+
+== The loop resumes with the clarification ==
+Worker -> API : POST /internal/jobs/{id}/started
+Worker -> Worker : goal = keyword +\n(user clarification: "the car")\n-> policy searches, refines, finishes\n-> self-critique (ADR-031)
+Worker -> API : POST /internal/jobs/{id}/steps  (×N)\n«search, finish, critique»
+API --> Front : SSE updates — the journal fills in live
+Worker -> API : POST /internal/jobs/{id}/results
+API -> DB : results stored, status = completed
+API --> Front : SSE update {status: completed} — stream closes
+Front -> User : Q&A recap + decision journal + timeline
+
+@enduml
