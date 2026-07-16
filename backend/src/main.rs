@@ -9,15 +9,17 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
+    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
+    InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresRefreshTokenRepository, PostgresUserRepository,
+    run_migrations, PostgresJobRepository, PostgresRecurringSearchRepository,
+    PostgresRefreshTokenRepository, PostgresUserRepository,
 };
-use backend::application::FailStaleJobs;
+use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    JobDispatcher, JobRepository, RefreshTokenRepository, UserRepository,
+    JobDispatcher, JobRepository, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -98,8 +100,9 @@ async fn serve() {
         Arc<dyn UserRepository>,
         Arc<dyn JobRepository>,
         Arc<dyn RefreshTokenRepository>,
+        Arc<dyn RecurringSearchRepository>,
     );
-    let (users, jobs, refresh_tokens): Repos = match &config.database_url {
+    let (users, jobs, refresh_tokens, recurring): Repos = match &config.database_url {
         Some(url) => {
             let pool = PgPoolOptions::new()
                 .max_connections(10)
@@ -113,31 +116,45 @@ async fn serve() {
             (
                 Arc::new(PostgresUserRepository::new(pool.clone())),
                 Arc::new(PostgresJobRepository::new(pool.clone())),
-                Arc::new(PostgresRefreshTokenRepository::new(pool)),
+                Arc::new(PostgresRefreshTokenRepository::new(pool.clone())),
+                Arc::new(PostgresRecurringSearchRepository::new(pool)),
             )
         }
         None => (
             Arc::new(InMemoryUserRepository::default()),
             Arc::new(InMemoryJobRepository::default()),
             Arc::new(InMemoryRefreshTokenRepository::default()),
+            Arc::new(InMemoryRecurringSearchRepository::default()),
         ),
     };
 
-    // Background reaper (ADR-016): fails jobs stuck without worker notification
-    // and purges expired refresh tokens (ADR-008).
+    // Background loop: the reaper (ADR-016), refresh-token purge (ADR-008)
+    // and the recurring-search scheduler (ADR-033) share one ticker.
     let reaper = FailStaleJobs::new(
         jobs.clone(),
         std::time::Duration::from_secs(config.job_timeout_minutes * 60),
     );
+    let scheduler = RunDueSearches::new(
+        recurring.clone(),
+        jobs.clone(),
+        dispatcher.clone(),
+        config.daily_search_quota,
+    );
     let refresh_tokens_for_reaper = refresh_tokens.clone();
+    let tick = std::time::Duration::from_secs(config.scheduler_tick_seconds);
     tokio::spawn(async move {
-        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(60));
+        let mut ticker = tokio::time::interval(tick);
         loop {
             ticker.tick().await;
             match reaper.execute().await {
                 Ok(0) => {}
                 Ok(n) => tracing::warn!(reaped = n, "failed stale jobs (timeout)"),
                 Err(e) => tracing::error!(error = %e, "job reaper run failed"),
+            }
+            match scheduler.execute().await {
+                Ok(0) => {}
+                Ok(n) => tracing::info!(launched = n, "recurring searches launched"),
+                Err(e) => tracing::error!(error = %e, "recurring scheduler run failed"),
             }
             if let Err(e) = refresh_tokens_for_reaper
                 .delete_expired(chrono::Utc::now())
@@ -152,6 +169,7 @@ async fn serve() {
         users,
         jobs,
         refresh_tokens,
+        recurring,
         dispatcher,
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),

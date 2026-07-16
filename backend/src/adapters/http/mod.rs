@@ -22,17 +22,18 @@ use crate::application::answer_clarification::AnswerError;
 use crate::application::ingest_results::IngestError;
 use crate::application::launch_search::LaunchError;
 use crate::application::login_user::LoginError;
+use crate::application::recurring_searches::RecurringError;
 use crate::application::refresh_session::RefreshError;
 use crate::application::register_user::RegisterError;
 use crate::application::{
-    AnswerClarification, IngestResults, LaunchSearch, LoginUser, RefreshSession, RegisterUser,
-    SearchQueries, SessionTokens,
+    AnswerClarification, IngestResults, LaunchSearch, LoginUser, RecurringSearches, RefreshSession,
+    RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
-    JobDispatcher, JobRepository, PasswordHasher, RefreshTokenRepository, TokenService,
-    UserRepository,
+    JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
+    RefreshTokenRepository, TokenService, UserRepository,
 };
-use crate::domain::{AgentStep, JobMode, JobStatus, ResearchJob, SearchResult};
+use crate::domain::{AgentStep, JobMode, JobStatus, RecurringSearch, ResearchJob, SearchResult};
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
 const REFRESH_COOKIE: &str = "refresh_token";
@@ -44,6 +45,7 @@ pub struct AppState {
     refresh: Arc<RefreshSession>,
     launch: Arc<LaunchSearch>,
     answer: Arc<AnswerClarification>,
+    recurring: Arc<RecurringSearches>,
     ingest: Arc<IngestResults>,
     queries: Arc<SearchQueries>,
     tokens: Arc<dyn TokenService>,
@@ -75,6 +77,7 @@ impl AppState {
         users: Arc<dyn UserRepository>,
         jobs: Arc<dyn JobRepository>,
         refresh_tokens: Arc<dyn RefreshTokenRepository>,
+        recurring: Arc<dyn RecurringSearchRepository>,
         dispatcher: Arc<dyn JobDispatcher>,
         hasher: Arc<dyn PasswordHasher>,
         tokens: Arc<dyn TokenService>,
@@ -102,6 +105,7 @@ impl AppState {
                 daily_search_quota,
             )),
             answer: Arc::new(AnswerClarification::new(jobs.clone(), dispatcher)),
+            recurring: Arc::new(RecurringSearches::new(recurring)),
             ingest: Arc::new(IngestResults::new(jobs.clone())),
             queries: Arc::new(SearchQueries::new(jobs)),
             tokens,
@@ -134,6 +138,11 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .route("/api/searches/{id}", get(get_search))
         .route("/api/searches/{id}/answer", post(answer_search))
         .route("/api/searches/{id}/events", get(search_events))
+        .route("/api/recurring", post(create_recurring).get(list_recurring))
+        .route(
+            "/api/recurring/{id}",
+            axum::routing::delete(delete_recurring),
+        )
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
             rate_limit::rate_limit,
@@ -259,6 +268,8 @@ struct JobView {
     // Clarification dialog (ADR-032), null until the agent asks / the user answers.
     question: Option<String>,
     answer: Option<String>,
+    // Set on scheduler-launched runs (ADR-033).
+    recurring_search_id: Option<Uuid>,
     created_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
 }
@@ -273,8 +284,40 @@ impl From<&ResearchJob> for JobView {
             error: job.error.clone(),
             question: job.question.clone(),
             answer: job.answer.clone(),
+            recurring_search_id: job.recurring_search_id,
             created_at: job.created_at,
             completed_at: job.completed_at,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct CreateRecurringRequest {
+    keyword: String,
+    #[serde(default)]
+    mode: JobMode,
+    interval_minutes: u32,
+}
+
+#[derive(Serialize)]
+struct RecurringView {
+    id: Uuid,
+    keyword: String,
+    mode: JobMode,
+    interval_minutes: u32,
+    created_at: DateTime<Utc>,
+    last_run_at: Option<DateTime<Utc>>,
+}
+
+impl From<&RecurringSearch> for RecurringView {
+    fn from(search: &RecurringSearch) -> Self {
+        Self {
+            id: search.id,
+            keyword: search.keyword.clone(),
+            mode: search.mode,
+            interval_minutes: search.interval_minutes,
+            created_at: search.created_at,
+            last_run_at: search.last_run_at,
         }
     }
 }
@@ -399,6 +442,62 @@ async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUse
         Ok(jobs) => Json(jobs.iter().map(JobView::from).collect::<Vec<_>>()).into_response(),
         Err(e) => {
             tracing::error!(error = %e, "list searches failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+// ---------------------------------------------------------------- recurring searches (ADR-033)
+
+async fn create_recurring(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(body): Json<CreateRecurringRequest>,
+) -> Response {
+    match state
+        .recurring
+        .create(user_id, &body.keyword, body.mode, body.interval_minutes)
+        .await
+    {
+        Ok(search) => (StatusCode::CREATED, Json(RecurringView::from(&search))).into_response(),
+        Err(e @ RecurringError::Invalid(_)) => {
+            error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
+        }
+        Err(e @ RecurringError::TooMany(_)) => {
+            error_body(StatusCode::TOO_MANY_REQUESTS, &e.to_string())
+        }
+        Err(RecurringError::NotFound) => error_body(StatusCode::NOT_FOUND, "not found"),
+        Err(RecurringError::Infrastructure(e)) => {
+            tracing::error!(error = %e, "create recurring search failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+async fn list_recurring(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
+    match state.recurring.list(user_id).await {
+        Ok(searches) => {
+            Json(searches.iter().map(RecurringView::from).collect::<Vec<_>>()).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "list recurring searches failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+async fn delete_recurring(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Response {
+    match state.recurring.delete(user_id, id).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(RecurringError::NotFound) => {
+            error_body(StatusCode::NOT_FOUND, "recurring search not found")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "delete recurring search failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

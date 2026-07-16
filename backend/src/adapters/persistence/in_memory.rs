@@ -5,8 +5,12 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
-use crate::domain::{AgentStep, JobStatus, RefreshToken, ResearchJob, SearchResult, User};
+use crate::domain::ports::{
+    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+};
+use crate::domain::{
+    AgentStep, JobStatus, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User,
+};
 
 #[derive(Default)]
 pub struct InMemoryUserRepository {
@@ -175,6 +179,90 @@ impl JobRepository for InMemoryJobRepository {
 
     async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError> {
         self.steps.lock().unwrap().remove(&job_id);
+        Ok(())
+    }
+
+    async fn recent_urls_for_recurring(
+        &self,
+        recurring_search_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<String>, PortError> {
+        let jobs = self.jobs.lock().unwrap();
+        let results = self.results.lock().unwrap();
+        let mut runs: Vec<&ResearchJob> = jobs
+            .values()
+            .filter(|j| j.recurring_search_id == Some(recurring_search_id))
+            .collect();
+        runs.sort_by_key(|j| std::cmp::Reverse(j.created_at));
+        let mut urls = Vec::new();
+        for job in runs {
+            for result in results.get(&job.id).map(Vec::as_slice).unwrap_or_default() {
+                if !urls.contains(&result.url) {
+                    urls.push(result.url.clone());
+                    if urls.len() as u32 >= limit {
+                        return Ok(urls);
+                    }
+                }
+            }
+        }
+        Ok(urls)
+    }
+}
+
+#[derive(Default)]
+pub struct InMemoryRecurringSearchRepository {
+    searches: Mutex<HashMap<Uuid, RecurringSearch>>,
+}
+
+#[async_trait]
+impl RecurringSearchRepository for InMemoryRecurringSearchRepository {
+    async fn insert(&self, search: &RecurringSearch) -> Result<(), PortError> {
+        self.searches
+            .lock()
+            .unwrap()
+            .insert(search.id, search.clone());
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError> {
+        let mut searches: Vec<RecurringSearch> = self
+            .searches
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| s.user_id == user_id)
+            .cloned()
+            .collect();
+        searches.sort_by_key(|s| std::cmp::Reverse(s.created_at));
+        Ok(searches)
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        let mut searches = self.searches.lock().unwrap();
+        match searches.get(&id) {
+            Some(s) if s.user_id == user_id => {
+                searches.remove(&id);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError> {
+        Ok(self
+            .searches
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|s| s.is_due(now))
+            .cloned()
+            .collect())
+    }
+
+    async fn mark_ran(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError> {
+        if let Some(s) = self.searches.lock().unwrap().get_mut(&id) {
+            s.mark_ran(at);
+        }
         Ok(())
     }
 }

@@ -8,7 +8,10 @@
       "date_confidence": "high",
       "event_type": "release",
       "summary": "Version 2.0 was released with breaking changes.",
-      "raw": { "provider": "fixture" }
+      "raw": {
+        "provider": "fixture"
+      },
+      "is_new": true
     },
     {
       "title": "llm-dated",
@@ -18,7 +21,10 @@
       "date_confidence": "medium",
       "event_type": "funding",
       "summary": "The company raised a Series A round.",
-      "raw": { "provider": "fixture" }
+      "raw": {
+        "provider": "fixture"
+      },
+      "is_new": true
     },
     {
       "title": "undated",
@@ -28,7 +34,10 @@
       "date_confidence": "unknown",
       "event_type": "other",
       "summary": null,
-      "raw": { "provider": "fixture" }
+      "raw": {
+        "provider": "fixture"
+      },
+      "is_new": true
     }
   ]
 }

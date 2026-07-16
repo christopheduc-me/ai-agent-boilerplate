@@ -7,11 +7,15 @@
 //! run in parallel against a shared database.
 
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresRefreshTokenRepository, PostgresUserRepository,
+    run_migrations, PostgresJobRepository, PostgresRecurringSearchRepository,
+    PostgresRefreshTokenRepository, PostgresUserRepository,
 };
-use backend::domain::ports::{JobRepository, RefreshTokenRepository, UserRepository};
+use backend::domain::ports::{
+    JobRepository, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+};
 use backend::domain::{
-    AgentStep, DateConfidence, JobMode, JobStatus, RefreshToken, ResearchJob, SearchResult, User,
+    AgentStep, DateConfidence, JobMode, JobStatus, RecurringSearch, RefreshToken, ResearchJob,
+    SearchResult, User,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
@@ -213,6 +217,7 @@ async fn results_roundtrip_with_replace_semantics() {
         },
         event_type: backend::domain::EventType::Release,
         summary: Some(format!("summary of {title}")),
+        is_new: true,
         raw: serde_json::json!({"source": "test"}),
     };
 
@@ -274,4 +279,69 @@ async fn agent_mode_and_steps_roundtrip() {
             .collect::<Vec<_>>(),
         vec![(1, "search", 3), (2, "finish", 3)]
     );
+}
+
+#[tokio::test]
+async fn recurring_search_roundtrip_due_and_memory() {
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let recurring_repo = PostgresRecurringSearchRepository::new(pool.clone());
+    let jobs = PostgresJobRepository::new(pool.clone());
+
+    let rs = RecurringSearch::new(user.id, "rust releases", JobMode::Agent, 60).unwrap();
+    recurring_repo.insert(&rs).await.unwrap();
+
+    // Roundtrip + due immediately (never run).
+    let listed = recurring_repo.list_for_user(user.id).await.unwrap();
+    assert_eq!(listed, vec![rs.clone()]);
+    assert!(recurring_repo
+        .list_due(Utc::now())
+        .await
+        .unwrap()
+        .iter()
+        .any(|s| s.id == rs.id));
+
+    // After a run: not due until the interval elapses.
+    recurring_repo.mark_ran(rs.id, Utc::now()).await.unwrap();
+    assert!(!recurring_repo
+        .list_due(Utc::now())
+        .await
+        .unwrap()
+        .iter()
+        .any(|s| s.id == rs.id));
+
+    // A linked run delivers results: they become the memory of the next run.
+    let job = ResearchJob::new(user.id, "rust releases")
+        .unwrap()
+        .with_mode(JobMode::Agent)
+        .with_recurring(rs.id);
+    jobs.insert(&job).await.unwrap();
+    let result = |url: &str| SearchResult {
+        title: "t".into(),
+        url: url.into(),
+        snippet: "s".into(),
+        published_at: None,
+        date_confidence: DateConfidence::Unknown,
+        event_type: backend::domain::EventType::default(),
+        summary: None,
+        is_new: true,
+        raw: serde_json::Value::Null,
+    };
+    jobs.store_results(job.id, &[result("https://a"), result("https://b")])
+        .await
+        .unwrap();
+    let mut urls = jobs.recent_urls_for_recurring(rs.id, 200).await.unwrap();
+    urls.sort();
+    assert_eq!(urls, vec!["https://a".to_string(), "https://b".to_string()]);
+    // The stored job kept its recurring link and the is_new flag roundtrips.
+    let stored = jobs.find(job.id).await.unwrap().unwrap();
+    assert_eq!(stored.recurring_search_id, Some(rs.id));
+    assert!(jobs.results_for(job.id).await.unwrap()[0].is_new);
+
+    // Ownership guard on delete.
+    assert!(!recurring_repo.delete(Uuid::new_v4(), rs.id).await.unwrap());
+    assert!(recurring_repo.delete(user.id, rs.id).await.unwrap());
+    // History survives the deletion (ON DELETE SET NULL).
+    let kept = jobs.find(job.id).await.unwrap().unwrap();
+    assert_eq!(kept.recurring_search_id, None);
 }

@@ -58,7 +58,7 @@ impl LaunchSearch {
         let mut job = ResearchJob::new(user_id, keyword)?.with_mode(mode);
         self.jobs.insert(&job).await?;
 
-        if let Err(err) = self.dispatcher.dispatch(&job).await {
+        if let Err(err) = self.dispatcher.dispatch(&job, &[]).await {
             job.fail(format!("dispatch failed: {err}"));
             self.jobs.update(&job).await?;
             return Err(LaunchError::DispatchFailed);
@@ -99,7 +99,7 @@ mod tests {
 
     #[async_trait]
     impl JobDispatcher for RecordingDispatcher {
-        async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError> {
+        async fn dispatch(&self, job: &ResearchJob, _seen: &[String]) -> Result<(), PortError> {
             if self.fail {
                 return Err(PortError("agent unreachable".into()));
             }

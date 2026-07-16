@@ -44,6 +44,8 @@ pub struct AgentStep {
 pub enum JobError {
     #[error("keyword must not be empty")]
     EmptyKeyword,
+    #[error("interval must be between 1 minute and 7 days")]
+    InvalidInterval,
     #[error("question must not be empty")]
     EmptyQuestion,
     #[error("answer must not be empty")]
@@ -64,6 +66,9 @@ pub struct ResearchJob {
     /// user replied, the answer forwarded back to the agent on re-dispatch.
     pub question: Option<String>,
     pub answer: Option<String>,
+    /// Set when the job was launched by the scheduler for a recurring search
+    /// (ADR-033); one-shot searches leave it null.
+    pub recurring_search_id: Option<Uuid>,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -83,6 +88,7 @@ impl ResearchJob {
             error: None,
             question: None,
             answer: None,
+            recurring_search_id: None,
             created_at: super::now_utc(),
             completed_at: None,
         })
@@ -90,6 +96,12 @@ impl ResearchJob {
 
     pub fn with_mode(mut self, mode: JobMode) -> Self {
         self.mode = mode;
+        self
+    }
+
+    /// Links a scheduler-launched run to its recurring search (ADR-033).
+    pub fn with_recurring(mut self, recurring_search_id: Uuid) -> Self {
+        self.recurring_search_id = Some(recurring_search_id);
         self
     }
 

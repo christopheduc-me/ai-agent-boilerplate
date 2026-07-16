@@ -28,8 +28,8 @@ def test_enqueue_delegates_to_celery_with_correlation_id(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(
-            (job_id, keyword, request_id, mode)
+        lambda job_id, keyword, request_id, mode, clarification, recurring, seen_urls: (
+            enqueued.append((job_id, keyword, request_id, mode))
         ),
     )
 
@@ -52,7 +52,9 @@ def test_enqueue_forwards_the_agent_mode(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(mode),
+        lambda job_id, keyword, request_id, mode, clarification, recurring, seen_urls: (
+            enqueued.append(mode)
+        ),
     )
 
     response = client.post(
@@ -71,7 +73,9 @@ def test_enqueue_falls_back_to_the_job_id_as_correlation_id(monkeypatch) -> None
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(request_id),
+        lambda job_id, keyword, request_id, mode, clarification, recurring, seen_urls: (
+            enqueued.append(request_id)
+        ),
     )
 
     response = client.post(
@@ -90,7 +94,9 @@ def test_enqueue_forwards_the_clarification(monkeypatch) -> None:
     monkeypatch.setattr(
         api_module.run_research_task,
         "delay",
-        lambda job_id, keyword, request_id, mode, clarification: enqueued.append(clarification),
+        lambda job_id, keyword, request_id, mode, clarification, recurring, seen_urls: (
+            enqueued.append(clarification)
+        ),
     )
 
     client.post(
@@ -105,3 +111,29 @@ def test_enqueue_forwards_the_clarification(monkeypatch) -> None:
     )
 
     assert enqueued == ["the car", None]
+
+
+def test_enqueue_forwards_the_seen_urls(monkeypatch) -> None:
+    monkeypatch.setenv("INTERNAL_API_TOKEN", "right-token")
+    enqueued: list[list[str]] = []
+    monkeypatch.setattr(
+        api_module.run_research_task,
+        "delay",
+        lambda job_id, keyword, request_id, mode, clarification, recurring, seen_urls: (
+            enqueued.append(seen_urls)
+        ),
+    )
+
+    client.post(
+        "/tasks",
+        json={"job_id": "j1", "keyword": "rust", "seen_urls": ["https://a"]},
+        headers={"X-Internal-Token": "right-token"},
+    )
+    client.post(
+        "/tasks",
+        json={"job_id": "j2", "keyword": "rust"},
+        headers={"X-Internal-Token": "right-token"},
+    )
+
+    # Default: empty memory (dispatches from pre-ADR-033 backends included).
+    assert enqueued == [["https://a"], []]

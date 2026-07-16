@@ -37,8 +37,16 @@ pub struct SearchResult {
     pub event_type: EventType,
     #[serde(default)]
     pub summary: Option<String>,
+    /// False when a recurring run already saw this URL (ADR-033); one-shot
+    /// searches leave every result new. Default keeps older payloads working.
+    #[serde(default = "default_true")]
+    pub is_new: bool,
     #[serde(default)]
     pub raw: serde_json::Value,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 /// Sorts results by publication date, newest first; results without a date go last
@@ -67,6 +75,7 @@ mod tests {
             },
             event_type: EventType::default(),
             summary: None,
+            is_new: true,
             raw: serde_json::Value::Null,
         }
     }

@@ -149,10 +149,9 @@ jobs:
           # Smoke + Playwright register several accounts within a minute; the
           # default per-IP auth limit (10/min, ADR-017) would flake the suite.
           echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
-          # The smoke script + Playwright journeys all register/login within a
-          # minute; keep the per-IP auth limiter out of the way (it has its
-          # own unit tests).
-          echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
+          # Fast scheduler tick so the recurring-search scenario (ADR-033)
+          # completes in seconds instead of minutes.
+          echo "SCHEDULER_TICK_SECONDS=5" >> .env
       - name: Boot the full stack
         run: docker compose --profile full up -d --build --wait
       - name: Run the smoke test

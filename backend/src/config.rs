@@ -42,6 +42,8 @@ pub struct AppConfig {
     pub agent_api_url: Option<String>,
     pub database_url: Option<String>,
     pub job_timeout_minutes: u64,
+    /// Cadence of the background loop (reaper + recurring scheduler, ADR-033).
+    pub scheduler_tick_seconds: u64,
     pub daily_search_quota: u32,
     pub rate_limits: RateLimitConfig,
     pub refresh_token_days: i64,
@@ -94,6 +96,7 @@ impl AppConfig {
             agent_api_url,
             database_url,
             job_timeout_minutes: u64::from(get_u32("JOB_TIMEOUT_MINUTES", 15)),
+            scheduler_tick_seconds: u64::from(get_u32("SCHEDULER_TICK_SECONDS", 60)).max(1),
             daily_search_quota: get_u32("DAILY_SEARCH_QUOTA", 20),
             rate_limits: RateLimitConfig {
                 auth_per_minute: get_u32("RATE_LIMIT_AUTH_PER_MINUTE", 10),

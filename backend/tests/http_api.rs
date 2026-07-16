@@ -10,7 +10,8 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::NoopJobDispatcher;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
+    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
+    InMemoryUserRepository,
 };
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
@@ -27,6 +28,7 @@ fn app_with(limits: RateLimitConfig, daily_quota: u32) -> Router {
         Arc::new(InMemoryUserRepository::default()),
         Arc::new(InMemoryJobRepository::default()),
         Arc::new(InMemoryRefreshTokenRepository::default()),
+        Arc::new(InMemoryRecurringSearchRepository::default()),
         Arc::new(NoopJobDispatcher),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
@@ -673,4 +675,59 @@ async fn clarification_lifecycle() {
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+/// Recurring searches CRUD (ADR-033) over the public API.
+#[tokio::test]
+async fn recurring_search_crud() {
+    let app = app();
+    let creds = json!({"email": "recurring@test.dev", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let bearer = format!("Bearer {}", login["access_token"].as_str().unwrap());
+    let auth = [("authorization", bearer.as_str())];
+
+    let (status, created) = send(
+        &app,
+        post_json(
+            "/api/recurring",
+            json!({"keyword": "rust releases", "mode": "agent", "interval_minutes": 60}),
+            &auth,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(created["mode"], "agent");
+    assert!(created["last_run_at"].is_null());
+    let id = created["id"].as_str().unwrap().to_string();
+
+    let (_, listed) = send(&app, get("/api/recurring", &auth)).await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+
+    // Interval validation.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/recurring",
+            json!({"keyword": "x", "interval_minutes": 0}),
+            &auth,
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    let delete = |uri: String| {
+        Request::builder()
+            .method("DELETE")
+            .uri(uri)
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _) = send(&app, delete(format!("/api/recurring/{id}"))).await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (status, _) = send(&app, delete(format!("/api/recurring/{id}"))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (_, listed) = send(&app, get("/api/recurring", &auth)).await;
+    assert!(listed.as_array().unwrap().is_empty());
 }

@@ -174,9 +174,8 @@ e2e:
     - echo "AGENT_PROVIDERS=fake" >> .env
     # Smoke + Playwright register several accounts within a minute (ADR-017).
     - echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
-    # Smoke + Playwright register/login several times a minute (limiter has
-    # its own unit tests).
-    - echo "RATE_LIMIT_AUTH_PER_MINUTE=100" >> .env
+    # Fast scheduler tick for the recurring-search scenario (ADR-033).
+    - echo "SCHEDULER_TICK_SECONDS=5" >> .env
     - docker compose --profile full up -d --build --wait
     # Ports are published on the dind service host ("docker").
     - scripts/e2e-smoke.sh http://docker:8080

@@ -112,7 +112,11 @@ onBeforeUnmount(() => {
       :steps="job.steps"
       :live="job.status === 'pending' || job.status === 'running'"
     />
-    <ResultTimeline v-if="job.status === 'completed'" :results="job.results" />
+    <ResultTimeline
+      v-if="job.status === 'completed'"
+      :results="job.results"
+      :highlight-new="job.recurring_search_id !== null"
+    />
   </section>
   <p v-else>Loading…</p>
 </template>

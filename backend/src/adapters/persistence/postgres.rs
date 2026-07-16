@@ -10,10 +10,12 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-use crate::domain::ports::{JobRepository, PortError, RefreshTokenRepository, UserRepository};
+use crate::domain::ports::{
+    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+};
 use crate::domain::{
-    AgentStep, DateConfidence, EventType, JobMode, JobStatus, RefreshToken, ResearchJob,
-    SearchResult, User,
+    AgentStep, DateConfidence, EventType, JobMode, JobStatus, RecurringSearch, RefreshToken,
+    ResearchJob, SearchResult, User,
 };
 
 /// Runs the SQL migrations in `backend/migrations/` (idempotent).
@@ -104,6 +106,7 @@ fn job_from_row(row: &PgRow) -> Result<ResearchJob, PortError> {
         error: row.get("error"),
         question: row.get("question"),
         answer: row.get("answer"),
+        recurring_search_id: row.get("recurring_search_id"),
         created_at: row.get("created_at"),
         completed_at: row.get("completed_at"),
     })
@@ -146,6 +149,7 @@ fn result_from_row(row: &PgRow) -> Result<SearchResult, PortError> {
         date_confidence: confidence_from_str(row.get("date_confidence"))?,
         event_type: event_type_from_str(row.get("event_type")),
         summary: row.get("summary"),
+        is_new: row.get("is_new"),
         raw: row.get("raw"),
     })
 }
@@ -272,8 +276,8 @@ impl PostgresJobRepository {
 impl JobRepository for PostgresJobRepository {
     async fn insert(&self, job: &ResearchJob) -> Result<(), PortError> {
         sqlx::query(
-            "INSERT INTO research_jobs (id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+            "INSERT INTO research_jobs (id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
         )
         .bind(job.id)
         .bind(job.user_id)
@@ -283,6 +287,7 @@ impl JobRepository for PostgresJobRepository {
         .bind(&job.error)
         .bind(&job.question)
         .bind(&job.answer)
+        .bind(job.recurring_search_id)
         .bind(job.created_at)
         .bind(job.completed_at)
         .execute(&self.pool)
@@ -311,7 +316,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn find(&self, id: Uuid) -> Result<Option<ResearchJob>, PortError> {
         let row = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
              FROM research_jobs WHERE id = $1",
         )
         .bind(id)
@@ -323,7 +328,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
              FROM research_jobs WHERE user_id = $1 ORDER BY created_at DESC",
         )
         .bind(user_id)
@@ -355,7 +360,7 @@ impl JobRepository for PostgresJobRepository {
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
              FROM research_jobs
              WHERE status IN ('pending', 'running') AND created_at < $1",
         )
@@ -377,8 +382,8 @@ impl JobRepository for PostgresJobRepository {
             .map_err(db_err)?;
         for result in results {
             sqlx::query(
-                "INSERT INTO search_results (job_id, title, url, snippet, published_at, date_confidence, event_type, summary, raw)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                "INSERT INTO search_results (job_id, title, url, snippet, published_at, date_confidence, event_type, summary, is_new, raw)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
             )
             .bind(job_id)
             .bind(&result.title)
@@ -388,6 +393,7 @@ impl JobRepository for PostgresJobRepository {
             .bind(confidence_to_str(result.date_confidence))
             .bind(event_type_to_str(result.event_type))
             .bind(&result.summary)
+            .bind(result.is_new)
             .bind(&result.raw)
             .execute(&mut *tx)
             .await
@@ -398,7 +404,7 @@ impl JobRepository for PostgresJobRepository {
 
     async fn results_for(&self, job_id: Uuid) -> Result<Vec<SearchResult>, PortError> {
         let rows = sqlx::query(
-            "SELECT title, url, snippet, published_at, date_confidence, event_type, summary, raw
+            "SELECT title, url, snippet, published_at, date_confidence, event_type, summary, is_new, raw
              FROM search_results WHERE job_id = $1
              ORDER BY published_at DESC NULLS LAST",
         )
@@ -452,6 +458,122 @@ impl JobRepository for PostgresJobRepository {
     async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError> {
         sqlx::query("DELETE FROM agent_steps WHERE job_id = $1")
             .bind(job_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn recent_urls_for_recurring(
+        &self,
+        recurring_search_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<String>, PortError> {
+        let rows = sqlx::query(
+            "SELECT DISTINCT ON (r.url) r.url, j.created_at
+             FROM search_results r
+             JOIN research_jobs j ON j.id = r.job_id
+             WHERE j.recurring_search_id = $1
+             ORDER BY r.url, j.created_at DESC
+             LIMIT $2",
+        )
+        .bind(recurring_search_id)
+        .bind(i64::from(limit))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(|row| row.get("url")).collect())
+    }
+}
+
+// ---------------------------------------------------------------- recurring searches (ADR-033)
+
+pub struct PostgresRecurringSearchRepository {
+    pool: PgPool,
+}
+
+impl PostgresRecurringSearchRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn recurring_from_row(row: &PgRow) -> RecurringSearch {
+    let interval: i32 = row.get("interval_minutes");
+    RecurringSearch {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        keyword: row.get("keyword"),
+        mode: mode_from_str(row.get("mode")),
+        interval_minutes: interval as u32,
+        created_at: row.get("created_at"),
+        last_run_at: row.get("last_run_at"),
+    }
+}
+
+const RECURRING_COLS: &str =
+    "SELECT id, user_id, keyword, mode, interval_minutes, created_at, last_run_at
+     FROM recurring_searches";
+
+#[async_trait]
+impl RecurringSearchRepository for PostgresRecurringSearchRepository {
+    async fn insert(&self, search: &RecurringSearch) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO recurring_searches
+             (id, user_id, keyword, mode, interval_minutes, created_at, last_run_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(search.id)
+        .bind(search.user_id)
+        .bind(&search.keyword)
+        .bind(mode_to_str(search.mode))
+        .bind(search.interval_minutes as i32)
+        .bind(search.created_at)
+        .bind(search.last_run_at)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError> {
+        let rows = sqlx::query(&format!(
+            "{RECURRING_COLS} WHERE user_id = $1 ORDER BY created_at DESC"
+        ))
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(recurring_from_row).collect())
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        let result = sqlx::query("DELETE FROM recurring_searches WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError> {
+        let rows = sqlx::query(&format!(
+            "{RECURRING_COLS}
+             WHERE last_run_at IS NULL
+                OR last_run_at + make_interval(mins => interval_minutes) <= $1"
+        ))
+        .bind(now)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(recurring_from_row).collect())
+    }
+
+    async fn mark_ran(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError> {
+        sqlx::query("UPDATE recurring_searches SET last_run_at = $2 WHERE id = $1")
+            .bind(id)
+            .bind(at)
             .execute(&self.pool)
             .await
             .map_err(db_err)?;

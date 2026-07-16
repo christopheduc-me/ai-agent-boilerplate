@@ -149,4 +149,46 @@ HITL_KINDS=$(json_get "$HITL_DETAIL" '",".join(s["kind"] for s in data["steps"])
 # Fresh journal after the resume (replace semantics): the full loop + critique.
 [ "$HITL_KINDS" = "search,search,finish,critique" ] || fail "unexpected HITL steps: $HITL_KINDS"
 
-say "E2E OK — workflow results=[$TITLES]; agent steps=[$STEP_KINDS]; HITL answered and completed"
+say "create a recurring search (ADR-033) — the scheduler launches the first run"
+REC=$(curl -sf -X POST "$BASE_URL/api/recurring" \
+  -H "authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"keyword":"recurring smoke","mode":"agent","interval_minutes":1}') || fail "create recurring"
+REC_ID=$(json_get "$REC" 'data["id"]')
+
+completed_runs() { # -> newline-separated job ids, oldest first
+  LIST=$(curl -sf "$BASE_URL/api/searches" -H "authorization: Bearer $TOKEN") || fail "list searches"
+  json_get "$LIST" "'\n'.join(j['id'] for j in reversed(data) if j.get('recurring_search_id') == '$REC_ID' and j['status'] == 'completed')"
+}
+
+# First run: due immediately; the e2e stack ticks every SCHEDULER_TICK_SECONDS=5.
+RUN1_ID=""
+for _ in $(seq 1 30); do
+  RUN1_ID=$(completed_runs | sed -n '1p')
+  [ -n "$RUN1_ID" ] && break
+  sleep 2
+done
+[ -n "$RUN1_ID" ] || fail "the scheduler never launched the first recurring run"
+RUN1=$(curl -sf "$BASE_URL/api/searches/$RUN1_ID" -H "authorization: Bearer $TOKEN")
+[ "$(json_get "$RUN1" 'all(r["is_new"] for r in data["results"])')" = "True" ] \
+  || fail "first recurring run: everything should be new"
+[ "$(json_get "$RUN1" 'data["steps"][-1]["kind"]')" = "report" ] || fail "missing report step"
+[ "$(json_get "$RUN1" 'data["steps"][-1]["new_hits"]')" = "4" ] || fail "first run should report 4 new"
+
+say "wait for the second run — the memory flags everything as already seen"
+RUN2_ID=""
+for _ in $(seq 1 60); do
+  RUN2_ID=$(completed_runs | sed -n '2p')
+  [ -n "$RUN2_ID" ] && break
+  sleep 2
+done
+[ -n "$RUN2_ID" ] || fail "the scheduler never launched the second recurring run"
+RUN2=$(curl -sf "$BASE_URL/api/searches/$RUN2_ID" -H "authorization: Bearer $TOKEN")
+[ "$(json_get "$RUN2" 'any(r["is_new"] for r in data["results"])')" = "False" ] \
+  || fail "second recurring run: nothing should be new"
+REPORT=$(json_get "$RUN2" 'data["steps"][-1]["reason"]')
+[ "$REPORT" = "Nothing new since the last run" ] || fail "unexpected report: $REPORT"
+
+curl -sf -X DELETE "$BASE_URL/api/recurring/$REC_ID" \
+  -H "authorization: Bearer $TOKEN" >/dev/null || fail "delete recurring"
+
+say "E2E OK — workflow results=[$TITLES]; agent steps=[$STEP_KINDS]; HITL answered; recurring delta verified"

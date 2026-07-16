@@ -897,6 +897,46 @@ the goal is genuinely ambiguous and no clarification is present yet.
 
 Full sequence diagram: `docs/diagrams/hitl-clarification-flow.puml`.
 
+### ADR-033 — Recurring searches with memory (decided 2026-07-15)
+
+**Context**: the monitoring use cases (tech watch, real-estate alerts…) need
+searches that re-run on their own and can tell what changed — the agent must
+live in time, not only answer one-shot requests.
+
+**Decision**:
+
+1. **Saved searches**: a `recurring_searches` table (keyword, mode, interval
+   with a 1-minute floor / 7-day ceiling, `last_run_at`) with a minimal CRUD
+   (`POST/GET /api/recurring`, `DELETE /api/recurring/{id}`, 20 per user).
+   Each run is an ordinary `research_job` linked via `recurring_search_id`
+   (kept on deletion, `ON DELETE SET NULL`) — history, results, journal and
+   SSE need nothing new.
+2. **The scheduler is the backend's background loop** — the existing reaper
+   ticker (cadence `SCHEDULER_TICK_SECONDS`, default 60 s) also launches every
+   due recurring search. **Rejected: Celery beat** — a fifth process whose
+   schedule state would live in the brick that must not own the database
+   (ADR-006); the backend ticker already exists and the quota check needs the
+   jobs table anyway. Runs count against the owner's daily quota (ADR-017);
+   a quota-skipped or failed run still waits for the next interval (never
+   retried every tick).
+3. **Memory = previously delivered URLs**: the dispatch carries `seen_urls`
+   (up to 200 distinct URLs from the search's past runs) in the task request
+   (ADR-025 fixture updated). Both modes flag every result with **`is_new`**
+   (agent + contract + `search_results.is_new` column, migration 0006 +
+   frontend); the agent mode additionally journals a final **`report` step**
+   — "N new result(s) since the last run" / "Nothing new since the last run"
+   — the agent's own verdict on whether the run was worth it.
+4. **Frontend**: a "Recurring searches" block (create/list/delete, last-run
+   info); on recurring runs the timeline shows a **new** chip and dims
+   already-seen results; one-shot searches are visually unchanged.
+5. **Determinism (ADR-021)**: the fake providers return stable URLs, so run 2
+   of a recurring fake search reports "Nothing new" — asserted end to end by
+   the smoke script (fast tick in the e2e environment).
+
+URL normalization (tracking parameters) remains in ROADMAP P3: until then the
+memory matches exact URLs, which is correct for the fakes and conservative
+for live providers (a changed tracking parameter shows up as new).
+
 ---
 
 ## 4. API contracts (summary)
@@ -914,6 +954,9 @@ Full sequence diagram: `docs/diagrams/hitl-clarification-flow.puml`.
 | GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |
 | POST | `/api/searches/{id}/answer` | Answers the agent's clarification `{answer}` → job resumes (ADR-032; 409 unless `awaiting_input`) |
 | GET | `/api/searches/{id}/events` | SSE stream of the same payload, one `update` event per change, closes on terminal status (ADR-026) |
+| POST | `/api/recurring` | Saves a recurring search `{keyword, mode?, interval_minutes}` (ADR-033) |
+| GET | `/api/recurring` | Lists the user's recurring searches |
+| DELETE | `/api/recurring/{id}` | Deletes a recurring search (run history is kept) |
 
 All `/api/*` routes can answer `429` (per-IP rate limit; `POST /api/searches`
 also enforces the per-user daily quota — ADR-017).
@@ -922,14 +965,14 @@ also enforces the per-user daily quota — ADR-017).
 
 | Method | Route | Description |
 |---|---|---|
-| POST | `/tasks` | `{job_id, keyword, mode, clarification?}` → Celery enqueue |
+| POST | `/tasks` | `{job_id, keyword, mode, clarification?, seen_urls}` → Celery enqueue |
 
 ### Internal (worker → Rust, shared token)
 
 | Method | Route | Description |
 |---|---|---|
 | POST | `/internal/jobs/{id}/started` | Worker picked the job up → status `running` (ADR-016) |
-| POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, raw}]` |
+| POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, is_new, raw}]` |
 | POST | `/internal/jobs/{id}/steps` | Records one agent-loop decision `{seq, kind, detail, reason, new_hits}` (ADR-030, idempotent on seq) |
 | POST | `/internal/jobs/{id}/question` | The agent asks the user `{question}` → status `awaiting_input` (ADR-032) |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
@@ -943,6 +986,5 @@ also enforces the per-user daily quota — ADR-017).
 - Upgrade the SSE change-detection (ADR-026) from per-connection DB polling to
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
-- Recurring keyword monitoring (Celery beat) with memory across runs, so the
-  agent decides what is new and worth reporting (ADR-030's natural sequel) —
-  see ROADMAP.md.
+- Delivery channels for recurring-search reports (ADR-033): e-mail/webhook
+  digests when a run finds something new — a `ReportSender` port away.

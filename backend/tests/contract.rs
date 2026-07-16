@@ -13,7 +13,8 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
+    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
+    InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
 use backend::domain::{JobMode, ResearchJob};
@@ -34,6 +35,7 @@ fn app() -> Router {
         Arc::new(InMemoryUserRepository::default()),
         Arc::new(InMemoryJobRepository::default()),
         Arc::new(InMemoryRefreshTokenRepository::default()),
+        Arc::new(InMemoryRecurringSearchRepository::default()),
         Arc::new(NoopJobDispatcher),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
@@ -214,7 +216,7 @@ async fn backend_produces_the_task_request_fixture() {
         .unwrap()
         .with_mode(JobMode::Agent);
     job.id = Uuid::parse_str("3fa85f64-5717-4562-b3fc-2c963f66afa6").unwrap();
-    dispatcher.dispatch(&job).await.unwrap();
+    dispatcher.dispatch(&job, &[]).await.unwrap();
 
     let expected: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
     assert_eq!(captured.lock().unwrap().as_slice(), &[expected]);
@@ -267,4 +269,11 @@ async fn backend_produces_the_task_request_with_a_null_clarification() {
     let fixture: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
     assert!(fixture["clarification"].is_null());
     assert_eq!(fixture["mode"], "agent");
+}
+
+#[tokio::test]
+async fn task_request_fixture_carries_the_recurring_memory_field() {
+    // First dispatch of a one-shot search: no memory (ADR-033).
+    let fixture: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
+    assert_eq!(fixture["seen_urls"], serde_json::json!([]));
 }

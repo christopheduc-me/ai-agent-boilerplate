@@ -103,6 +103,7 @@ mod tests {
             date_confidence: DateConfidence::Unknown,
             event_type: crate::domain::EventType::default(),
             summary: None,
+            is_new: true,
             raw: serde_json::Value::Null,
         }
     }

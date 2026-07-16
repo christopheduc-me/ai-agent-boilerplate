@@ -106,6 +106,16 @@ def test_delivers_results_sorted_newest_first() -> None:
     assert [r.title for r in delivered] == ["new", "old", "undatable"]
 
 
+def test_workflow_recurring_run_flags_seen_urls() -> None:
+    # ADR-033: the fixed pipeline also honors the memory of previous runs.
+    search = FakeSearch(hits=[hit("a"), hit("b")])
+    sink = RecordingSink()
+
+    results = run_research("job-r", "kw", search, FakeEnricher(), sink, seen_urls={"https://x/a"})
+
+    assert {r.url: r.is_new for r in results} == {"https://x/a": False, "https://x/b": True}
+
+
 def test_marks_the_job_started_before_searching() -> None:
     sink = RecordingSink()
 

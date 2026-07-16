@@ -44,6 +44,8 @@ services:
       DAILY_SEARCH_QUOTA: ${DAILY_SEARCH_QUOTA:-20}
       RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
       RATE_LIMIT_API_PER_MINUTE: ${RATE_LIMIT_API_PER_MINUTE:-120}
+      # Background loop cadence (reaper + recurring scheduler, ADR-033).
+      SCHEDULER_TICK_SECONDS: ${SCHEDULER_TICK_SECONDS:-60}
       # Traces (ADR-029): empty = disabled.
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
     ports:

@@ -49,6 +49,10 @@ class TaskRequest(BaseModel):
     # The user's answer to the agent's clarification question (ADR-032);
     # only set when a paused job is re-dispatched.
     clarification: str | None = None
+    # Recurring-search run (ADR-033): when true the agent flags the delta
+    # against seen_urls (empty on the first run) and journals a report.
+    recurring: bool = False
+    seen_urls: list[str] = []
 
 
 @app.get("/healthz")
@@ -74,6 +78,8 @@ def enqueue_task(
         request_id=request_id,
         mode=body.mode,
         clarification=body.clarification,
+        recurring=body.recurring,
+        seen_urls=body.seen_urls,
     )
     response.headers["X-Request-Id"] = request_id
     logger.info(

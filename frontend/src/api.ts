@@ -22,6 +22,8 @@ export interface SearchResult {
   date_confidence: DateConfidence;
   event_type: EventType;
   summary: string | null;
+  // False when a previous run of a recurring search already saw it (ADR-033).
+  is_new: boolean;
 }
 
 export interface SearchJob {
@@ -33,8 +35,20 @@ export interface SearchJob {
   // Clarification dialog (ADR-032): the agent's question and the user's answer.
   question: string | null;
   answer: string | null;
+  // Set on scheduler-launched runs of a recurring search (ADR-033).
+  recurring_search_id: string | null;
   created_at: string;
   completed_at: string | null;
+}
+
+// A saved search re-run on an interval by the backend scheduler (ADR-033).
+export interface RecurringSearch {
+  id: string;
+  keyword: string;
+  mode: JobMode;
+  interval_minutes: number;
+  created_at: string;
+  last_run_at: string | null;
 }
 
 // One decision of the agentic loop (ADR-030/031), shown in the live journal.
@@ -163,6 +177,19 @@ export const api = {
     ),
 
   listSearches: (token: string) => request<SearchJob[]>("/api/searches", {}, token),
+
+  // Recurring searches (ADR-033).
+  createRecurring: (keyword: string, mode: JobMode, intervalMinutes: number, token: string) =>
+    request<RecurringSearch>(
+      "/api/recurring",
+      { method: "POST", body: JSON.stringify({ keyword, mode, interval_minutes: intervalMinutes }) },
+      token,
+    ),
+
+  listRecurring: (token: string) => request<RecurringSearch[]>("/api/recurring", {}, token),
+
+  deleteRecurring: (id: string, token: string) =>
+    request<void>(`/api/recurring/${id}`, { method: "DELETE" }, token),
 
   // Answers the agent's clarification question (ADR-032): the job resumes.
   answerSearch: (id: string, answer: string, token: string) =>

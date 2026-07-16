@@ -7,7 +7,7 @@ import type { AgentStep } from "@/api";
 
 defineProps<{ steps: AgentStep[]; live: boolean }>();
 
-const icons: Record<string, string> = { finish: "✔", critique: "🧐" };
+const icons: Record<string, string> = { finish: "✔", critique: "🧐", report: "📣" };
 const icon = (kind: string): string => icons[kind] ?? "🔍";
 </script>
 
@@ -24,6 +24,7 @@ const icon = (kind: string): string => icons[kind] ?? "🔍";
               <span class="hits">→ {{ step.new_hits }} new result{{ step.new_hits === 1 ? "" : "s" }}</span>
             </template>
             <template v-else-if="step.kind === 'critique'">reviewed the results</template>
+            <template v-else-if="step.kind === 'report'">compared with the previous run</template>
             <template v-else>finished</template>
           </p>
           <p class="reason">{{ step.reason }}</p>

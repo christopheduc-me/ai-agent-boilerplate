@@ -13,11 +13,36 @@ function result(overrides: Partial<SearchResult>): SearchResult {
     date_confidence: "high",
     event_type: "other",
     summary: null,
+    is_new: true,
     ...overrides,
   };
 }
 
 describe("ResultTimeline", () => {
+  it("flags new results and dims seen ones on recurring runs (ADR-033)", () => {
+    const wrapper = mount(ResultTimeline, {
+      props: {
+        highlightNew: true,
+        results: [
+          result({ title: "fresh", url: "https://fresh", is_new: true }),
+          result({ title: "seen", url: "https://seen", is_new: false }),
+        ],
+      },
+    });
+
+    const entries = wrapper.findAll("li.entry");
+    expect(entries[0].find(".new-chip").exists()).toBe(true);
+    expect(entries[0].classes()).not.toContain("seen");
+    expect(entries[1].find(".new-chip").exists()).toBe(false);
+    expect(entries[1].classes()).toContain("seen");
+
+    // One-shot searches: no chips, nothing dimmed.
+    const oneShot = mount(ResultTimeline, {
+      props: { results: [result({ is_new: true })] },
+    });
+    expect(oneShot.find(".new-chip").exists()).toBe(false);
+  });
+
   it("groups dated results by month, in the given order", () => {
     const wrapper = mount(ResultTimeline, {
       props: {

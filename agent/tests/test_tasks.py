@@ -132,3 +132,29 @@ def test_agent_mode_pauses_on_an_ambiguous_goal_and_resumes_with_the_answer(fake
     assert results.called
     kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
     assert kinds == ["search", "search", "finish", "critique"]
+
+
+@respx.mock
+def test_recurring_run_flags_the_delta_and_reports_it(fake_env) -> None:
+    respx.post(f"{BACKEND}/internal/jobs/job-7/started").mock(return_value=httpx.Response(204))
+    steps = respx.post(f"{BACKEND}/internal/jobs/job-7/steps").mock(
+        return_value=httpx.Response(204)
+    )
+    results = respx.post(f"{BACKEND}/internal/jobs/job-7/results").mock(
+        return_value=httpx.Response(204)
+    )
+
+    # The memory covers two of the four fake URLs (ADR-033).
+    seen = ["https://example.com/old", "https://example.com/recent"]
+    count = run_research_task("job-7", "keyword", mode="agent", recurring=True, seen_urls=seen)
+
+    assert count == 4
+    payload = json.loads(results.calls.last.request.content)
+    by_url = {r["url"]: r["is_new"] for r in payload["results"]}
+    assert by_url["https://example.com/old"] is False
+    assert by_url["https://example.com/recent"] is False
+    assert by_url["https://example.com/llm"] is True
+    # Journal: search, search, finish, critique, then the delta report.
+    kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
+    assert kinds == ["search", "search", "finish", "critique", "report"]
+    assert json.loads(steps.calls.last.request.content)["new_hits"] == 2

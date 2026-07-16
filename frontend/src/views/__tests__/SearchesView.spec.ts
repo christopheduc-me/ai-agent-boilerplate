@@ -7,11 +7,23 @@ import { makePinia, makeRouter } from "./helpers";
 
 vi.mock("@/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/api")>();
-  return { ...original, api: { listSearches: vi.fn(), launchSearch: vi.fn() } };
+  return {
+    ...original,
+    api: {
+      listSearches: vi.fn(),
+      launchSearch: vi.fn(),
+      listRecurring: vi.fn(),
+      createRecurring: vi.fn(),
+      deleteRecurring: vi.fn(),
+    },
+  };
 });
 
 const { api } = await import("@/api");
-const mocked = api as unknown as Record<"listSearches" | "launchSearch", ReturnType<typeof vi.fn>>;
+const mocked = api as unknown as Record<
+  "listSearches" | "launchSearch" | "listRecurring" | "createRecurring" | "deleteRecurring",
+  ReturnType<typeof vi.fn>
+>;
 
 async function mountView() {
   const pinia = makePinia();
@@ -26,6 +38,7 @@ async function mountView() {
 beforeEach(() => {
   vi.clearAllMocks();
   mocked.listSearches.mockResolvedValue([]);
+  mocked.listRecurring.mockResolvedValue([]);
 });
 
 describe("SearchesView (two demos, ADR-030)", () => {
@@ -66,6 +79,40 @@ describe("SearchesView (two demos, ADR-030)", () => {
     expect(items).toHaveLength(2);
     expect(items[1].text()).toContain("two");
     expect(items[1].find(".mode").attributes("data-mode")).toBe("agent");
+  });
+
+  it("creates and deletes a recurring search (ADR-033)", async () => {
+    mocked.createRecurring.mockResolvedValue({ id: "r1" });
+    mocked.deleteRecurring.mockResolvedValue(undefined);
+    mocked.listRecurring
+      .mockResolvedValueOnce([]) // initial mount
+      .mockResolvedValue([
+        {
+          id: "r1",
+          keyword: "rust releases",
+          mode: "agent",
+          interval_minutes: 60,
+          created_at: "2026-07-01T00:00:00Z",
+          last_run_at: null,
+        },
+      ]);
+    const { wrapper } = await mountView();
+
+    const form = wrapper.find("[data-testid=recurring-form]");
+    await form.find("input").setValue("rust releases");
+    await form.find("select").setValue("agent");
+    await form.find("input[type=number]").setValue(60);
+    await form.trigger("submit");
+    await flushPromises();
+
+    expect(mocked.createRecurring).toHaveBeenCalledWith("rust releases", "agent", 60, "tok");
+    const item = wrapper.find("[data-testid=recurring-r1]");
+    expect(item.text()).toContain("rust releases");
+    expect(item.text()).toContain("first run pending");
+
+    await item.find("button.delete").trigger("click");
+    await flushPromises();
+    expect(mocked.deleteRecurring).toHaveBeenCalledWith("r1", "tok");
   });
 
   it("shows quota errors from the backend (ADR-017)", async () => {

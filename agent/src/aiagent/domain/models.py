@@ -49,8 +49,8 @@ class HitEnrichment:
 
 @dataclass(frozen=True)
 class ResearchResult:
-    """A hit with its resolved publication date (ADR-011) and its timeline
-    enrichment (ADR-027)."""
+    """A hit with its resolved publication date (ADR-011), its timeline
+    enrichment (ADR-027), and the recurring-run novelty flag (ADR-033)."""
 
     title: str
     url: str
@@ -59,15 +59,17 @@ class ResearchResult:
     date_confidence: DateConfidence
     event_type: EventType = EventType.OTHER
     summary: str | None = None
+    is_new: bool = True
     raw: dict[str, Any] = field(default_factory=dict)
 
 
 class AgentStepKind(StrEnum):
-    """What the agent decided at one step of the loop (ADR-030/031)."""
+    """What the agent decided at one step of the loop (ADR-030/031/033)."""
 
     SEARCH = "search"
     FINISH = "finish"
     CRITIQUE = "critique"
+    REPORT = "report"
 
 
 @dataclass(frozen=True)
@@ -129,6 +131,14 @@ def _sort_key(result: ResearchResult) -> tuple[int, float]:
 def sort_by_publication_date(results: list[ResearchResult]) -> list[ResearchResult]:
     """Newest first; results without a date last."""
     return sorted(results, key=_sort_key)
+
+
+def flag_new(results: list[ResearchResult], seen_urls: set[str]) -> list[ResearchResult]:
+    """Marks results already delivered by previous runs of a recurring search
+    (ADR-033). URLs outside the memory stay new."""
+    from dataclasses import replace
+
+    return [replace(r, is_new=r.url not in seen_urls) for r in results]
 
 
 def as_utc(value: datetime) -> datetime:

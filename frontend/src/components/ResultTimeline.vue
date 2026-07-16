@@ -9,7 +9,9 @@ import { computed } from "vue";
 
 import type { SearchResult } from "@/api";
 
-const props = defineProps<{ results: SearchResult[] }>();
+// `highlightNew` is set on recurring-search runs (ADR-033): results already
+// seen by previous runs are dimmed, new ones get a chip.
+const props = defineProps<{ results: SearchResult[]; highlightNew?: boolean }>();
 
 interface MonthGroup {
   label: string;
@@ -45,7 +47,7 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
           v-for="result in group.items"
           :key="result.url"
           class="entry"
-          :class="`confidence-${result.date_confidence}`"
+          :class="[`confidence-${result.date_confidence}`, { seen: highlightNew && !result.is_new }]"
         >
           <span class="marker" aria-hidden="true" />
           <div class="content">
@@ -57,6 +59,7 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
                 (estimated)
               </span>
               <span class="badge" :data-event="result.event_type">{{ result.event_type }}</span>
+              <span v-if="highlightNew && result.is_new" class="new-chip">new</span>
             </p>
             <a :href="result.url" target="_blank" rel="noopener">{{ result.title }}</a>
             <p class="summary">{{ result.summary ?? result.snippet }}</p>
@@ -68,11 +71,17 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
     <section v-if="undated.length > 0" data-testid="unknown-date-section">
       <h3 class="month">Unknown date</h3>
       <ul>
-        <li v-for="result in undated" :key="result.url" class="entry confidence-unknown">
+        <li
+          v-for="result in undated"
+          :key="result.url"
+          class="entry confidence-unknown"
+          :class="{ seen: highlightNew && !result.is_new }"
+        >
           <span class="marker" aria-hidden="true" />
           <div class="content">
             <p class="meta">
               <span class="badge" :data-event="result.event_type">{{ result.event_type }}</span>
+              <span v-if="highlightNew && result.is_new" class="new-chip">new</span>
             </p>
             <a :href="result.url" target="_blank" rel="noopener">{{ result.title }}</a>
             <p class="summary">{{ result.summary ?? result.snippet }}</p>
@@ -142,5 +151,17 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
 .summary {
   margin: 0.15rem 0 0;
   color: #444;
+}
+.new-chip {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  padding: 0.05rem 0.4rem;
+  border-radius: 3px;
+  background: #eaf6ee;
+  border: 1px solid #b7dcc2;
+  color: #1d7a3c;
+}
+.entry.seen .content {
+  opacity: 0.55; /* already delivered by a previous run (ADR-033) */
 }
 </style>

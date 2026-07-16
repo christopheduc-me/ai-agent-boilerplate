@@ -40,9 +40,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Result self-critique (ADR-031)** — done: a `ResultCritic` port reviews
       the hits before delivery (verdict journaled as a `critique` step,
       off-topic URLs dropped, at most one budget-bounded repair search).
-- [ ] **Recurring searches with memory**: saved searches re-run by Celery
-      beat; the agent compares against previously seen URLs and decides
-      whether the delta is worth reporting.
+- [x] **Recurring searches with memory (ADR-033)** — done: saved searches
+      re-run by the backend scheduler tick (Celery beat rejected — see the
+      ADR), `seen_urls` memory, `is_new` flags end to end, and a `report`
+      journal step with the delta verdict. Possible follow-up: e-mail/webhook
+      digests when a run finds something new.
 - [x] **Human-in-the-loop clarification (ADR-032)** — done: the policy can ask
       one question (`awaiting_input` status, reaper-exempt), the answer
       re-dispatches the job with the clarification and a fresh journal.

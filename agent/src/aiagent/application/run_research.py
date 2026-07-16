@@ -5,6 +5,7 @@ from aiagent.domain.models import (
     RawSearchHit,
     ResearchResult,
     as_utc,
+    flag_new,
     sort_by_publication_date,
 )
 from aiagent.domain.ports import HitEnricher, ResultSink, SearchProvider
@@ -38,6 +39,7 @@ def run_research(
     search: SearchProvider,
     enricher: HitEnricher,
     sink: ResultSink,
+    seen_urls: set[str] | None = None,
 ) -> list[ResearchResult]:
     """Marks the job running, searches, enriches every hit, sorts, delivers.
 
@@ -49,6 +51,9 @@ def run_research(
         sink.mark_started(job_id)
         hits = search.search(keyword)
         results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
+        if seen_urls is not None:
+            # Recurring run (ADR-033): flag what previous runs already saw.
+            results = flag_new(results, seen_urls)
         sink.deliver(job_id, results)
         return results
     except Exception as exc:

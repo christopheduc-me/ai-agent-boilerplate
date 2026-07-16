@@ -66,9 +66,14 @@ def run_research_task(
     request_id: str | None = None,
     mode: str = "workflow",
     clarification: str | None = None,
+    recurring: bool = False,
+    seen_urls: list[str] | None = None,
 ) -> int:
     settings = Settings.from_env()
     request_id = request_id or job_id
+    # One-shot searches carry no memory; a recurring run flags its results
+    # against the (possibly empty, on the first run) memory (ADR-033).
+    memory = set(seen_urls or []) if recurring else None
     log_ctx = {"request_id": request_id, "job_id": job_id, "mode": mode}
     logger.info("research task started", extra=log_ctx)
 
@@ -109,6 +114,7 @@ def run_research_task(
                 critic=critic,
                 clarifier=sink,
                 clarification=clarification,
+                seen_urls=memory,
                 max_steps=settings.agent_max_steps,
             )
             if outcome is None:
@@ -118,7 +124,7 @@ def run_research_task(
                 return 0
             results = outcome
         else:
-            results = run_research(job_id, keyword, search, enricher, sink)
+            results = run_research(job_id, keyword, search, enricher, sink, seen_urls=memory)
     except Exception:
         logger.error("research task failed", extra=log_ctx, exc_info=True)
         raise

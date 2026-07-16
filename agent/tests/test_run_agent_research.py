@@ -328,6 +328,67 @@ def test_ask_pauses_the_job_without_delivering() -> None:
     assert search.queries == []
 
 
+# ---------------------------------------------------------------- recurring memory (ADR-033)
+
+
+def test_recurring_run_flags_the_delta_and_journals_a_report() -> None:
+    search = MappedSearch({"q": [hit("https://old"), hit("https://fresh")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-12",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        seen_urls={"https://old"},
+        max_steps=5,
+    )
+
+    assert results is not None
+    assert {r.url: r.is_new for r in results} == {"https://old": False, "https://fresh": True}
+    report = reporter.steps[-1]
+    assert report.kind is AgentStepKind.REPORT
+    assert report.reason == "1 new result(s) since the last run"
+    assert report.new_hits == 1
+
+
+def test_recurring_run_with_nothing_new_says_so() -> None:
+    search = MappedSearch({"q": [hit("https://old")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    run_agent_research(
+        "job-13",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        seen_urls={"https://old"},
+        max_steps=5,
+    )
+
+    assert reporter.steps[-1].reason == "Nothing new since the last run"
+
+
+def test_one_shot_runs_have_no_report_step_and_stay_new() -> None:
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-14", "goal", search, NeutralEnricher(), policy, sink, reporter, max_steps=5
+    )
+
+    assert results is not None and all(r.is_new for r in results)
+    assert all(s.kind is not AgentStepKind.REPORT for s in reporter.steps)
+
+
 def test_ask_after_an_answer_degrades_to_finish() -> None:
     # The guard against question ping-pong: one clarification per job.
     search = MappedSearch({"q": [hit("https://a")]})

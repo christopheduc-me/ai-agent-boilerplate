@@ -102,6 +102,31 @@ test("the agent asks for clarification and resumes with the answer", async ({ pa
   await expect(page.getByTestId("unknown-date-section")).toBeVisible();
 });
 
+test("recurring searches can be created and deleted (ADR-033)", async ({ page }) => {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "No account yet? Sign up" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-s3cret-password");
+  await page.getByRole("button", { name: "Sign up" }).click();
+
+  // Create a watch; the scheduled runs themselves are covered by the smoke
+  // script (they need the scheduler tick, not a browser).
+  const section = page.getByTestId("recurring-section");
+  await expect(section).toBeVisible();
+  await section.getByPlaceholder("Keyword to watch").fill("playwright watch");
+  await section.getByRole("button", { name: "Watch" }).click();
+
+  const item = section.locator("li", { hasText: "playwright watch" });
+  await expect(item).toBeVisible();
+  await expect(item).toContainText("every 60 min");
+
+  await item.getByRole("button", { name: "Delete" }).click();
+  await expect(item).not.toBeVisible();
+  await expect(section.getByText("Nothing watched yet.")).toBeVisible();
+});
+
 test("a returning user logs in and finds the previous searches", async ({ page }) => {
   const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
   const password = "e2e-s3cret-password";

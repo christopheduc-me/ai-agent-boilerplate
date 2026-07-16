@@ -19,6 +19,7 @@ from aiagent.domain.models import (
     RawSearchHit,
     ResearchResult,
     SearchAction,
+    flag_new,
     sort_by_publication_date,
 )
 from aiagent.domain.ports import (
@@ -114,6 +115,7 @@ def run_agent_research(
     critic: ResultCritic | None = None,
     clarifier: ClarificationRequester | None = None,
     clarification: str | None = None,
+    seen_urls: set[str] | None = None,
     max_steps: int = 5,
 ) -> list[ResearchResult] | None:
     """Runs the decision loop, then enriches, sorts and delivers like the
@@ -130,7 +132,7 @@ def run_agent_research(
     try:
         sink.mark_started(job_id)
         hits: list[RawSearchHit] = []
-        seen_urls: set[str] = set()
+        collected_urls: set[str] = set()
         steps: list[AgentStep] = []
 
         for seq in range(1, max_steps + 1):
@@ -143,8 +145,8 @@ def run_agent_research(
                 return None
             if isinstance(action, SearchAction):
                 found = search.search(action.query)
-                new = [h for h in found if h.url not in seen_urls]
-                seen_urls.update(h.url for h in new)
+                new = [h for h in found if h.url not in collected_urls]
+                collected_urls.update(h.url for h in new)
                 hits.extend(new)
                 step = AgentStep(
                     seq=seq,
@@ -176,6 +178,26 @@ def run_agent_research(
             hits = _self_critique(job_id, goal, hits, steps, search, critic, reporter, max_steps)
 
         results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
+        if seen_urls is not None:
+            # Recurring run (ADR-033): flag the delta against previous runs
+            # and journal the verdict — the agent says whether the run was
+            # worth it before delivering.
+            results = flag_new(results, seen_urls)
+            new_count = sum(1 for r in results if r.is_new)
+            reason = (
+                f"{new_count} new result(s) since the last run"
+                if new_count
+                else "Nothing new since the last run"
+            )
+            report = AgentStep(
+                seq=steps[-1].seq + 1 if steps else 1,
+                kind=AgentStepKind.REPORT,
+                detail="",
+                reason=reason,
+                new_hits=new_count,
+            )
+            steps.append(report)
+            _report(reporter, job_id, report)
         sink.deliver(job_id, results)
         return results
     except Exception as exc:

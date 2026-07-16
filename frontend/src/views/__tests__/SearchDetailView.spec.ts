@@ -28,6 +28,7 @@ const completedAgentJob: SearchJobDetail = {
   error: null,
   question: null,
   answer: null,
+  recurring_search_id: null,
   created_at: "2026-07-01T00:00:00Z",
   completed_at: "2026-07-01T00:00:10Z",
   steps: [
@@ -43,6 +44,7 @@ const completedAgentJob: SearchJobDetail = {
       date_confidence: "high",
       event_type: "release",
       summary: "A release.",
+      is_new: true,
     },
   ],
 };

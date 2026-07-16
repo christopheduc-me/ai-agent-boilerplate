@@ -21,6 +21,11 @@ struct TaskRequest<'a> {
     /// null on the first dispatch.
     clarification: Option<&'a str>,
     mode: crate::domain::JobMode,
+    /// Recurring-search run (ADR-033): when true the agent flags the delta
+    /// against `seen_urls` (empty on the first run) and journals a report.
+    recurring: bool,
+    /// URLs delivered by previous runs of the recurring search.
+    seen_urls: &'a [String],
 }
 
 impl HttpJobDispatcher {
@@ -35,7 +40,7 @@ impl HttpJobDispatcher {
 
 #[async_trait]
 impl JobDispatcher for HttpJobDispatcher {
-    async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError> {
+    async fn dispatch(&self, job: &ResearchJob, seen_urls: &[String]) -> Result<(), PortError> {
         // Distributed tracing (ADR-029): carry the W3C trace context so the
         // agent joins the same trace. Empty when telemetry is disabled.
         let mut trace_headers = reqwest::header::HeaderMap::new();
@@ -53,6 +58,8 @@ impl JobDispatcher for HttpJobDispatcher {
                 keyword: &job.keyword,
                 clarification: job.answer.as_deref(),
                 mode: job.mode,
+                recurring: job.recurring_search_id.is_some(),
+                seen_urls,
             })
             .send()
             .await
@@ -75,7 +82,7 @@ pub struct NoopJobDispatcher;
 
 #[async_trait]
 impl JobDispatcher for NoopJobDispatcher {
-    async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError> {
+    async fn dispatch(&self, job: &ResearchJob, _seen_urls: &[String]) -> Result<(), PortError> {
         tracing::warn!(job_id = %job.id, "NoopJobDispatcher: job not sent to any agent");
         Ok(())
     }
@@ -129,7 +136,7 @@ mod tests {
         let dispatcher = HttpJobDispatcher::new(base_url, "secret".into());
         let job = ResearchJob::new(Uuid::new_v4(), "keyword").unwrap();
 
-        dispatcher.dispatch(&job).await.unwrap();
+        dispatcher.dispatch(&job, &[]).await.unwrap();
 
         let calls = seen.lock().unwrap();
         // No telemetry configured (ADR-029): no traceparent leaks out.
@@ -159,7 +166,11 @@ mod tests {
             let dispatcher = HttpJobDispatcher::new(base_url, "secret".into());
             let job = ResearchJob::new(Uuid::new_v4(), "keyword").unwrap();
             let span = tracing::info_span!("http_request");
-            dispatcher.dispatch(&job).instrument(span).await.unwrap();
+            dispatcher
+                .dispatch(&job, &[])
+                .instrument(span)
+                .await
+                .unwrap();
         }
         .with_subscriber(subscriber)
         .await;

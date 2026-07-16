@@ -51,7 +51,12 @@ impl AnswerClarification {
         self.jobs.clear_steps(job_id).await?;
         self.jobs.update(&job).await?;
 
-        if let Err(err) = self.dispatcher.dispatch(&job).await {
+        // A recurring run keeps its memory across the pause (ADR-033).
+        let seen_urls = match job.recurring_search_id {
+            Some(rs_id) => self.jobs.recent_urls_for_recurring(rs_id, 200).await?,
+            None => Vec::new(),
+        };
+        if let Err(err) = self.dispatcher.dispatch(&job, &seen_urls).await {
             job.fail(format!("dispatch failed: {err}"));
             self.jobs.update(&job).await?;
             return Err(AnswerError::DispatchFailed);
@@ -85,7 +90,7 @@ mod tests {
 
     #[async_trait]
     impl JobDispatcher for RecordingDispatcher {
-        async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError> {
+        async fn dispatch(&self, job: &ResearchJob, _seen: &[String]) -> Result<(), PortError> {
             if self.fail {
                 return Err(PortError("agent unreachable".into()));
             }

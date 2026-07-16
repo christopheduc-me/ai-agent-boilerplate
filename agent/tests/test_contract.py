@@ -99,6 +99,13 @@ def test_agent_consumes_the_task_request_clarification() -> None:
     assert request.clarification is None  # first dispatch: no answer yet
 
 
+def test_agent_consumes_the_task_request_recurring_memory() -> None:
+    request = TaskRequest(**load("task-request.json"))
+    # One-shot dispatch (ADR-033): not a recurring run, no memory.
+    assert request.recurring is False
+    assert request.seen_urls == []
+
+
 def test_agent_produces_the_question_callback_shape() -> None:
     # HttpResultSink.request_clarification posts {"question": <str>} (ADR-032).
     fixture = load("question-callback.json")

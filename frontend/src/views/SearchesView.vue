@@ -2,7 +2,7 @@
 import { onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
-import { api, ApiError, type JobMode, type SearchJob } from "@/api";
+import { api, ApiError, type JobMode, type RecurringSearch, type SearchJob } from "@/api";
 import { useAuthStore } from "@/stores/auth";
 
 const auth = useAuthStore();
@@ -14,9 +14,43 @@ const jobs = ref<SearchJob[]>([]);
 const error = ref<string | null>(null);
 const busy = ref(false);
 
+// Recurring searches (ADR-033).
+const recurring = ref<RecurringSearch[]>([]);
+const recurringKeyword = ref("");
+const recurringMode = ref<JobMode>("agent");
+const recurringInterval = ref(60);
+const recurringError = ref<string | null>(null);
+
 async function refresh(): Promise<void> {
   try {
     jobs.value = await auth.withAuth((token) => api.listSearches(token));
+    recurring.value = await auth.withAuth((token) => api.listRecurring(token));
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) router.push({ name: "login" });
+  }
+}
+
+async function createRecurring(): Promise<void> {
+  recurringError.value = null;
+  try {
+    await auth.withAuth((token) =>
+      api.createRecurring(recurringKeyword.value, recurringMode.value, recurringInterval.value, token),
+    );
+    recurringKeyword.value = "";
+    await refresh();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      router.push({ name: "login" });
+      return;
+    }
+    recurringError.value = e instanceof ApiError ? e.message : "unexpected error";
+  }
+}
+
+async function removeRecurring(id: string): Promise<void> {
+  try {
+    await auth.withAuth((token) => api.deleteRecurring(id, token));
+    await refresh();
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) router.push({ name: "login" });
   }
@@ -73,6 +107,43 @@ onMounted(refresh);
     </div>
     <p v-if="error" class="error">{{ error }}</p>
 
+    <!-- Recurring searches with memory (ADR-033): the backend scheduler
+         re-runs them; results are flagged new/seen against previous runs. -->
+    <section class="recurring" data-testid="recurring-section">
+      <h2>Recurring searches</h2>
+      <p class="pitch">
+        Saved searches re-run automatically. Each run remembers the previous ones: results are
+        flagged <strong>new</strong> or already seen, and the agent reports the delta.
+      </p>
+      <form data-testid="recurring-form" @submit.prevent="createRecurring">
+        <input v-model="recurringKeyword" placeholder="Keyword to watch" required />
+        <select v-model="recurringMode" aria-label="Mode">
+          <option value="agent">agent</option>
+          <option value="workflow">workflow</option>
+        </select>
+        <label class="interval">
+          every
+          <input v-model.number="recurringInterval" type="number" min="1" max="10080" required />
+          min
+        </label>
+        <button type="submit">Watch</button>
+      </form>
+      <p v-if="recurringError" class="error">{{ recurringError }}</p>
+      <ul>
+        <li v-for="search in recurring" :key="search.id" :data-testid="`recurring-${search.id}`">
+          <strong>{{ search.keyword }}</strong>
+          <span class="mode" :data-mode="search.mode">{{ search.mode }}</span>
+          — every {{ search.interval_minutes }} min
+          <span v-if="search.last_run_at" class="last-run">
+            (last run {{ new Date(search.last_run_at).toLocaleString() }})</span
+          >
+          <span v-else class="last-run"> (first run pending)</span>
+          <button type="button" class="delete" @click="removeRecurring(search.id)">Delete</button>
+        </li>
+      </ul>
+      <p v-if="recurring.length === 0" class="pitch">Nothing watched yet.</p>
+    </section>
+
     <h2>Previous searches</h2>
     <ul>
       <li v-for="job in jobs" :key="job.id">
@@ -124,5 +195,49 @@ onMounted(refresh);
 .mode[data-mode="agent"] {
   background: #eaf6ee;
   border-color: #b7dcc2;
+}
+.recurring {
+  margin: 1rem 0;
+  padding: 1rem;
+  border: 1px solid #dde5ee;
+  border-radius: 6px;
+}
+.recurring h2 {
+  margin: 0 0 0.25rem;
+}
+.recurring form {
+  display: flex;
+  gap: 0.5rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+.recurring form input:first-child {
+  flex: 1;
+  min-width: 160px;
+}
+.interval {
+  display: flex;
+  gap: 0.3rem;
+  align-items: center;
+}
+.interval input {
+  width: 4.5rem;
+}
+.recurring ul {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+.recurring li {
+  padding: 0.25rem 0;
+}
+.last-run {
+  color: #666;
+  font-size: 0.85rem;
+}
+.delete {
+  margin-left: 0.6rem;
+  font-size: 0.8rem;
 }
 </style>

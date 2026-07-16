@@ -16,6 +16,7 @@ def serialize_result(result: ResearchResult) -> dict[str, Any]:
         "date_confidence": result.date_confidence.value,
         "event_type": result.event_type.value,
         "summary": result.summary,
+        "is_new": result.is_new,
         "raw": result.raw,
     }
 

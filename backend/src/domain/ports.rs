@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{AgentStep, RefreshToken, ResearchJob, SearchResult, User};
+use super::{AgentStep, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User};
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +45,26 @@ pub trait JobRepository: Send + Sync {
     /// Replace semantics on resume (ADR-032): answering a clarification
     /// re-runs the loop from scratch, so the journal starts fresh too.
     async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError>;
+    /// URLs already delivered by previous runs of a recurring search — the
+    /// memory the agent receives to flag deltas (ADR-033). Most recent first,
+    /// capped by `limit` to bound the task payload.
+    async fn recent_urls_for_recurring(
+        &self,
+        recurring_search_id: Uuid,
+        limit: u32,
+    ) -> Result<Vec<String>, PortError>;
+}
+
+/// Saved searches re-run by the scheduler (ADR-033).
+#[async_trait]
+pub trait RecurringSearchRepository: Send + Sync {
+    async fn insert(&self, search: &RecurringSearch) -> Result<(), PortError>;
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError>;
+    /// Deletes the user's recurring search; false when unknown or foreign.
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError>;
+    /// Every recurring search due at `now` (never run, or interval elapsed).
+    async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError>;
+    async fn mark_ran(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError>;
 }
 
 /// Persisted refresh tokens (ADR-008): stored hashed, single use (rotation).
@@ -58,9 +78,11 @@ pub trait RefreshTokenRepository: Send + Sync {
 }
 
 /// Sends a research job to the agent (via the FastAPI micro-API, see ADR-005).
+/// `seen_urls` is the recurring-search memory (ADR-033): URLs delivered by
+/// previous runs, empty for one-shot searches.
 #[async_trait]
 pub trait JobDispatcher: Send + Sync {
-    async fn dispatch(&self, job: &ResearchJob) -> Result<(), PortError>;
+    async fn dispatch(&self, job: &ResearchJob, seen_urls: &[String]) -> Result<(), PortError>;
 }
 
 pub trait PasswordHasher: Send + Sync {

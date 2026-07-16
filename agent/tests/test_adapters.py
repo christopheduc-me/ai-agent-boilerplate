@@ -189,6 +189,7 @@ def test_sink_delivers_serialized_results_with_internal_token() -> None:
             "date_confidence": "high",
             "event_type": "other",
             "summary": None,
+            "is_new": True,
             "raw": {"k": "v"},
         }
     ]
