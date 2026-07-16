@@ -6,6 +6,7 @@ from pydantic import ValidationError
 from aiagent.adapters.fake import (
     FakeAgentPolicy,
     FakeHitEnricher,
+    FakePageDateFetcher,
     FakeResultCritic,
     FakeSearchProvider,
 )
@@ -41,9 +42,10 @@ class NullSink:
 
 
 def test_build_providers_selects_fakes() -> None:
-    search, enricher = build_providers(settings_with("fake"))
+    search, enricher, page_dates = build_providers(settings_with("fake"))
     assert isinstance(search, FakeSearchProvider)
     assert isinstance(enricher, FakeHitEnricher)
+    assert isinstance(page_dates, FakePageDateFetcher)
 
 
 def test_build_providers_live_requires_credentials(monkeypatch) -> None:
@@ -56,18 +58,27 @@ def test_build_providers_live_requires_credentials(monkeypatch) -> None:
 
 
 def test_fake_run_exercises_the_full_date_cascade() -> None:
-    """One deterministic run covers high/medium/unknown confidence and sorting."""
-    results = run_research("job-1", "anything", FakeSearchProvider(), FakeHitEnricher(), NullSink())
+    """One deterministic run covers every cascade stage (ADR-011/035) + sorting."""
+    results = run_research(
+        "job-1",
+        "anything",
+        FakeSearchProvider(),
+        FakeHitEnricher(),
+        NullSink(),
+        page_dates=FakePageDateFetcher(),
+    )
 
     titles = [r.title for r in results]
     assert titles == [
-        "fake-dated-recent",  # 2026 — newest first
-        "fake-llm-datable",  # 2025 — date found by the fake LLM
+        "fake-dated-recent",  # 2026-05 — provider date, newest first
+        "fake-page-datable",  # 2025-12 — date declared by the page (ADR-035)
+        "fake-llm-datable",  # 2025-08 — date found by the fake LLM
         "fake-dated-old",  # 2023
         "fake-undatable",  # no date — always last
     ]
     by_title = {r.title: r for r in results}
     assert by_title["fake-dated-recent"].date_confidence == DateConfidence.HIGH
+    assert by_title["fake-page-datable"].date_confidence == DateConfidence.HIGH
     assert by_title["fake-llm-datable"].date_confidence == DateConfidence.MEDIUM
     assert by_title["fake-undatable"].date_confidence == DateConfidence.UNKNOWN
     # Enrichment (ADR-027): deterministic event type and summary on every result.
@@ -102,7 +113,7 @@ def test_build_policy_selects_the_fake(monkeypatch) -> None:
 
 def test_fake_critic_returns_a_stable_non_destructive_review() -> None:
     critique = FakeResultCritic().critique("rust", FakeSearchProvider().search("rust"))
-    assert "All 4 results" in critique.assessment
+    assert "All 5 results" in critique.assessment
     assert critique.irrelevant_urls == () and critique.gap_query is None
 
 

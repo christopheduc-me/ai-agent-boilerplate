@@ -35,7 +35,7 @@ def test_task_runs_end_to_end_with_fake_providers(fake_env) -> None:
 
     count = run_research_task("job-1", "keyword", request_id="corr-1")
 
-    assert count == 4  # the four deterministic fake hits
+    assert count == 5  # the five deterministic fake hits
     assert started.called
     assert results.called
     # Correlation (ADR-018) rides on every callback.
@@ -98,7 +98,7 @@ def test_agent_mode_runs_the_loop_and_reports_the_journal(fake_env) -> None:
     count = run_research_task("job-5", "keyword", mode="agent")
 
     # Fake policy: search -> refine (0 new, dedup) -> finish (ADR-030).
-    assert count == 4
+    assert count == 5
     assert steps.call_count == 4
     assert results.called
     import json as _json
@@ -128,7 +128,7 @@ def test_agent_mode_pauses_on_an_ambiguous_goal_and_resumes_with_the_answer(fake
 
     # Re-dispatch with the user's answer: the loop runs to completion.
     count = run_research_task("job-6", "ambiguous topic", mode="agent", clarification="cars")
-    assert count == 4
+    assert count == 5
     assert results.called
     kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
     assert kinds == ["search", "search", "finish", "critique"]
@@ -144,17 +144,18 @@ def test_recurring_run_flags_the_delta_and_reports_it(fake_env) -> None:
         return_value=httpx.Response(204)
     )
 
-    # The memory covers two of the four fake URLs (ADR-033).
+    # The memory covers two of the five fake URLs (ADR-033).
     seen = ["https://example.com/old", "https://example.com/recent"]
     count = run_research_task("job-7", "keyword", mode="agent", recurring=True, seen_urls=seen)
 
-    assert count == 4
+    assert count == 5
     payload = json.loads(results.calls.last.request.content)
     by_url = {r["url"]: r["is_new"] for r in payload["results"]}
     assert by_url["https://example.com/old"] is False
     assert by_url["https://example.com/recent"] is False
     assert by_url["https://example.com/llm"] is True
+    assert by_url["https://example.com/page"] is True
     # Journal: search, search, finish, critique, then the delta report.
     kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
     assert kinds == ["search", "search", "finish", "critique", "report"]
-    assert json.loads(steps.calls.last.request.content)["new_hits"] == 2
+    assert json.loads(steps.calls.last.request.content)["new_hits"] == 3

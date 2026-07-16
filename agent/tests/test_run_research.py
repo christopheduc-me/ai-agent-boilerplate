@@ -116,6 +116,38 @@ def test_workflow_recurring_run_flags_seen_urls() -> None:
     assert {r.url: r.is_new for r in results} == {"https://x/a": False, "https://x/b": True}
 
 
+class RecordingPageDates:
+    """Returns a fixed date and records which URLs were actually fetched."""
+
+    def __init__(self, date: datetime | None) -> None:
+        self.date = date
+        self.fetched: list[str] = []
+
+    def fetch_published_date(self, url: str) -> datetime | None:
+        self.fetched.append(url)
+        return self.date
+
+
+def test_page_declared_date_ranks_high_and_beats_the_llm() -> None:
+    # ADR-035: the page's own metadata wins over the LLM guess, at high
+    # confidence — and provider-dated hits are never fetched (cost guard).
+    hits = [
+        hit("provider-dated", published_at=datetime(2026, 1, 1, tzinfo=UTC)),
+        hit("page-dated"),
+    ]
+    page_dates = RecordingPageDates(datetime(2025, 6, 1, tzinfo=UTC))
+    enricher = FakeEnricher(known={"page-dated": datetime(2020, 1, 1, tzinfo=UTC)})
+    sink = RecordingSink()
+
+    results = run_research("job-p", "kw", FakeSearch(hits), enricher, sink, page_dates=page_dates)
+
+    by_title = {r.title: r for r in results}
+    assert by_title["page-dated"].date_confidence == DateConfidence.HIGH
+    assert by_title["page-dated"].published_at == datetime(2025, 6, 1, tzinfo=UTC)
+    # Only the undated hit was fetched.
+    assert page_dates.fetched == ["https://x/page-dated"]
+
+
 def test_workflow_deduplicates_retagged_urls() -> None:
     # ADR-034: the same article under different tracking params counts once.
     hits = [

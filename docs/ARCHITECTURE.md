@@ -962,6 +962,27 @@ Applied at every URL comparison:
 The backend stays unchanged: it stores and forwards raw URLs; canonicalization
 is a domain concern of the brick that compares them.
 
+### ADR-035 — Date cascade stage 2: the page's own metadata (decided 2026-07-16, extends ADR-011)
+
+**Context**: for hits without a provider date, the cascade jumped straight to
+the LLM — a paid call returning a `medium`-confidence guess, when most
+publishers embed the exact date in the page itself.
+
+**Decision**: a **`PageDateFetcher` port** inserted between the provider date
+and the LLM: fetch the page (only when the provider gave no date — cost
+guard), read **JSON-LD `datePublished`** (object, list and `@graph` shapes)
+then **OpenGraph `article:published_time`**. Publisher-declared metadata is
+source-authoritative, so it ranks **`high`** — the full cascade is now:
+provider (high) → page metadata (high, ADR-035) → LLM (medium) → unknown.
+
+Implementation notes: stdlib parsing (`html.parser` + `json`), bounded fetch
+(10 s timeout, download capped at 512 KiB — the metadata lives in `<head>`),
+and silent degradation: a dead page, malformed HTML or garbage dates mean "no
+date, continue the cascade", never a failed job. The fake stack gains a
+`fake-page-datable` hit so the keyless e2e demonstrates every cascade stage.
+The LLM enrichment call still runs for every hit (event type + summary,
+ADR-027) — stage 2 improves the date, it does not replace the enrichment.
+
 ---
 
 ## 4. API contracts (summary)

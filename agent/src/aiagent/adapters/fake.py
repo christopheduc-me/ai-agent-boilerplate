@@ -2,8 +2,8 @@
 
 No network, no API key. Used by the e2e smoke test in CI (the paid-service ban
 of ADR-012 applies to CI end to end) and for keyless local development. The
-three hits exercise the whole date cascade (ADR-011): provider date (high),
-LLM-extracted date (medium), unknown.
+hits exercise the whole date cascade (ADR-011/035): provider date (high),
+page-declared date (high, ADR-035), LLM-extracted date (medium), unknown.
 """
 
 from datetime import UTC, datetime
@@ -40,6 +40,13 @@ class FakeSearchProvider:
                 raw=raw,
             ),
             RawSearchHit(
+                title="fake-page-datable",
+                url="https://example.com/page",
+                snippet=f"Article about {keyword} whose page declares its date (ADR-035)",
+                published_at=None,
+                raw=raw,
+            ),
+            RawSearchHit(
                 title="fake-llm-datable",
                 url="https://example.com/llm",
                 snippet=f"Article about {keyword} whose date only the LLM can find",
@@ -54,6 +61,16 @@ class FakeSearchProvider:
                 raw=raw,
             ),
         ]
+
+
+class FakePageDateFetcher:
+    """Deterministic stage 2 (ADR-035): only the hit designed for it has a
+    page-declared date — ranked high, above the LLM's medium."""
+
+    def fetch_published_date(self, url: str) -> datetime | None:
+        if url == "https://example.com/page":
+            return datetime(2025, 12, 1, tzinfo=UTC)
+        return None
 
 
 class FakeHitEnricher:

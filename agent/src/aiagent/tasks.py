@@ -5,23 +5,40 @@ import logging
 from aiagent.application import run_agent_research, run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
-from aiagent.domain.ports import AgentPolicy, HitEnricher, ResultCritic, SearchProvider
+from aiagent.domain.ports import (
+    AgentPolicy,
+    HitEnricher,
+    PageDateFetcher,
+    ResultCritic,
+    SearchProvider,
+)
 
 logger = logging.getLogger(__name__)
 
 
-def build_providers(settings: Settings) -> tuple[SearchProvider, HitEnricher]:
-    """Selects the provider adapters (ADR-021): live (Tavily + Claude) by
-    default, deterministic fakes with `AGENT_PROVIDERS=fake`."""
+def build_providers(
+    settings: Settings,
+) -> tuple[SearchProvider, HitEnricher, PageDateFetcher]:
+    """Selects the provider adapters (ADR-021): live (Tavily + Claude + page
+    metadata) by default, deterministic fakes with `AGENT_PROVIDERS=fake`."""
     if settings.providers == "fake":
-        from aiagent.adapters.fake import FakeHitEnricher, FakeSearchProvider
+        from aiagent.adapters.fake import (
+            FakeHitEnricher,
+            FakePageDateFetcher,
+            FakeSearchProvider,
+        )
 
-        return FakeSearchProvider(), FakeHitEnricher()
+        return FakeSearchProvider(), FakeHitEnricher(), FakePageDateFetcher()
 
     from aiagent.adapters.llm import ClaudeHitEnricher
+    from aiagent.adapters.page import HttpPageDateFetcher
     from aiagent.adapters.tavily import TavilySearchProvider
 
-    return TavilySearchProvider(), ClaudeHitEnricher(settings.agent_model_id)
+    return (
+        TavilySearchProvider(),
+        ClaudeHitEnricher(settings.agent_model_id),
+        HttpPageDateFetcher(),
+    )
 
 
 def build_policy(settings: Settings) -> AgentPolicy:
@@ -85,7 +102,7 @@ def run_research_task(
         request_id=request_id,
     )
     try:
-        search, enricher = build_providers(settings)
+        search, enricher, page_dates = build_providers(settings)
         policy = build_policy(settings) if mode == "agent" else None
         critic = build_critic(settings) if mode == "agent" else None
     except Exception as exc:
@@ -115,6 +132,7 @@ def run_research_task(
                 clarifier=sink,
                 clarification=clarification,
                 seen_urls=memory,
+                page_dates=page_dates,
                 max_steps=settings.agent_max_steps,
             )
             if outcome is None:
@@ -124,7 +142,9 @@ def run_research_task(
                 return 0
             results = outcome
         else:
-            results = run_research(job_id, keyword, search, enricher, sink, seen_urls=memory)
+            results = run_research(
+                job_id, keyword, search, enricher, sink, seen_urls=memory, page_dates=page_dates
+            )
     except Exception:
         logger.error("research task failed", extra=log_ctx, exc_info=True)
         raise

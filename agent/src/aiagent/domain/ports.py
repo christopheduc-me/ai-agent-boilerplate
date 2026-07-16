@@ -1,5 +1,6 @@
 """Ports (hexagonal architecture): the use case depends only on these Protocols."""
 
+from datetime import datetime
 from typing import Protocol
 
 from aiagent.domain.models import (
@@ -46,6 +47,15 @@ class StepReporter(Protocol):
     Best-effort by contract: a failed report never fails the job."""
 
     def report_step(self, job_id: str, step: AgentStep) -> None: ...
+
+
+class PageDateFetcher(Protocol):
+    """Stage 2 of the date cascade (ADR-035): reads the publication date the
+    page itself declares (JSON-LD / OpenGraph). Source-authoritative, so its
+    dates rank `high` — above the LLM's guess. Must never raise: an
+    unreachable or unparseable page simply returns None."""
+
+    def fetch_published_date(self, url: str) -> datetime | None: ...
 
 
 class HitEnricher(Protocol):

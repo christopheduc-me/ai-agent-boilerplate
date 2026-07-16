@@ -23,9 +23,16 @@ test("register, launch a search and read the results timeline", async ({ page })
   await expect(page.getByRole("heading", { name: "“playwright e2e”" })).toBeVisible();
   await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
 
-  // Timeline (ADR-027): month groups in date order, newest first.
+  // Timeline (ADR-027): month groups in date order, newest first — one per
+  // date-cascade stage (ADR-011/035).
   const months = page.locator(".timeline h3");
-  await expect(months).toHaveText(["May 2026", "August 2025", "January 2023", "Unknown date"]);
+  await expect(months).toHaveText([
+    "May 2026",
+    "December 2025",
+    "August 2025",
+    "January 2023",
+    "Unknown date",
+  ]);
 
   // The LLM-dated hit is marked as estimated; every hit carries the fake
   // enrichment (event badge + summary).
@@ -63,7 +70,7 @@ test("the agent demo streams the decision journal and renders the timeline", asy
   await expect(journal.locator("li[data-kind='search']").nth(1)).toContainText("0 new results");
   await expect(journal.locator("li[data-kind='finish']")).toContainText("coverage looks sufficient");
   await expect(journal.locator("li[data-kind='critique']")).toContainText("reviewed the results");
-  await expect(journal.locator("li[data-kind='critique']")).toContainText("All 4 results relate");
+  await expect(journal.locator("li[data-kind='critique']")).toContainText("All 5 results relate");
 
   // The loop's results land in the same timeline as the workflow mode.
   await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });

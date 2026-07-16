@@ -51,9 +51,9 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 
 ## P3 — Agent product quality
 
-- [ ] **Date cascade stage 2 (ADR-011)**: fetch the page and read JSON-LD
-      `datePublished` / OpenGraph before falling back to the LLM — cheaper and
-      `high` confidence instead of `medium`.
+- [x] **Date cascade stage 2 (ADR-035)** — done: `PageDateFetcher` port reads
+      JSON-LD `datePublished` / OpenGraph `article:published_time` before the
+      LLM fallback — `high` confidence, bounded fetch, silent degradation.
 - [x] **URL normalization + deduplication (ADR-034)** — done: canonical URLs
       (tracking params, fragments, ports, param order) used for workflow and
       loop deduplication and for the ADR-033 memory matching; displayed URLs

@@ -61,15 +61,17 @@ done
 
 say "checking results (sorted, full date cascade)"
 TITLES=$(json_get "$DETAIL" '",".join(r["title"] for r in data["results"])')
-EXPECTED="fake-dated-recent,fake-llm-datable,fake-dated-old,fake-undatable"
+EXPECTED="fake-dated-recent,fake-page-datable,fake-llm-datable,fake-dated-old,fake-undatable"
 [ "$TITLES" = "$EXPECTED" ] \
   || fail "unexpected result order: got [$TITLES], expected [$EXPECTED]"
+# Full date cascade (ADR-011/035): provider high, page-declared high,
+# LLM medium, unknown.
 CONFIDENCES=$(json_get "$DETAIL" '",".join(r["date_confidence"] for r in data["results"])')
-[ "$CONFIDENCES" = "high,medium,high,unknown" ] \
+[ "$CONFIDENCES" = "high,high,medium,high,unknown" ] \
   || fail "unexpected confidences: $CONFIDENCES"
 # Timeline enrichment (ADR-027): event type + summary flow end to end.
 EVENT_TYPES=$(json_get "$DETAIL" '",".join(r["event_type"] for r in data["results"])')
-[ "$EVENT_TYPES" = "announcement,announcement,announcement,announcement" ] \
+[ "$EVENT_TYPES" = "announcement,announcement,announcement,announcement,announcement" ] \
   || fail "unexpected event types: $EVENT_TYPES"
 FIRST_SUMMARY=$(json_get "$DETAIL" 'data["results"][0]["summary"]')
 [ "$FIRST_SUMMARY" = "Fake summary for fake-dated-recent" ] \
@@ -100,14 +102,14 @@ STEP_KINDS=$(json_get "$AGENT_DETAIL" '",".join(s["kind"] for s in data["steps"]
 # -> reasoned finish -> self-critique review.
 [ "$STEP_KINDS" = "search,search,finish,critique" ] || fail "unexpected steps: $STEP_KINDS"
 NEW_HITS=$(json_get "$AGENT_DETAIL" '",".join(str(s["new_hits"]) for s in data["steps"])')
-[ "$NEW_HITS" = "4,0,0,0" ] || fail "unexpected new_hits: $NEW_HITS"
+[ "$NEW_HITS" = "5,0,0,0" ] || fail "unexpected new_hits: $NEW_HITS"
 CRITIQUE=$(json_get "$AGENT_DETAIL" 'data["steps"][-1]["reason"]')
 case "$CRITIQUE" in
-  "All 4 results relate to the goal"*) ;;
+  "All 5 results relate to the goal"*) ;;
   *) fail "unexpected critique reason: $CRITIQUE" ;;
 esac
 AGENT_RESULTS=$(json_get "$AGENT_DETAIL" 'len(data["results"])')
-[ "$AGENT_RESULTS" = "4" ] || fail "unexpected agent result count: $AGENT_RESULTS"
+[ "$AGENT_RESULTS" = "5" ] || fail "unexpected agent result count: $AGENT_RESULTS"
 
 say "launch an ambiguous agent search (HITL, ADR-032)"
 HITL=$(curl -sf -X POST "$BASE_URL/api/searches" \
@@ -144,7 +146,7 @@ for _ in $(seq 1 30); do
 done
 [ "$HITL_STATUS" = "completed" ] || fail "HITL job still '$HITL_STATUS' after the answer"
 [ "$(json_get "$HITL_DETAIL" 'data["answer"]')" = "the cars" ] || fail "answer not stored"
-[ "$(json_get "$HITL_DETAIL" 'len(data["results"])')" = "4" ] || fail "HITL results missing"
+[ "$(json_get "$HITL_DETAIL" 'len(data["results"])')" = "5" ] || fail "HITL results missing"
 HITL_KINDS=$(json_get "$HITL_DETAIL" '",".join(s["kind"] for s in data["steps"])')
 # Fresh journal after the resume (replace semantics): the full loop + critique.
 [ "$HITL_KINDS" = "search,search,finish,critique" ] || fail "unexpected HITL steps: $HITL_KINDS"
@@ -172,7 +174,7 @@ RUN1=$(curl -sf "$BASE_URL/api/searches/$RUN1_ID" -H "authorization: Bearer $TOK
 [ "$(json_get "$RUN1" 'all(r["is_new"] for r in data["results"])')" = "True" ] \
   || fail "first recurring run: everything should be new"
 [ "$(json_get "$RUN1" 'data["steps"][-1]["kind"]')" = "report" ] || fail "missing report step"
-[ "$(json_get "$RUN1" 'data["steps"][-1]["new_hits"]')" = "4" ] || fail "first run should report 4 new"
+[ "$(json_get "$RUN1" 'data["steps"][-1]["new_hits"]')" = "5" ] || fail "first run should report 5 new"
 
 say "wait for the second run — the memory flags everything as already seen"
 RUN2_ID=""

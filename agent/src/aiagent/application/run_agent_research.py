@@ -26,6 +26,7 @@ from aiagent.domain.ports import (
     AgentPolicy,
     ClarificationRequester,
     HitEnricher,
+    PageDateFetcher,
     ResultCritic,
     ResultSink,
     SearchProvider,
@@ -117,6 +118,7 @@ def run_agent_research(
     clarifier: ClarificationRequester | None = None,
     clarification: str | None = None,
     seen_urls: set[str] | None = None,
+    page_dates: PageDateFetcher | None = None,
     max_steps: int = 5,
 ) -> list[ResearchResult] | None:
     """Runs the decision loop, then enriches, sorts and delivers like the
@@ -180,7 +182,7 @@ def run_agent_research(
         if critic is not None:
             hits = _self_critique(job_id, goal, hits, steps, search, critic, reporter, max_steps)
 
-        results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
+        results = sort_by_publication_date([resolve_hit(hit, enricher, page_dates) for hit in hits])
         if seen_urls is not None:
             # Recurring run (ADR-033): flag the delta against previous runs
             # and journal the verdict — the agent says whether the run was
