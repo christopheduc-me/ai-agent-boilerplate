@@ -135,10 +135,30 @@ def sort_by_publication_date(results: list[ResearchResult]) -> list[ResearchResu
 
 def flag_new(results: list[ResearchResult], seen_urls: set[str]) -> list[ResearchResult]:
     """Marks results already delivered by previous runs of a recurring search
-    (ADR-033). URLs outside the memory stay new."""
+    (ADR-033). Comparison uses canonical URLs (ADR-034), so a re-tagged link
+    (tracking parameters, fragment…) does not masquerade as new."""
     from dataclasses import replace
 
-    return [replace(r, is_new=r.url not in seen_urls) for r in results]
+    from aiagent.domain.urls import normalize_url
+
+    seen_keys = {normalize_url(url) for url in seen_urls}
+    return [replace(r, is_new=normalize_url(r.url) not in seen_keys) for r in results]
+
+
+def dedupe_hits(hits: list[RawSearchHit]) -> list[RawSearchHit]:
+    """Drops hits whose canonical URL (ADR-034) was already seen, keeping the
+    first occurrence — the same article under different tracking parameters
+    must not count twice."""
+    from aiagent.domain.urls import normalize_url
+
+    seen: set[str] = set()
+    kept: list[RawSearchHit] = []
+    for hit in hits:
+        key = normalize_url(hit.url)
+        if key not in seen:
+            seen.add(key)
+            kept.append(hit)
+    return kept
 
 
 def as_utc(value: datetime) -> datetime:

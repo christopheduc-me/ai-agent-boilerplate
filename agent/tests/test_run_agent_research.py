@@ -328,6 +328,55 @@ def test_ask_pauses_the_job_without_delivering() -> None:
     assert search.queries == []
 
 
+# ---------------------------------------------------------------- URL canonicalization (ADR-034)
+
+
+def test_loop_deduplicates_retagged_urls_across_searches() -> None:
+    search = MappedSearch(
+        {
+            "q": [hit("https://ex.com/post?utm_source=a")],
+            "q2": [hit("https://EX.com/post/?fbclid=x"), hit("https://ex.com/other")],
+        }
+    )
+    policy = ScriptedPolicy(
+        [
+            SearchAction(query="q", reason="r"),
+            SearchAction(query="q2", reason="r"),
+            FinishAction(reason="done"),
+        ]
+    )
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-15", "goal", search, NeutralEnricher(), policy, sink, reporter, max_steps=5
+    )
+
+    # The retagged duplicate is dropped; the journal counts it as 0 new.
+    assert results is not None and len(results) == 2
+    assert reporter.steps[1].new_hits == 1  # only /other was new in q2
+
+
+def test_memory_matches_canonical_urls() -> None:
+    search = MappedSearch({"q": [hit("https://ex.com/post?utm_campaign=relaunch")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-16",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        seen_urls={"https://ex.com/post"},  # stored without the tracking tag
+        max_steps=5,
+    )
+
+    assert results is not None and results[0].is_new is False
+    assert reporter.steps[-1].reason == "Nothing new since the last run"
+
+
 # ---------------------------------------------------------------- recurring memory (ADR-033)
 
 

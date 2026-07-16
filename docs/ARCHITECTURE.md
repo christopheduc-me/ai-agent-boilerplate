@@ -933,9 +933,34 @@ live in time, not only answer one-shot requests.
    of a recurring fake search reports "Nothing new" — asserted end to end by
    the smoke script (fast tick in the e2e environment).
 
-URL normalization (tracking parameters) remains in ROADMAP P3: until then the
-memory matches exact URLs, which is correct for the fakes and conservative
-for live providers (a changed tracking parameter shows up as new).
+URL matching uses canonical URLs since ADR-034.
+
+### ADR-034 — Canonical URLs: deduplication and memory matching (decided 2026-07-15)
+
+**Context**: search providers return the same article under cosmetically
+different URLs — tracking parameters (`utm_*`, `fbclid`…), fragments, host
+casing, parameter order. That double-counts results in one run and, worse,
+makes the recurring-search memory (ADR-033) report retagged links as new.
+
+**Decision**: a pure-domain canonicalizer (`domain/urls.py`, stdlib only)
+produces the **comparison key**; the displayed URL always stays the original.
+Canonical form: scheme/host lowercased, default ports dropped, fragment
+dropped, known tracking parameters removed, remaining query sorted, trailing
+slash trimmed. Anything unparseable is returned unchanged — a weird URL must
+never fail a job, it just deduplicates less well.
+
+Applied at every URL comparison:
+
+1. **workflow mode**: provider hits deduplicated before enrichment (also a
+   cost saving: no LLM call for a retagged duplicate);
+2. **agentic loop** (ADR-030): cross-search deduplication and the journal's
+   `new_hits` counts use canonical keys — including the critique repair
+   search (ADR-031);
+3. **recurring memory** (ADR-033): `flag_new` canonicalizes both the stored
+   URLs and the fresh ones, so a re-tagged link never masquerades as new.
+
+The backend stays unchanged: it stores and forwards raw URLs; canonicalization
+is a domain concern of the brick that compares them.
 
 ---
 

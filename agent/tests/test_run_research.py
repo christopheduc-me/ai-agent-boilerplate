@@ -116,6 +116,20 @@ def test_workflow_recurring_run_flags_seen_urls() -> None:
     assert {r.url: r.is_new for r in results} == {"https://x/a": False, "https://x/b": True}
 
 
+def test_workflow_deduplicates_retagged_urls() -> None:
+    # ADR-034: the same article under different tracking params counts once.
+    hits = [
+        RawSearchHit(title="a", url="https://ex.com/p?utm_source=rss", snippet="s"),
+        RawSearchHit(title="a-dup", url="https://EX.com/p/", snippet="s"),
+        RawSearchHit(title="b", url="https://ex.com/q", snippet="s"),
+    ]
+    sink = RecordingSink()
+
+    results = run_research("job-d", "kw", FakeSearch(hits), FakeEnricher(), sink)
+
+    assert [r.title for r in results] == ["a", "b"]
+
+
 def test_marks_the_job_started_before_searching() -> None:
     sink = RecordingSink()
 

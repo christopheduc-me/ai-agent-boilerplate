@@ -31,6 +31,7 @@ from aiagent.domain.ports import (
     SearchProvider,
     StepReporter,
 )
+from aiagent.domain.urls import normalize_url
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +76,8 @@ def _self_critique(
     searches_done = sum(1 for s in steps if s.kind is AgentStepKind.SEARCH)
     if critique.gap_query and searches_done < max_steps:
         found = search.search(critique.gap_query)
-        seen_urls = {h.url for h in kept}
-        new = [h for h in found if h.url not in seen_urls]
+        kept_keys = {normalize_url(h.url) for h in kept}
+        new = [h for h in found if normalize_url(h.url) not in kept_keys]
         kept.extend(new)
         repair = AgentStep(
             seq=step.seq + 1,
@@ -145,8 +146,10 @@ def run_agent_research(
                 return None
             if isinstance(action, SearchAction):
                 found = search.search(action.query)
-                new = [h for h in found if h.url not in collected_urls]
-                collected_urls.update(h.url for h in new)
+                # Deduplication by canonical URL (ADR-034): retagged links do
+                # not count as new hits across searches.
+                new = [h for h in found if normalize_url(h.url) not in collected_urls]
+                collected_urls.update(normalize_url(h.url) for h in new)
                 hits.extend(new)
                 step = AgentStep(
                     seq=seq,

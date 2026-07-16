@@ -54,8 +54,10 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [ ] **Date cascade stage 2 (ADR-011)**: fetch the page and read JSON-LD
       `datePublished` / OpenGraph before falling back to the LLM — cheaper and
       `high` confidence instead of `medium`.
-- [ ] **URL normalization + deduplication** in the agent domain (tracking params
-      make the same article count twice today).
+- [x] **URL normalization + deduplication (ADR-034)** — done: canonical URLs
+      (tracking params, fragments, ports, param order) used for workflow and
+      loop deduplication and for the ADR-033 memory matching; displayed URLs
+      stay original.
 - [ ] Optional `RUN_LIVE_TESTS=1` integration tests for the Tavily and Claude
       adapters (ADR-012).
 

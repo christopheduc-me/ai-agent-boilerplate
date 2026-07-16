@@ -5,6 +5,7 @@ from aiagent.domain.models import (
     RawSearchHit,
     ResearchResult,
     as_utc,
+    dedupe_hits,
     flag_new,
     sort_by_publication_date,
 )
@@ -49,7 +50,9 @@ def run_research(
     """
     try:
         sink.mark_started(job_id)
-        hits = search.search(keyword)
+        # Canonical-URL deduplication (ADR-034): drop retagged duplicates
+        # before paying for their enrichment.
+        hits = dedupe_hits(search.search(keyword))
         results = sort_by_publication_date([resolve_hit(hit, enricher) for hit in hits])
         if seen_urls is not None:
             # Recurring run (ADR-033): flag what previous runs already saw.
