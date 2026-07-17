@@ -345,3 +345,32 @@ async fn recurring_search_roundtrip_due_and_memory() {
     let kept = jobs.find(job.id).await.unwrap().unwrap();
     assert_eq!(kept.recurring_search_id, None);
 }
+
+#[tokio::test]
+async fn usage_accumulates_and_survives_lifecycle_updates() {
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let jobs = PostgresJobRepository::new(pool.clone());
+    let mut job = ResearchJob::new(user.id, "usage").unwrap();
+    jobs.insert(&job).await.unwrap();
+
+    let attempt = backend::domain::JobUsage {
+        llm_calls: 3,
+        llm_input_tokens: 1000,
+        llm_output_tokens: 200,
+        search_calls: 1,
+        cost_usd: 0.02,
+    };
+    jobs.add_usage(job.id, &attempt).await.unwrap();
+    jobs.add_usage(job.id, &attempt).await.unwrap(); // second attempt adds
+
+    // A lifecycle update (completion) must not clobber the accumulated spend.
+    job.complete();
+    jobs.update(&job).await.unwrap();
+
+    let stored = jobs.find(job.id).await.unwrap().unwrap();
+    assert_eq!(stored.usage.llm_calls, 6);
+    assert_eq!(stored.usage.llm_input_tokens, 2000);
+    assert_eq!(stored.usage.search_calls, 2);
+    assert!((stored.usage.cost_usd - 0.04).abs() < 1e-9);
+}

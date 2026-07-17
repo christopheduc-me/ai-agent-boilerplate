@@ -33,7 +33,9 @@ use crate::domain::ports::{
     DigestSender, JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
     RefreshTokenRepository, TokenService, UserRepository,
 };
-use crate::domain::{AgentStep, JobMode, JobStatus, RecurringSearch, ResearchJob, SearchResult};
+use crate::domain::{
+    AgentStep, JobMode, JobStatus, JobUsage, RecurringSearch, ResearchJob, SearchResult,
+};
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
 const REFRESH_COOKIE: &str = "refresh_token";
@@ -162,6 +164,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .route("/internal/jobs/{id}/results", post(internal_results))
         .route("/internal/jobs/{id}/steps", post(internal_step))
         .route("/internal/jobs/{id}/question", post(internal_question))
+        .route("/internal/jobs/{id}/usage", post(internal_usage))
         .route("/internal/jobs/{id}/failure", post(internal_failure))
         // Outermost layer: every request gets a correlation span (ADR-018).
         .layer(axum::middleware::from_fn(request_id::request_id))
@@ -276,6 +279,8 @@ struct JobView {
     answer: Option<String>,
     // Set on scheduler-launched runs (ADR-033).
     recurring_search_id: Option<Uuid>,
+    // Accumulated API spend (ADR-038).
+    usage: JobUsage,
     created_at: DateTime<Utc>,
     completed_at: Option<DateTime<Utc>>,
 }
@@ -291,6 +296,7 @@ impl From<&ResearchJob> for JobView {
             question: job.question.clone(),
             answer: job.answer.clone(),
             recurring_search_id: job.recurring_search_id,
+            usage: job.usage,
             created_at: job.created_at,
             completed_at: job.completed_at,
         }
@@ -673,6 +679,26 @@ async fn internal_question(
         Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
         Err(IngestError::Infrastructure(e)) => {
             tracing::error!(error = %e, "record clarification question failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Accumulates one task attempt's API spend (ADR-038).
+async fn internal_usage(
+    State(state): State<AppState>,
+    Path(job_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(usage): Json<JobUsage>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    match state.ingest.record_usage(job_id, &usage).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(IngestError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
+        Err(IngestError::Infrastructure(e)) => {
+            tracing::error!(error = %e, "record usage failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

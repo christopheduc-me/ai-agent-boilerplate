@@ -1,0 +1,7 @@
+{
+  "llm_calls": 9,
+  "llm_input_tokens": 8500,
+  "llm_output_tokens": 1200,
+  "search_calls": 2,
+  "cost_usd": 0.0885
+}

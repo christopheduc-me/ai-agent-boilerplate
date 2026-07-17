@@ -68,10 +68,17 @@ describe("SearchesView (two demos, ADR-030)", () => {
     expect(mocked.launchSearch).toHaveBeenCalledWith("rust news", "tok", "agent");
   });
 
-  it("lists previous searches with their mode badge", async () => {
+  it("lists previous searches with their mode badge and total spend", async () => {
+    const usage = (cost: number) => ({
+      llm_calls: 3,
+      llm_input_tokens: 100,
+      llm_output_tokens: 10,
+      search_calls: 1,
+      cost_usd: cost,
+    });
     mocked.listSearches.mockResolvedValue([
-      { id: "j1", keyword: "one", mode: "workflow", status: "completed" },
-      { id: "j2", keyword: "two", mode: "agent", status: "running" },
+      { id: "j1", keyword: "one", mode: "workflow", status: "completed", usage: usage(0.01) },
+      { id: "j2", keyword: "two", mode: "agent", status: "running", usage: usage(0.0223) },
     ]);
     const { wrapper } = await mountView();
 
@@ -79,6 +86,9 @@ describe("SearchesView (two demos, ADR-030)", () => {
     expect(items).toHaveLength(2);
     expect(items[1].text()).toContain("two");
     expect(items[1].find(".mode").attributes("data-mode")).toBe("agent");
+    // Spend tracking (ADR-038): per-job cost and the sum of all runs.
+    expect(items[1].text()).toContain("$0.0223");
+    expect(wrapper.find("[data-testid=total-cost]").text()).toContain("$0.0323");
   });
 
   it("creates and deletes a recurring search (ADR-033)", async () => {

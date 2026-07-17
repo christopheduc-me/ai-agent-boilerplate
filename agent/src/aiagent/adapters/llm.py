@@ -17,6 +17,7 @@ from aiagent.domain.models import (
     SearchAction,
     as_utc,
 )
+from aiagent.domain.usage import UsageMeter
 
 if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel
@@ -36,6 +37,15 @@ Title: {title}
 URL: {url}
 Excerpt: {snippet}
 """
+
+
+def record_llm_usage(meter: "UsageMeter | None", response: object) -> None:
+    """Reads langchain's usage_metadata (ADR-038); absent metadata still
+    counts the call so fake replies and older providers stay visible."""
+    if meter is None:
+        return
+    usage = getattr(response, "usage_metadata", None) or {}
+    meter.record_llm(int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
 
 
 def parse_extracted_date(text: str) -> datetime | None:
@@ -82,7 +92,13 @@ class ClaudeHitEnricher:
     never exercised in CI (ADR-012). `llm` is injectable so the prompt/parse
     logic around it stays unit-testable with a fake chat model."""
 
-    def __init__(self, model_id: str, llm: "BaseChatModel | None" = None) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        llm: "BaseChatModel | None" = None,
+        meter: UsageMeter | None = None,
+    ) -> None:
+        self._meter = meter
         if llm is not None:
             self._llm = llm
             return
@@ -94,6 +110,7 @@ class ClaudeHitEnricher:
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
         prompt = ENRICHMENT_PROMPT.format(title=hit.title, url=hit.url, snippet=hit.snippet)
         response = self._llm.invoke(prompt)
+        record_llm_usage(self._meter, response)
         content = response.content if isinstance(response.content, str) else str(response.content)
         return parse_enrichment(content)
 
@@ -153,7 +170,13 @@ class ClaudeAgentPolicy:
     its own past decisions and the collected titles (token-frugal), and picks
     the next action. Same injectable-`llm` pattern as ClaudeHitEnricher."""
 
-    def __init__(self, model_id: str, llm: "BaseChatModel | None" = None) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        llm: "BaseChatModel | None" = None,
+        meter: UsageMeter | None = None,
+    ) -> None:
+        self._meter = meter
         if llm is not None:
             self._llm = llm
             return
@@ -169,6 +192,7 @@ class ClaudeAgentPolicy:
             goal=goal, transcript=transcript, count=len(hits), titles=titles
         )
         response = self._llm.invoke(prompt)
+        record_llm_usage(self._meter, response)
         content = response.content if isinstance(response.content, str) else str(response.content)
         return parse_action(content)
 
@@ -221,7 +245,13 @@ class ClaudeResultCritic:
     """Live ResultCritic (ADR-031) — one call reviewing the whole result set;
     same injectable-`llm` pattern as the other Claude adapters."""
 
-    def __init__(self, model_id: str, llm: "BaseChatModel | None" = None) -> None:
+    def __init__(
+        self,
+        model_id: str,
+        llm: "BaseChatModel | None" = None,
+        meter: UsageMeter | None = None,
+    ) -> None:
+        self._meter = meter
         if llm is not None:
             self._llm = llm
             return
@@ -234,5 +264,6 @@ class ClaudeResultCritic:
         listing = "\n".join(f"- {h.title} — {h.url}\n  {h.snippet}" for h in hits[:30]) or "- none"
         prompt = CRITIQUE_PROMPT.format(goal=goal, count=len(hits), listing=listing)
         response = self._llm.invoke(prompt)
+        record_llm_usage(self._meter, response)
         content = response.content if isinstance(response.content, str) else str(response.content)
         return parse_critique(content)

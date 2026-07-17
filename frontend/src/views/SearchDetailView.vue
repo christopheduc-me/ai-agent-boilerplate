@@ -87,6 +87,18 @@ onBeforeUnmount(() => {
       <span v-if="job.status === 'pending' || job.status === 'running'"> — live…</span>
     </p>
     <p v-if="job.error" class="error">{{ job.error }}</p>
+    <!-- API spend of this run (ADR-038); $0 with the fake providers. -->
+    <p
+      v-if="job.usage.llm_calls > 0 || job.usage.search_calls > 0"
+      class="cost"
+      data-testid="job-cost"
+    >
+      💸 ${{ job.usage.cost_usd.toFixed(4) }} — {{ job.usage.llm_calls }} LLM call{{
+        job.usage.llm_calls === 1 ? "" : "s"
+      }}
+      ({{ job.usage.llm_input_tokens }} in / {{ job.usage.llm_output_tokens }} out tokens),
+      {{ job.usage.search_calls }} search{{ job.usage.search_calls === 1 ? "" : "es" }}
+    </p>
 
     <!-- HITL (ADR-032): the agent asked a question; the job waits for you. -->
     <section
@@ -141,5 +153,9 @@ onBeforeUnmount(() => {
 }
 .clarified {
   color: #666;
+}
+.cost {
+  color: #666;
+  font-size: 0.85rem;
 }
 </style>

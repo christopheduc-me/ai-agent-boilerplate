@@ -14,8 +14,8 @@ use crate::domain::ports::{
     JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
 };
 use crate::domain::{
-    AgentStep, DateConfidence, EventType, JobMode, JobStatus, RecurringSearch, RefreshToken,
-    ResearchJob, SearchResult, User,
+    AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
+    RefreshToken, ResearchJob, SearchResult, User,
 };
 
 /// Runs the SQL migrations in `backend/migrations/` (idempotent).
@@ -107,6 +107,13 @@ fn job_from_row(row: &PgRow) -> Result<ResearchJob, PortError> {
         question: row.get("question"),
         answer: row.get("answer"),
         recurring_search_id: row.get("recurring_search_id"),
+        usage: JobUsage {
+            llm_calls: row.get("llm_calls"),
+            llm_input_tokens: row.get("llm_input_tokens"),
+            llm_output_tokens: row.get("llm_output_tokens"),
+            search_calls: row.get("search_calls"),
+            cost_usd: row.get("cost_usd"),
+        },
         created_at: row.get("created_at"),
         completed_at: row.get("completed_at"),
     })
@@ -316,7 +323,9 @@ impl JobRepository for PostgresJobRepository {
 
     async fn find(&self, id: Uuid) -> Result<Option<ResearchJob>, PortError> {
         let row = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id,
+                    llm_calls, llm_input_tokens, llm_output_tokens, search_calls, cost_usd,
+                    created_at, completed_at
              FROM research_jobs WHERE id = $1",
         )
         .bind(id)
@@ -328,7 +337,9 @@ impl JobRepository for PostgresJobRepository {
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id,
+                    llm_calls, llm_input_tokens, llm_output_tokens, search_calls, cost_usd,
+                    created_at, completed_at
              FROM research_jobs WHERE user_id = $1 ORDER BY created_at DESC",
         )
         .bind(user_id)
@@ -360,7 +371,9 @@ impl JobRepository for PostgresJobRepository {
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ResearchJob>, PortError> {
         let rows = sqlx::query(
-            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id, created_at, completed_at
+            "SELECT id, user_id, keyword, mode, status, error, question, answer, recurring_search_id,
+                    llm_calls, llm_input_tokens, llm_output_tokens, search_calls, cost_usd,
+                    created_at, completed_at
              FROM research_jobs
              WHERE status IN ('pending', 'running') AND created_at < $1",
         )
@@ -461,6 +474,28 @@ impl JobRepository for PostgresJobRepository {
             .execute(&self.pool)
             .await
             .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn add_usage(&self, job_id: Uuid, usage: &JobUsage) -> Result<(), PortError> {
+        sqlx::query(
+            "UPDATE research_jobs
+             SET llm_calls = llm_calls + $2,
+                 llm_input_tokens = llm_input_tokens + $3,
+                 llm_output_tokens = llm_output_tokens + $4,
+                 search_calls = search_calls + $5,
+                 cost_usd = cost_usd + $6
+             WHERE id = $1",
+        )
+        .bind(job_id)
+        .bind(usage.llm_calls)
+        .bind(usage.llm_input_tokens)
+        .bind(usage.llm_output_tokens)
+        .bind(usage.search_calls)
+        .bind(usage.cost_usd)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
         Ok(())
     }
 

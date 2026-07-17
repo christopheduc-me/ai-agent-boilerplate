@@ -1034,6 +1034,35 @@ alternative; this adapter is for forks that want the limit inside the app
 (e.g. no shared proxy tier). Integration-tested against the compose/CI Redis
 (skipped without `REDIS_URL`), including cross-replica sharing and fail-open.
 
+### ADR-038 — Per-run API spend tracking (decided 2026-07-17)
+
+**Context**: every run spends real money (Claude tokens, Tavily credits) and
+the quota (ADR-017) only counts runs, not dollars. Users and forks need to
+see what each search actually cost.
+
+**Decision**:
+
+1. **A `UsageMeter`** (pure domain, agent side) is handed to every paid
+   adapter: the three Claude adapters record token counts from langchain's
+   `usage_metadata` (one `record_llm` per call), the Tavily provider records
+   each search. The **fakes record their calls too, with zero tokens** — the
+   keyless demo shows honest call counts and a $0 cost.
+2. **Pricing is env-driven**, not a hardcoded per-model table (rates rot):
+   `LLM_COST_INPUT_PER_MTOK` / `LLM_COST_OUTPUT_PER_MTOK` /
+   `SEARCH_COST_PER_CALL`, defaults documented in `.env.example` (Claude
+   Opus 4.x and Tavily basic rates at the time of writing). Fake mode prices
+   at $0 regardless. Costs are **indicative** — the provider's invoice is the
+   source of truth.
+3. **One usage callback per task attempt** (`POST /internal/jobs/{id}/usage`,
+   fixture `contracts/usage-callback.json`), sent in a `finally` block —
+   success, HITL pause and failure all report. The backend **accumulates**
+   (`UPDATE … SET x = x + $n`, never replaced by lifecycle updates): retries
+   and resumed runs each add their real spend. Best-effort: losing the metric
+   never fails the job.
+4. **Frontend**: a cost line on the run detail ("$0.0885 — 9 LLM calls
+   (8500 in / 1200 out tokens), 2 searches") and, on the searches list, the
+   per-run cost plus the total across listed runs.
+
 ---
 
 ## 4. API contracts (summary)
@@ -1078,6 +1107,7 @@ also enforces the per-user daily quota — ADR-017).
 | POST | `/internal/jobs/{id}/results` | Delivers results `[{title, url, snippet, published_at, date_confidence, event_type, summary, is_new, raw}]` |
 | POST | `/internal/jobs/{id}/steps` | Records one agent-loop decision `{seq, kind, detail, reason, new_hits}` (ADR-030, idempotent on seq) |
 | POST | `/internal/jobs/{id}/question` | The agent asks the user `{question}` → status `awaiting_input` (ADR-032) |
+| POST | `/internal/jobs/{id}/usage` | One task attempt's spend `{llm_calls, llm_input_tokens, llm_output_tokens, search_calls, cost_usd}` — accumulated (ADR-038) |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
 
 ---

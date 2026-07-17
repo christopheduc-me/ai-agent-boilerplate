@@ -9,7 +9,7 @@ use crate::domain::ports::{
     JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
 };
 use crate::domain::{
-    AgentStep, JobStatus, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User,
+    AgentStep, JobStatus, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User,
 };
 
 #[derive(Default)]
@@ -85,7 +85,15 @@ impl JobRepository for InMemoryJobRepository {
     }
 
     async fn update(&self, job: &ResearchJob) -> Result<(), PortError> {
-        self.jobs.lock().unwrap().insert(job.id, job.clone());
+        let mut jobs = self.jobs.lock().unwrap();
+        // Usage is only ever written through add_usage (ADR-038): a lifecycle
+        // update must not clobber the accumulated spend (mirrors the SQL
+        // UPDATE, which does not touch the usage columns).
+        let mut updated = job.clone();
+        if let Some(existing) = jobs.get(&job.id) {
+            updated.usage = existing.usage;
+        }
+        jobs.insert(job.id, updated);
         Ok(())
     }
 
@@ -179,6 +187,13 @@ impl JobRepository for InMemoryJobRepository {
 
     async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError> {
         self.steps.lock().unwrap().remove(&job_id);
+        Ok(())
+    }
+
+    async fn add_usage(&self, job_id: Uuid, usage: &JobUsage) -> Result<(), PortError> {
+        if let Some(job) = self.jobs.lock().unwrap().get_mut(&job_id) {
+            job.usage.add(usage);
+        }
         Ok(())
     }
 

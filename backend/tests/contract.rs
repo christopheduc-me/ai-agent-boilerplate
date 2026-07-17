@@ -308,3 +308,38 @@ async fn backend_produces_the_digest_webhook_fixture() {
     let expected: Value = serde_json::from_str(&fixture("digest-webhook.json")).unwrap();
     assert_eq!(serde_json::to_value(&digest).unwrap(), expected);
 }
+
+#[tokio::test]
+async fn backend_consumes_the_usage_callback_fixture() {
+    let app = app();
+    let (bearer, job_id) = user_with_job(&app).await;
+
+    // Post it twice: attempts accumulate (ADR-038 — retries spend real money).
+    for _ in 0..2 {
+        let (status, _) = call(
+            &app,
+            post(
+                &format!("/internal/jobs/{job_id}/usage"),
+                fixture("usage-callback.json"),
+                &[("x-internal-token", INTERNAL_TOKEN)],
+            ),
+        )
+        .await;
+        assert_eq!(status, 204, "the fixture must deserialize as-is");
+    }
+
+    let (_, detail) = call(
+        &app,
+        Request::builder()
+            .uri(format!("/api/searches/{job_id}"))
+            .header("authorization", &bearer)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(detail["usage"]["llm_calls"], 18);
+    assert_eq!(detail["usage"]["llm_input_tokens"], 17000);
+    assert_eq!(detail["usage"]["search_calls"], 4);
+    let cost = detail["usage"]["cost_usd"].as_f64().unwrap();
+    assert!((cost - 0.177).abs() < 1e-9, "accumulated cost: {cost}");
+}

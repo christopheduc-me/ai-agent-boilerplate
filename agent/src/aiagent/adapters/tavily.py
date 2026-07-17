@@ -4,6 +4,7 @@ from datetime import datetime
 from typing import Any
 
 from aiagent.domain.models import RawSearchHit, as_utc
+from aiagent.domain.usage import UsageMeter
 
 
 def parse_provider_date(value: object) -> datetime | None:
@@ -30,12 +31,15 @@ def hit_from_tavily(item: dict[str, Any]) -> RawSearchHit:
 class TavilySearchProvider:
     """Live adapter — requires TAVILY_API_KEY; never exercised in CI (ADR-012)."""
 
-    def __init__(self, max_results: int = 10) -> None:
+    def __init__(self, max_results: int = 10, meter: UsageMeter | None = None) -> None:
         from langchain_tavily import TavilySearch
 
         self._tool = TavilySearch(max_results=max_results)
+        self._meter = meter
 
     def search(self, keyword: str) -> list[RawSearchHit]:
+        if self._meter is not None:
+            self._meter.record_search()  # each call spends a Tavily credit (ADR-038)
         response = self._tool.invoke({"query": keyword})
         items = response.get("results", []) if isinstance(response, dict) else []
         return [hit_from_tavily(item) for item in items]

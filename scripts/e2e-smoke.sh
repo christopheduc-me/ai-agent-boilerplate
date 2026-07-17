@@ -94,6 +94,11 @@ for _ in $(seq 1 30); do
 done
 [ "$AGENT_STATUS" = "completed" ] || fail "agent job still '$AGENT_STATUS'"
 
+say "checking the workflow run's usage (ADR-038)"
+# Fake mode: calls are counted, cost is $0 — 5 enricher calls, 1 search.
+USAGE=$(json_get "$DETAIL" '"{}/{}/{}".format(data["usage"]["llm_calls"], data["usage"]["search_calls"], data["usage"]["cost_usd"])')
+[ "$USAGE" = "5/1/0.0" ] || fail "unexpected workflow usage: $USAGE"
+
 say "checking the agent decision journal"
 MODE=$(json_get "$AGENT_DETAIL" 'data["mode"]')
 [ "$MODE" = "agent" ] || fail "unexpected mode: $MODE"
@@ -110,6 +115,9 @@ case "$CRITIQUE" in
 esac
 AGENT_RESULTS=$(json_get "$AGENT_DETAIL" 'len(data["results"])')
 [ "$AGENT_RESULTS" = "5" ] || fail "unexpected agent result count: $AGENT_RESULTS"
+# Agent-mode usage (ADR-038): enricher x5 + policy x3 + critic x1, 2 searches.
+AGENT_USAGE=$(json_get "$AGENT_DETAIL" '"{}/{}/{}".format(data["usage"]["llm_calls"], data["usage"]["search_calls"], data["usage"]["cost_usd"])')
+[ "$AGENT_USAGE" = "9/2/0.0" ] || fail "unexpected agent usage: $AGENT_USAGE"
 
 say "launch an ambiguous agent search (HITL, ADR-032)"
 HITL=$(curl -sf -X POST "$BASE_URL/api/searches" \

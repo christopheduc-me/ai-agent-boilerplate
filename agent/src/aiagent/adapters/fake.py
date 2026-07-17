@@ -19,10 +19,18 @@ from aiagent.domain.models import (
     RawSearchHit,
     SearchAction,
 )
+from aiagent.domain.usage import UsageMeter
 
 
 class FakeSearchProvider:
+    def __init__(self, meter: UsageMeter | None = None) -> None:
+        self._meter = meter
+
     def search(self, keyword: str) -> list[RawSearchHit]:
+        # ADR-038: fakes count their calls with zero cost — the keyless demo
+        # shows honest call counts and a $0 total.
+        if self._meter is not None:
+            self._meter.record_search()
         raw = {"provider": "fake", "keyword": keyword}
         return [
             RawSearchHit(
@@ -63,6 +71,17 @@ class FakeSearchProvider:
         ]
 
 
+class _FakeLlm:
+    """Shared meter plumbing for the fake LLM-backed adapters (ADR-038)."""
+
+    def __init__(self, meter: UsageMeter | None = None) -> None:
+        self._meter = meter
+
+    def _count(self) -> None:
+        if self._meter is not None:
+            self._meter.record_llm(0, 0)
+
+
 class FakePageDateFetcher:
     """Deterministic stage 2 (ADR-035): only the hit designed for it has a
     page-declared date — ranked high, above the LLM's medium."""
@@ -73,11 +92,12 @@ class FakePageDateFetcher:
         return None
 
 
-class FakeHitEnricher:
+class FakeHitEnricher(_FakeLlm):
     """Deterministic enrichment: a date only for the hit designed to exercise
     the LLM stage of the cascade, a stable event type and summary for all."""
 
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
+        self._count()
         published_at = None
         if hit.title == "fake-llm-datable":
             published_at = datetime(2025, 8, 20, tzinfo=UTC)
@@ -88,12 +108,13 @@ class FakeHitEnricher:
         )
 
 
-class FakeAgentPolicy:
+class FakeAgentPolicy(_FakeLlm):
     """Deterministic policy (ADR-030) for keyless demos and e2e: search the
     goal, refine once (the fake provider returns the same hits, so the journal
     shows the deduplication at work), then stop with an explicit reason."""
 
     def decide(self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]) -> AgentAction:
+        self._count()
         # Deterministic HITL trigger (ADR-032): a goal containing "ambiguous"
         # asks for clarification once; the task appends the user's answer to
         # the goal on resume, which disarms the trigger.
@@ -112,12 +133,13 @@ class FakeAgentPolicy:
         return FinishAction(reason="The refined query added nothing new; coverage looks sufficient")
 
 
-class FakeResultCritic:
+class FakeResultCritic(_FakeLlm):
     """Deterministic self-critique (ADR-031): a stable verdict, nothing
     dropped, no gap — the e2e journal shows the review step without changing
     the delivered fake results."""
 
     def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
+        self._count()
         return Critique(
             assessment=(
                 f"All {len(hits)} results relate to the goal; "

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from aiagent.adapters.api.app import TaskRequest
-from aiagent.adapters.sink import serialize_result, serialize_step
+from aiagent.adapters.sink import serialize_result, serialize_step, serialize_usage
 from aiagent.domain.models import (
     AgentStep,
     AgentStepKind,
@@ -18,6 +18,7 @@ from aiagent.domain.models import (
     EventType,
     ResearchResult,
 )
+from aiagent.domain.usage import Pricing, Usage
 
 CONTRACTS = Path(__file__).parents[2] / "contracts"
 
@@ -111,3 +112,10 @@ def test_agent_produces_the_question_callback_shape() -> None:
     fixture = load("question-callback.json")
     assert set(fixture.keys()) == {"question"}
     assert isinstance(fixture["question"], str) and fixture["question"]
+
+
+def test_agent_produces_the_usage_callback_exactly() -> None:
+    # ADR-038: 8500 in-tokens * $5/MTok + 1200 out * $25/MTok + 2 * $0.008.
+    usage = Usage(llm_calls=9, llm_input_tokens=8500, llm_output_tokens=1200, search_calls=2)
+    pricing = Pricing(llm_input_per_mtok=5.0, llm_output_per_mtok=25.0, search_per_call=0.008)
+    assert serialize_usage(usage, pricing) == load("usage-callback.json")

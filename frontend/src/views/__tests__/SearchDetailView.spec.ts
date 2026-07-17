@@ -29,6 +29,13 @@ const completedAgentJob: SearchJobDetail = {
   question: null,
   answer: null,
   recurring_search_id: null,
+  usage: {
+    llm_calls: 9,
+    llm_input_tokens: 8500,
+    llm_output_tokens: 1200,
+    search_calls: 2,
+    cost_usd: 0.0885,
+  },
   created_at: "2026-07-01T00:00:00Z",
   completed_at: "2026-07-01T00:00:10Z",
   steps: [
@@ -78,6 +85,35 @@ describe("SearchDetailView", () => {
     // Terminal status: no pulsing "thinking" indicator.
     expect(wrapper.find("[data-testid=agent-thinking]").exists()).toBe(false);
     expect(wrapper.find(".timeline").exists()).toBe(true);
+  });
+
+  it("shows the run's API spend (ADR-038)", async () => {
+    mocked.streamSearch.mockImplementation(async (_id, _token, onUpdate) => {
+      onUpdate(completedAgentJob);
+    });
+    const { wrapper } = await mountView();
+
+    const cost = wrapper.find("[data-testid=job-cost]");
+    expect(cost.text()).toContain("$0.0885");
+    expect(cost.text()).toContain("9 LLM calls");
+    expect(cost.text()).toContain("2 searches");
+  });
+
+  it("hides the cost line when nothing was spent yet", async () => {
+    mocked.streamSearch.mockImplementation(async (_id, _token, onUpdate) => {
+      onUpdate({
+        ...completedAgentJob,
+        usage: {
+          llm_calls: 0,
+          llm_input_tokens: 0,
+          llm_output_tokens: 0,
+          search_calls: 0,
+          cost_usd: 0,
+        },
+      });
+    });
+    const { wrapper } = await mountView();
+    expect(wrapper.find("[data-testid=job-cost]").exists()).toBe(false);
   });
 
   it("hides the journal for workflow jobs", async () => {

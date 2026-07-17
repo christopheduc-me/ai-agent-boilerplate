@@ -159,3 +159,42 @@ def test_recurring_run_flags_the_delta_and_reports_it(fake_env) -> None:
     kinds = [json.loads(c.request.content)["kind"] for c in steps.calls]
     assert kinds == ["search", "search", "finish", "critique", "report"]
     assert json.loads(steps.calls.last.request.content)["new_hits"] == 3
+
+
+@respx.mock
+def test_usage_is_reported_at_task_end(fake_env) -> None:
+    respx.post(f"{BACKEND}/internal/jobs/job-8/started").mock(return_value=httpx.Response(204))
+    respx.post(f"{BACKEND}/internal/jobs/job-8/steps").mock(return_value=httpx.Response(204))
+    respx.post(f"{BACKEND}/internal/jobs/job-8/results").mock(return_value=httpx.Response(204))
+    usage = respx.post(f"{BACKEND}/internal/jobs/job-8/usage").mock(
+        return_value=httpx.Response(204)
+    )
+
+    run_research_task("job-8", "keyword", mode="agent")
+
+    # Fake mode (ADR-038): every call counted, zero tokens, zero cost —
+    # enricher x5 + policy x3 + critic x1 = 9 LLM calls; 2 searches.
+    payload = json.loads(usage.calls.last.request.content)
+    assert payload == {
+        "llm_calls": 9,
+        "llm_input_tokens": 0,
+        "llm_output_tokens": 0,
+        "search_calls": 2,
+        "cost_usd": 0.0,
+    }
+
+
+@respx.mock
+def test_usage_is_reported_even_when_the_run_pauses(fake_env) -> None:
+    respx.post(f"{BACKEND}/internal/jobs/job-9/started").mock(return_value=httpx.Response(204))
+    respx.post(f"{BACKEND}/internal/jobs/job-9/question").mock(return_value=httpx.Response(204))
+    usage = respx.post(f"{BACKEND}/internal/jobs/job-9/usage").mock(
+        return_value=httpx.Response(204)
+    )
+
+    run_research_task("job-9", "ambiguous topic", mode="agent")
+
+    # The ask decision was one policy call: it cost something, it is reported.
+    payload = json.loads(usage.calls.last.request.content)
+    assert payload["llm_calls"] == 1
+    assert payload["search_calls"] == 0

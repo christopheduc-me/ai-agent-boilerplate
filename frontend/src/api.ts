@@ -26,6 +26,15 @@ export interface SearchResult {
   is_new: boolean;
 }
 
+// Accumulated API spend of a run (ADR-038).
+export interface JobUsage {
+  llm_calls: number;
+  llm_input_tokens: number;
+  llm_output_tokens: number;
+  search_calls: number;
+  cost_usd: number;
+}
+
 export interface SearchJob {
   id: string;
   keyword: string;
@@ -37,6 +46,8 @@ export interface SearchJob {
   answer: string | null;
   // Set on scheduler-launched runs of a recurring search (ADR-033).
   recurring_search_id: string | null;
+  // Accumulated API spend (ADR-038).
+  usage: JobUsage;
   created_at: string;
   completed_at: string | null;
 }

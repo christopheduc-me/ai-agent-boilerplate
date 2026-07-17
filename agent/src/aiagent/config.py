@@ -52,6 +52,11 @@ class Settings:
     # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
     # at most one policy LLM call plus one provider search.
     agent_max_steps: int
+    # Indicative pricing (ADR-038), USD; set the rates matching your model and
+    # search plan. Defaults documented in .env.example.
+    llm_cost_input_per_mtok: float
+    llm_cost_output_per_mtok: float
+    search_cost_per_call: float
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -62,4 +67,7 @@ class Settings:
             agent_model_id=os.environ.get("AGENT_MODEL_ID", "claude-opus-4-8"),
             providers=os.environ.get("AGENT_PROVIDERS", "live"),
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
+            llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
+            llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),
+            search_cost_per_call=float(os.environ.get("SEARCH_COST_PER_CALL", "0.008")),
         )

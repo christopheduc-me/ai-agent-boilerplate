@@ -5,6 +5,7 @@ from typing import Any
 import httpx
 
 from aiagent.domain.models import AgentStep, ResearchResult
+from aiagent.domain.usage import Pricing, Usage
 
 
 def serialize_result(result: ResearchResult) -> dict[str, Any]:
@@ -18,6 +19,16 @@ def serialize_result(result: ResearchResult) -> dict[str, Any]:
         "summary": result.summary,
         "is_new": result.is_new,
         "raw": result.raw,
+    }
+
+
+def serialize_usage(usage: Usage, pricing: Pricing) -> dict[str, Any]:
+    return {
+        "llm_calls": usage.llm_calls,
+        "llm_input_tokens": usage.llm_input_tokens,
+        "llm_output_tokens": usage.llm_output_tokens,
+        "search_calls": usage.search_calls,
+        "cost_usd": usage.cost_usd(pricing),
     }
 
 
@@ -66,6 +77,15 @@ class HttpResultSink:
         response = self._client.post(
             f"{self._base_url}/internal/jobs/{job_id}/question",
             json={"question": question},
+            headers=self._headers,
+        )
+        response.raise_for_status()
+
+    def report_usage(self, job_id: str, usage: Usage, pricing: Pricing) -> None:
+        # Spend tracking (ADR-038); the task treats failures as best-effort.
+        response = self._client.post(
+            f"{self._base_url}/internal/jobs/{job_id}/usage",
+            json=serialize_usage(usage, pricing),
             headers=self._headers,
         )
         response.raise_for_status()

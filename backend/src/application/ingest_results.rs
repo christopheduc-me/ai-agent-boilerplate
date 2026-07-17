@@ -5,7 +5,7 @@ use uuid::Uuid;
 use crate::domain::ports::{
     Digest, DigestEntry, DigestSender, JobRepository, PortError, RecurringSearchRepository,
 };
-use crate::domain::{AgentStep, ResearchJob, SearchResult};
+use crate::domain::{AgentStep, JobUsage, ResearchJob, SearchResult};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IngestError {
@@ -127,6 +127,17 @@ impl IngestResults {
         job.request_input(question)
             .map_err(|e| IngestError::Infrastructure(PortError(e.to_string())))?;
         self.jobs.update(&job).await?;
+        Ok(())
+    }
+
+    /// Accumulates one task attempt's spend (ADR-038): retries and HITL
+    /// resumes each add their own real cost.
+    pub async fn record_usage(&self, job_id: Uuid, usage: &JobUsage) -> Result<(), IngestError> {
+        self.jobs
+            .find(job_id)
+            .await?
+            .ok_or(IngestError::JobNotFound)?;
+        self.jobs.add_usage(job_id, usage).await?;
         Ok(())
     }
 

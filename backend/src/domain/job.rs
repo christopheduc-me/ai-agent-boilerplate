@@ -40,6 +40,27 @@ pub struct AgentStep {
     pub new_hits: i32,
 }
 
+/// Per-run API spend (ADR-038). Accumulates across task attempts and HITL
+/// resumes — each attempt spends real provider credits.
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+pub struct JobUsage {
+    pub llm_calls: i32,
+    pub llm_input_tokens: i64,
+    pub llm_output_tokens: i64,
+    pub search_calls: i32,
+    pub cost_usd: f64,
+}
+
+impl JobUsage {
+    pub fn add(&mut self, other: &JobUsage) {
+        self.llm_calls += other.llm_calls;
+        self.llm_input_tokens += other.llm_input_tokens;
+        self.llm_output_tokens += other.llm_output_tokens;
+        self.search_calls += other.search_calls;
+        self.cost_usd += other.cost_usd;
+    }
+}
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
     #[error("keyword must not be empty")]
@@ -71,6 +92,9 @@ pub struct ResearchJob {
     /// Set when the job was launched by the scheduler for a recurring search
     /// (ADR-033); one-shot searches leave it null.
     pub recurring_search_id: Option<Uuid>,
+    /// Accumulated API spend (ADR-038); written only through
+    /// `JobRepository::add_usage`, never by `update`.
+    pub usage: JobUsage,
     pub created_at: DateTime<Utc>,
     pub completed_at: Option<DateTime<Utc>>,
 }
@@ -91,6 +115,7 @@ impl ResearchJob {
             question: None,
             answer: None,
             recurring_search_id: None,
+            usage: JobUsage::default(),
             created_at: super::now_utc(),
             completed_at: None,
         })

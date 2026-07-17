@@ -5,7 +5,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{AgentStep, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User};
+use super::{AgentStep, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User};
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
 #[derive(Debug, thiserror::Error)]
@@ -45,6 +45,8 @@ pub trait JobRepository: Send + Sync {
     /// Replace semantics on resume (ADR-032): answering a clarification
     /// re-runs the loop from scratch, so the journal starts fresh too.
     async fn clear_steps(&self, job_id: Uuid) -> Result<(), PortError>;
+    /// Accumulates one task attempt's spend onto the job (ADR-038).
+    async fn add_usage(&self, job_id: Uuid, usage: &JobUsage) -> Result<(), PortError>;
     /// URLs already delivered by previous runs of a recurring search — the
     /// memory the agent receives to flag deltas (ADR-033). Most recent first,
     /// capped by `limit` to bound the task payload.

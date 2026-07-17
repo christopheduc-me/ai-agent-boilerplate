@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, ref } from "vue";
+import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { api, ApiError, type JobMode, type RecurringSearch, type SearchJob } from "@/api";
@@ -80,6 +80,9 @@ async function launch(keyword: string, mode: JobMode): Promise<void> {
     busy.value = false;
   }
 }
+
+// Spend tracking (ADR-038): the sum of every listed run.
+const totalCost = computed(() => jobs.value.reduce((sum, job) => sum + job.usage.cost_usd, 0));
 
 onMounted(refresh);
 </script>
@@ -162,6 +165,9 @@ onMounted(refresh);
     </section>
 
     <h2>Previous searches</h2>
+    <p v-if="jobs.length > 0" class="total-cost" data-testid="total-cost">
+      Total API spend: ${{ totalCost.toFixed(4) }}
+    </p>
     <ul>
       <li v-for="job in jobs" :key="job.id">
         <RouterLink :to="{ name: 'search-detail', params: { id: job.id } }">
@@ -169,6 +175,9 @@ onMounted(refresh);
         </RouterLink>
         <span class="mode" :data-mode="job.mode">{{ job.mode }}</span>
         — {{ job.status }}
+        <span v-if="job.usage.cost_usd > 0" class="job-cost"
+          >— ${{ job.usage.cost_usd.toFixed(4) }}</span
+        >
       </li>
     </ul>
     <p v-if="jobs.length === 0">No search yet.</p>
@@ -256,5 +265,13 @@ onMounted(refresh);
 .delete {
   margin-left: 0.6rem;
   font-size: 0.8rem;
+}
+.total-cost,
+.job-cost {
+  color: #666;
+  font-size: 0.85rem;
+}
+.total-cost {
+  margin: 0 0 0.5rem;
 }
 </style>

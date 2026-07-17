@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-37-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-38-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
@@ -63,7 +63,10 @@ the patterns you would otherwise rebuild from scratch on every agent project.
   run"), and an optional **digest webhook** pushes the news to your systems
   (Slack, n8n, anything with a URL) — the building block for monitoring/watch
   use cases.
-- **Every decision written down** — 37 Architecture Decision Records in
+- **Per-run cost tracking** — every run reports its real API spend (Claude
+  tokens + search calls, env-configurable rates); the UI shows the cost per
+  search and the total, so "LLM calls cost money" stops being abstract.
+- **Every decision written down** — 38 Architecture Decision Records in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), including the rejected
   alternatives and the trade-offs.
 
@@ -141,13 +144,13 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (37 ADRs), COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (38 ADRs), COMMANDS.md, diagrams/
 ```
 
 ## Documentation
 
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-037), kept in sync with the code at all times.
+  (ADR-001 → ADR-038), kept in sync with the code at all times.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/README.md) — PlantUML diagrams with an
   illustrated index: hexagonal architecture, job lifecycle state machine,
