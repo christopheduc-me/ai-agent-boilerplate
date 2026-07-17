@@ -286,6 +286,13 @@ without I/O.
 service (Tavily, Anthropic) — those adapters are covered by optional integration
 tests behind a flag (`RUN_LIVE_TESTS=1`).
 
+**Implementation note (2026-07-17)**: the live tests exist —
+`agent/tests/test_live_providers.py`, one per paid adapter (Tavily search,
+Claude enricher/policy/critic). They detect **provider drift** (renamed fields,
+a model that stops following the JSON instructions) that the defensive parsing
+elsewhere would degrade silently. Skipped without the flag; run them after a
+model bump or when extraction quality drops.
+
 ### ADR-013 — Development environment: docker-compose
 
 **Decision**: a single `docker-compose.yml` at the repository root covering **all**

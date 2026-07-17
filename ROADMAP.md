@@ -61,8 +61,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       (tracking params, fragments, ports, param order) used for workflow and
       loop deduplication and for the ADR-033 memory matching; displayed URLs
       stay original.
-- [ ] Optional `RUN_LIVE_TESTS=1` integration tests for the Tavily and Claude
-      adapters (ADR-012).
+- [x] **Opt-in live provider tests (ADR-012)** — done:
+      `agent/tests/test_live_providers.py`, skipped unless `RUN_LIVE_TESTS=1`
+      (never in CI). One test per paid adapter (Tavily search, Claude
+      enricher/policy/critic) to catch provider drift that defensive parsing
+      would degrade silently; validated once for real on 2026-07-17.
 
 ## P4 — Comfort (later)
 

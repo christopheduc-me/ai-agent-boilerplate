@@ -139,8 +139,11 @@ uv run pytest                               # everything
 uv run pytest tests/test_run_research.py    # one file
 uv run pytest -k cascade                    # by keyword
 uv run pytest -x -vv                        # stop at first failure, verbose
-RUN_LIVE_TESTS=1 uv run pytest              # includes live provider tests (none yet;
-                                            # reserved by ADR-012, needs API keys)
+# Live provider tests (ADR-012): call the PAID Tavily/Claude APIs — opt-in,
+# needs real keys in the repo-root .env, never run in CI. Use after bumping
+# AGENT_MODEL_ID or when extraction quality degrades (provider drift check).
+set -a && source ../.env && set +a
+RUN_LIVE_TESTS=1 uv run pytest tests/test_live_providers.py -v
 ```
 
 ### Frontend (Vue)
