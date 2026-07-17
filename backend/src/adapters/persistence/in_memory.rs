@@ -224,6 +224,10 @@ impl RecurringSearchRepository for InMemoryRecurringSearchRepository {
         Ok(())
     }
 
+    async fn find(&self, id: Uuid) -> Result<Option<RecurringSearch>, PortError> {
+        Ok(self.searches.lock().unwrap().get(&id).cloned())
+    }
+
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError> {
         let mut searches: Vec<RecurringSearch> = self
             .searches

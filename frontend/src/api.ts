@@ -47,6 +47,8 @@ export interface RecurringSearch {
   keyword: string;
   mode: JobMode;
   interval_minutes: number;
+  // Digest target (ADR-036): notified when a run finds new results.
+  webhook_url: string | null;
   created_at: string;
   last_run_at: string | null;
 }
@@ -178,11 +180,25 @@ export const api = {
 
   listSearches: (token: string) => request<SearchJob[]>("/api/searches", {}, token),
 
-  // Recurring searches (ADR-033).
-  createRecurring: (keyword: string, mode: JobMode, intervalMinutes: number, token: string) =>
+  // Recurring searches (ADR-033); the webhook receives digests (ADR-036).
+  createRecurring: (
+    keyword: string,
+    mode: JobMode,
+    intervalMinutes: number,
+    token: string,
+    webhookUrl?: string,
+  ) =>
     request<RecurringSearch>(
       "/api/recurring",
-      { method: "POST", body: JSON.stringify({ keyword, mode, interval_minutes: intervalMinutes }) },
+      {
+        method: "POST",
+        body: JSON.stringify({
+          keyword,
+          mode,
+          interval_minutes: intervalMinutes,
+          webhook_url: webhookUrl || null,
+        }),
+      },
       token,
     ),
 

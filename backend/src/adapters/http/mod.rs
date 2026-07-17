@@ -30,7 +30,7 @@ use crate::application::{
     RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
-    JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
+    DigestSender, JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
     RefreshTokenRepository, TokenService, UserRepository,
 };
 use crate::domain::{AgentStep, JobMode, JobStatus, RecurringSearch, ResearchJob, SearchResult};
@@ -54,12 +54,15 @@ pub struct AppState {
 }
 
 /// HTTP throttling knobs (ADR-017). Internal routes are never rate limited.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 pub struct RateLimitConfig {
     /// Per-IP limit on `/api/auth/*` (brute-force protection).
     pub auth_per_minute: u32,
     /// Per-IP limit on the rest of `/api/*`.
     pub api_per_minute: u32,
+    /// Redis-backed distributed limiting (ADR-037): set when the backend
+    /// scales horizontally; None keeps the in-memory limiter.
+    pub redis_url: Option<String>,
 }
 
 impl Default for RateLimitConfig {
@@ -67,6 +70,7 @@ impl Default for RateLimitConfig {
         Self {
             auth_per_minute: 10,
             api_per_minute: 120,
+            redis_url: None,
         }
     }
 }
@@ -79,6 +83,7 @@ impl AppState {
         refresh_tokens: Arc<dyn RefreshTokenRepository>,
         recurring: Arc<dyn RecurringSearchRepository>,
         dispatcher: Arc<dyn JobDispatcher>,
+        digests: Arc<dyn DigestSender>,
         hasher: Arc<dyn PasswordHasher>,
         tokens: Arc<dyn TokenService>,
         internal_token: String,
@@ -105,8 +110,8 @@ impl AppState {
                 daily_search_quota,
             )),
             answer: Arc::new(AnswerClarification::new(jobs.clone(), dispatcher)),
-            recurring: Arc::new(RecurringSearches::new(recurring)),
-            ingest: Arc::new(IngestResults::new(jobs.clone())),
+            recurring: Arc::new(RecurringSearches::new(recurring.clone())),
+            ingest: Arc::new(IngestResults::new(jobs.clone(), recurring, digests)),
             queries: Arc::new(SearchQueries::new(jobs)),
             tokens,
             internal_token,
@@ -120,8 +125,9 @@ pub fn router(state: AppState) -> Router {
 }
 
 pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
-    let auth_limiter = rate_limit::FixedWindowLimiter::per_minute(limits.auth_per_minute);
-    let api_limiter = rate_limit::FixedWindowLimiter::per_minute(limits.api_per_minute);
+    let redis_url = limits.redis_url.as_deref();
+    let auth_limiter = rate_limit::Limiter::per_minute(limits.auth_per_minute, "auth", redis_url);
+    let api_limiter = rate_limit::Limiter::per_minute(limits.api_per_minute, "api", redis_url);
 
     let auth_routes = Router::new()
         .route("/api/auth/register", post(register))
@@ -297,6 +303,9 @@ struct CreateRecurringRequest {
     #[serde(default)]
     mode: JobMode,
     interval_minutes: u32,
+    /// Digest target (ADR-036): notified when a run finds new results.
+    #[serde(default)]
+    webhook_url: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -305,6 +314,7 @@ struct RecurringView {
     keyword: String,
     mode: JobMode,
     interval_minutes: u32,
+    webhook_url: Option<String>,
     created_at: DateTime<Utc>,
     last_run_at: Option<DateTime<Utc>>,
 }
@@ -316,6 +326,7 @@ impl From<&RecurringSearch> for RecurringView {
             keyword: search.keyword.clone(),
             mode: search.mode,
             interval_minutes: search.interval_minutes,
+            webhook_url: search.webhook_url.clone(),
             created_at: search.created_at,
             last_run_at: search.last_run_at,
         }
@@ -456,7 +467,13 @@ async fn create_recurring(
 ) -> Response {
     match state
         .recurring
-        .create(user_id, &body.keyword, body.mode, body.interval_minutes)
+        .create(
+            user_id,
+            &body.keyword,
+            body.mode,
+            body.interval_minutes,
+            body.webhook_url.as_deref(),
+        )
         .await
     {
         Ok(search) => (StatusCode::CREATED, Json(RecurringView::from(&search))).into_response(),

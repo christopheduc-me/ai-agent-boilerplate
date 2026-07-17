@@ -43,8 +43,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Recurring searches with memory (ADR-033)** — done: saved searches
       re-run by the backend scheduler tick (Celery beat rejected — see the
       ADR), `seen_urls` memory, `is_new` flags end to end, and a `report`
-      journal step with the delta verdict. Possible follow-up: e-mail/webhook
-      digests when a run finds something new.
+      journal step with the delta verdict.
+- [x] **Digest webhooks (ADR-036)** — done: optional `webhook_url` per
+      recurring search; runs with new results POST a digest (best-effort,
+      shape pinned by `contracts/digest-webhook.json`). An e-mail sender is
+      one more adapter behind the same `DigestSender` port.
 - [x] **Human-in-the-loop clarification (ADR-032)** — done: the policy can ask
       one question (`awaiting_input` status, reaper-exempt), the answer
       re-dispatches the job with the clarification and a fresh journal.
@@ -93,11 +96,8 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       golden files asserted by both the Rust and Python suites.
 - [x] **Trivy image scanning (ADR-015 amendment)** — done: weekly HIGH/CRITICAL
       CVE scan of the three published images in both CIs.
-- [ ] Distributed per-IP rate limiting **if** the backend ever scales
-      horizontally (ADR-017). Note: the per-user quota is already
-      multi-instance-safe (it counts rows in PostgreSQL); only the in-memory
-      IP limiter is per-instance, and its degradation is benign (effective
-      limit becomes N× the configured one). When needed, prefer rate limiting
-      at the reverse proxy/load balancer (zero app code) over a Redis-backed
-      limiter — the latter only pays off for fine-grained per-user rules. The
-      swap surface is a single file (`backend/src/adapters/http/rate_limit.rs`).
+- [x] **Distributed per-IP rate limiting (ADR-037, revisits ADR-017)** — done
+      as an opt-in: `RATE_LIMIT_REDIS_URL` switches the middleware to a
+      Redis-shared fixed window (fail-open on Redis outages); unset keeps the
+      in-memory limiter. Rate limiting at the reverse proxy remains the
+      zero-code alternative for fleets behind a shared proxy tier.

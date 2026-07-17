@@ -1,10 +1,17 @@
-//! Fixed-window, in-memory, per-client-IP rate limiter (ADR-017).
+//! Fixed-window, per-client-IP rate limiter (ADR-017/037).
 //!
-//! Deliberately simple: one process, one HashMap, a fixed window. Good enough
-//! for a single-instance deployment (ADR-015); swap for a Redis-backed limiter
-//! when scaling horizontally. The client key is the first `X-Forwarded-For`
-//! entry — set by Caddy/nginx in front (trusted, ADR-014/015) — falling back to
-//! the socket peer address, then to a shared bucket.
+//! Two backends behind one middleware:
+//! - **in-memory** (default): one process, one HashMap. Good enough for a
+//!   single-instance deployment (ADR-015); degradation with N replicas is
+//!   benign (effective limit becomes N× the configured one).
+//! - **Redis** (opt-in via `RATE_LIMIT_REDIS_URL`, ADR-037): the same fixed
+//!   window shared across replicas (`INCR` + `EXPIRE` per window bucket).
+//!   **Fail-open**: if Redis is unreachable the request goes through with a
+//!   warning — the limiter protects spend, it must not become the outage.
+//!
+//! The client key is the first `X-Forwarded-For` entry — set by Caddy/nginx in
+//! front (trusted, ADR-014/015) — falling back to the socket peer address,
+//! then to a shared bucket.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -53,6 +60,103 @@ impl FixedWindowLimiter {
     }
 }
 
+/// Distributed fixed window (ADR-037): one Redis counter per (scope, client,
+/// window index), expiring with the window. The connection is established
+/// lazily and multiplexed.
+pub struct RedisWindowLimiter {
+    client: redis::Client,
+    connection: tokio::sync::OnceCell<redis::aio::ConnectionManager>,
+    max_per_window: u32,
+    window_secs: u64,
+    /// Keeps the auth and api limiters on separate counters.
+    scope: &'static str,
+}
+
+impl RedisWindowLimiter {
+    pub fn per_minute(url: &str, max: u32, scope: &'static str) -> Result<Arc<Self>, String> {
+        let client = redis::Client::open(url).map_err(|e| format!("invalid redis url: {e}"))?;
+        Ok(Arc::new(Self {
+            client,
+            connection: tokio::sync::OnceCell::new(),
+            max_per_window: max,
+            window_secs: 60,
+            scope,
+        }))
+    }
+
+    pub async fn allow(&self, key: &str) -> bool {
+        match self.try_allow(key).await {
+            Ok(allowed) => allowed,
+            Err(e) => {
+                // Fail-open: rate limiting protects spend; it must not turn a
+                // Redis outage into an API outage.
+                tracing::warn!(error = %e, "redis rate limiter unavailable, allowing request");
+                true
+            }
+        }
+    }
+
+    async fn try_allow(&self, key: &str) -> Result<bool, redis::RedisError> {
+        let mut conn = self
+            .connection
+            .get_or_try_init(|| {
+                // Tight budgets: a slow Redis must degrade to fail-open fast,
+                // not hold requests hostage.
+                let config = redis::aio::ConnectionManagerConfig::new()
+                    .set_connection_timeout(Some(Duration::from_secs(1)))
+                    .set_response_timeout(Some(Duration::from_secs(1)))
+                    .set_number_of_retries(1);
+                redis::aio::ConnectionManager::new_with_config(self.client.clone(), config)
+            })
+            .await?
+            .clone();
+        let window_index = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_secs()
+            / self.window_secs;
+        let bucket = format!("rl:{}:{}:{}", self.scope, key, window_index);
+        let (count,): (u32,) = redis::pipe()
+            .atomic()
+            .incr(&bucket, 1)
+            .expire(&bucket, self.window_secs as i64 + 1)
+            .ignore()
+            .query_async(&mut conn)
+            .await?;
+        Ok(count <= self.max_per_window)
+    }
+}
+
+/// The middleware state: in-memory by default, Redis when configured (ADR-037).
+#[derive(Clone)]
+pub enum Limiter {
+    InMemory(Arc<FixedWindowLimiter>),
+    Redis(Arc<RedisWindowLimiter>),
+}
+
+impl Limiter {
+    /// Builds the limiter for a scope: Redis-backed when `redis_url` is set
+    /// (falling back to in-memory if the URL cannot even be parsed).
+    pub fn per_minute(max: u32, scope: &'static str, redis_url: Option<&str>) -> Self {
+        if let Some(url) = redis_url {
+            match RedisWindowLimiter::per_minute(url, max, scope) {
+                Ok(limiter) => return Limiter::Redis(limiter),
+                Err(e) => {
+                    tracing::error!(error = %e, "falling back to the in-memory rate limiter");
+                }
+            }
+        }
+        Limiter::InMemory(FixedWindowLimiter::per_minute(max))
+    }
+
+    pub async fn allow(&self, key: &str) -> bool {
+        match self {
+            Limiter::InMemory(limiter) => limiter.allow(key),
+            Limiter::Redis(limiter) => limiter.allow(key).await,
+        }
+    }
+}
+
 fn client_key(request: &Request) -> String {
     request
         .headers()
@@ -70,12 +174,8 @@ fn client_key(request: &Request) -> String {
 }
 
 /// Axum middleware: 429 with a JSON body once the caller exceeds the window.
-pub async fn rate_limit(
-    State(limiter): State<Arc<FixedWindowLimiter>>,
-    request: Request,
-    next: Next,
-) -> Response {
-    if !limiter.allow(&client_key(&request)) {
+pub async fn rate_limit(State(limiter): State<Limiter>, request: Request, next: Next) -> Response {
+    if !limiter.allow(&client_key(&request)).await {
         return (
             StatusCode::TOO_MANY_REQUESTS,
             Json(json!({ "error": "too many requests, slow down" })),

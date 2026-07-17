@@ -30,6 +30,7 @@ fn app_with(limits: RateLimitConfig, daily_quota: u32) -> Router {
         Arc::new(InMemoryRefreshTokenRepository::default()),
         Arc::new(InMemoryRecurringSearchRepository::default()),
         Arc::new(NoopJobDispatcher),
+        Arc::new(backend::adapters::digest::NoopDigestSender),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
         INTERNAL_TOKEN.into(),
@@ -296,6 +297,7 @@ async fn auth_endpoints_are_rate_limited_per_ip() {
         RateLimitConfig {
             auth_per_minute: 2,
             api_per_minute: 100,
+            redis_url: None,
         },
         100,
     );

@@ -147,7 +147,7 @@ mod tests {
     async fn launches_due_searches_with_the_memory_of_previous_runs() {
         let h = harness(10);
         let user = Uuid::new_v4();
-        let rs = RecurringSearch::new(user, "rust", JobMode::Agent, 60).unwrap();
+        let rs = RecurringSearch::new(user, "rust", JobMode::Agent, 60, None).unwrap();
         h.recurring.insert(&rs).await.unwrap();
 
         // First tick: due immediately, no memory yet.
@@ -193,7 +193,7 @@ mod tests {
             .insert(&ResearchJob::new(user, "manual").unwrap())
             .await
             .unwrap();
-        let rs = RecurringSearch::new(user, "rust", JobMode::Workflow, 60).unwrap();
+        let rs = RecurringSearch::new(user, "rust", JobMode::Workflow, 60, None).unwrap();
         h.recurring.insert(&rs).await.unwrap();
 
         assert_eq!(h.run.execute().await.unwrap(), 0);
@@ -220,7 +220,7 @@ mod tests {
             10,
         );
         let user = Uuid::new_v4();
-        let rs = RecurringSearch::new(user, "rust", JobMode::Workflow, 60).unwrap();
+        let rs = RecurringSearch::new(user, "rust", JobMode::Workflow, 60, None).unwrap();
         recurring.insert(&rs).await.unwrap();
 
         assert_eq!(run.execute().await.unwrap(), 0);

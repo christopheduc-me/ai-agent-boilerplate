@@ -92,6 +92,7 @@ describe("SearchesView (two demos, ADR-030)", () => {
           keyword: "rust releases",
           mode: "agent",
           interval_minutes: 60,
+          webhook_url: "https://hooks.example.com/digest",
           created_at: "2026-07-01T00:00:00Z",
           last_run_at: null,
         },
@@ -105,10 +106,11 @@ describe("SearchesView (two demos, ADR-030)", () => {
     await form.trigger("submit");
     await flushPromises();
 
-    expect(mocked.createRecurring).toHaveBeenCalledWith("rust releases", "agent", 60, "tok");
+    expect(mocked.createRecurring).toHaveBeenCalledWith("rust releases", "agent", 60, "tok", "");
     const item = wrapper.find("[data-testid=recurring-r1]");
     expect(item.text()).toContain("rust releases");
     expect(item.text()).toContain("first run pending");
+    expect(item.text()).toContain("digest webhook"); // ADR-036
 
     await item.find("button.delete").trigger("click");
     await flushPromises();

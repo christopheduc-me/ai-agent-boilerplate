@@ -37,6 +37,7 @@ fn app() -> Router {
         Arc::new(InMemoryRefreshTokenRepository::default()),
         Arc::new(InMemoryRecurringSearchRepository::default()),
         Arc::new(NoopJobDispatcher),
+        Arc::new(backend::adapters::digest::NoopDigestSender),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
         INTERNAL_TOKEN.into(),
@@ -276,4 +277,34 @@ async fn task_request_fixture_carries_the_recurring_memory_field() {
     // First dispatch of a one-shot search: no memory (ADR-033).
     let fixture: Value = serde_json::from_str(&fixture("task-request.json")).unwrap();
     assert_eq!(fixture["seen_urls"], serde_json::json!([]));
+}
+
+#[tokio::test]
+async fn backend_produces_the_digest_webhook_fixture() {
+    // The digest (ADR-036) is consumed by the USER's systems (Slack, n8n,
+    // a fork's endpoint…): the fixture pins the outbound shape.
+    use backend::domain::ports::{Digest, DigestEntry};
+    use chrono::TimeZone;
+
+    let digest = Digest {
+        recurring_search_id: Uuid::parse_str("9a1f0c5e-2b7d-4c3a-8e6f-1d2a3b4c5d6e").unwrap(),
+        job_id: Uuid::parse_str("3fa85f64-5717-4562-b3fc-2c963f66afa6").unwrap(),
+        keyword: "rust releases".into(),
+        new_count: 2,
+        new_results: vec![
+            DigestEntry {
+                title: "Rust 1.99 released".into(),
+                url: "https://example.com/rust-1-99".into(),
+                published_at: Some(chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap()),
+            },
+            DigestEntry {
+                title: "Undated announcement".into(),
+                url: "https://example.com/undated".into(),
+                published_at: None,
+            },
+        ],
+    };
+
+    let expected: Value = serde_json::from_str(&fixture("digest-webhook.json")).unwrap();
+    assert_eq!(serde_json::to_value(&digest).unwrap(), expected);
 }

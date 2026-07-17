@@ -288,7 +288,7 @@ async fn recurring_search_roundtrip_due_and_memory() {
     let recurring_repo = PostgresRecurringSearchRepository::new(pool.clone());
     let jobs = PostgresJobRepository::new(pool.clone());
 
-    let rs = RecurringSearch::new(user.id, "rust releases", JobMode::Agent, 60).unwrap();
+    let rs = RecurringSearch::new(user.id, "rust releases", JobMode::Agent, 60, None).unwrap();
     recurring_repo.insert(&rs).await.unwrap();
 
     // Roundtrip + due immediately (never run).

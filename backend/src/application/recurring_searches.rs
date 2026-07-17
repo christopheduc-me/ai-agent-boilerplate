@@ -40,11 +40,12 @@ impl RecurringSearches {
         keyword: &str,
         mode: JobMode,
         interval_minutes: u32,
+        webhook_url: Option<&str>,
     ) -> Result<RecurringSearch, RecurringError> {
         if self.repo.list_for_user(user_id).await?.len() >= MAX_PER_USER {
             return Err(RecurringError::TooMany(MAX_PER_USER));
         }
-        let search = RecurringSearch::new(user_id, keyword, mode, interval_minutes)?;
+        let search = RecurringSearch::new(user_id, keyword, mode, interval_minutes, webhook_url)?;
         self.repo.insert(&search).await?;
         Ok(search)
     }
@@ -77,7 +78,7 @@ mod tests {
         let user = Uuid::new_v4();
 
         let created = service
-            .create(user, "rust releases", JobMode::Agent, 60)
+            .create(user, "rust releases", JobMode::Agent, 60, None)
             .await
             .unwrap();
         assert_eq!(service.list(user).await.unwrap(), vec![created.clone()]);
@@ -91,7 +92,7 @@ mod tests {
         let service = service();
         let owner = Uuid::new_v4();
         let created = service
-            .create(owner, "k", JobMode::Workflow, 60)
+            .create(owner, "k", JobMode::Workflow, 60, None)
             .await
             .unwrap();
 
@@ -108,18 +109,18 @@ mod tests {
         let service = service();
         let user = Uuid::new_v4();
         assert!(matches!(
-            service.create(user, " ", JobMode::Workflow, 60).await,
+            service.create(user, " ", JobMode::Workflow, 60, None).await,
             Err(RecurringError::Invalid(JobError::EmptyKeyword))
         ));
         for i in 0..20 {
             service
-                .create(user, &format!("k{i}"), JobMode::Workflow, 60)
+                .create(user, &format!("k{i}"), JobMode::Workflow, 60, None)
                 .await
                 .unwrap();
         }
         assert!(matches!(
             service
-                .create(user, "one too many", JobMode::Workflow, 60)
+                .create(user, "one too many", JobMode::Workflow, 60, None)
                 .await,
             Err(RecurringError::TooMany(20))
         ));

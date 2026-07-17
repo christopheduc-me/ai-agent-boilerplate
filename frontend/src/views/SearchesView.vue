@@ -19,6 +19,7 @@ const recurring = ref<RecurringSearch[]>([]);
 const recurringKeyword = ref("");
 const recurringMode = ref<JobMode>("agent");
 const recurringInterval = ref(60);
+const recurringWebhook = ref("");
 const recurringError = ref<string | null>(null);
 
 async function refresh(): Promise<void> {
@@ -34,9 +35,16 @@ async function createRecurring(): Promise<void> {
   recurringError.value = null;
   try {
     await auth.withAuth((token) =>
-      api.createRecurring(recurringKeyword.value, recurringMode.value, recurringInterval.value, token),
+      api.createRecurring(
+        recurringKeyword.value,
+        recurringMode.value,
+        recurringInterval.value,
+        token,
+        recurringWebhook.value,
+      ),
     );
     recurringKeyword.value = "";
+    recurringWebhook.value = "";
     await refresh();
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) {
@@ -126,6 +134,12 @@ onMounted(refresh);
           <input v-model.number="recurringInterval" type="number" min="1" max="10080" required />
           min
         </label>
+        <input
+          v-model="recurringWebhook"
+          class="webhook"
+          type="url"
+          placeholder="Webhook URL for digests (optional)"
+        />
         <button type="submit">Watch</button>
       </form>
       <p v-if="recurringError" class="error">{{ recurringError }}</p>
@@ -138,6 +152,9 @@ onMounted(refresh);
             (last run {{ new Date(search.last_run_at).toLocaleString() }})</span
           >
           <span v-else class="last-run"> (first run pending)</span>
+          <span v-if="search.webhook_url" class="last-run" :title="search.webhook_url">
+            📣 digest webhook</span
+          >
           <button type="button" class="delete" @click="removeRecurring(search.id)">Delete</button>
         </li>
       </ul>

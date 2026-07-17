@@ -46,6 +46,8 @@ pub enum JobError {
     EmptyKeyword,
     #[error("interval must be between 1 minute and 7 days")]
     InvalidInterval,
+    #[error("webhook url must start with http:// or https://")]
+    InvalidWebhookUrl,
     #[error("question must not be empty")]
     EmptyQuestion,
     #[error("answer must not be empty")]

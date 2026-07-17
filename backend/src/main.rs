@@ -6,6 +6,7 @@
 use std::sync::Arc;
 
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
+use backend::adapters::digest::WebhookDigestSender;
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::persistence::in_memory::{
@@ -171,6 +172,7 @@ async fn serve() {
         refresh_tokens,
         recurring,
         dispatcher,
+        Arc::new(WebhookDigestSender::default()),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),
         config.internal_token,

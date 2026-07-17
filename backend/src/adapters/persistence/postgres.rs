@@ -506,13 +506,14 @@ fn recurring_from_row(row: &PgRow) -> RecurringSearch {
         keyword: row.get("keyword"),
         mode: mode_from_str(row.get("mode")),
         interval_minutes: interval as u32,
+        webhook_url: row.get("webhook_url"),
         created_at: row.get("created_at"),
         last_run_at: row.get("last_run_at"),
     }
 }
 
 const RECURRING_COLS: &str =
-    "SELECT id, user_id, keyword, mode, interval_minutes, created_at, last_run_at
+    "SELECT id, user_id, keyword, mode, interval_minutes, webhook_url, created_at, last_run_at
      FROM recurring_searches";
 
 #[async_trait]
@@ -520,20 +521,30 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
     async fn insert(&self, search: &RecurringSearch) -> Result<(), PortError> {
         sqlx::query(
             "INSERT INTO recurring_searches
-             (id, user_id, keyword, mode, interval_minutes, created_at, last_run_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)",
+             (id, user_id, keyword, mode, interval_minutes, webhook_url, created_at, last_run_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(search.id)
         .bind(search.user_id)
         .bind(&search.keyword)
         .bind(mode_to_str(search.mode))
         .bind(search.interval_minutes as i32)
+        .bind(&search.webhook_url)
         .bind(search.created_at)
         .bind(search.last_run_at)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn find(&self, id: Uuid) -> Result<Option<RecurringSearch>, PortError> {
+        let row = sqlx::query(&format!("{RECURRING_COLS} WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(row.as_ref().map(recurring_from_row))
     }
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError> {

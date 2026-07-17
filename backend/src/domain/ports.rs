@@ -59,6 +59,7 @@ pub trait JobRepository: Send + Sync {
 #[async_trait]
 pub trait RecurringSearchRepository: Send + Sync {
     async fn insert(&self, search: &RecurringSearch) -> Result<(), PortError>;
+    async fn find(&self, id: Uuid) -> Result<Option<RecurringSearch>, PortError>;
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError>;
     /// Deletes the user's recurring search; false when unknown or foreign.
     async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError>;
@@ -83,6 +84,32 @@ pub trait RefreshTokenRepository: Send + Sync {
 #[async_trait]
 pub trait JobDispatcher: Send + Sync {
     async fn dispatch(&self, job: &ResearchJob, seen_urls: &[String]) -> Result<(), PortError>;
+}
+
+/// A digest of a recurring run that found something new (ADR-036).
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct Digest {
+    pub recurring_search_id: Uuid,
+    pub job_id: Uuid,
+    pub keyword: String,
+    pub new_count: usize,
+    /// The new results only (title/url/published_at), newest first.
+    pub new_results: Vec<DigestEntry>,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct DigestEntry {
+    pub title: String,
+    pub url: String,
+    pub published_at: Option<chrono::DateTime<Utc>>,
+}
+
+/// Delivers digests (ADR-036) — webhook in this repository; an e-mail sender
+/// is one more adapter behind the same port. Best-effort by contract: a
+/// failed delivery is logged, never fails the ingestion.
+#[async_trait]
+pub trait DigestSender: Send + Sync {
+    async fn send(&self, webhook_url: &str, digest: &Digest) -> Result<(), PortError>;
 }
 
 pub trait PasswordHasher: Send + Sync {

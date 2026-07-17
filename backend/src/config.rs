@@ -101,6 +101,8 @@ impl AppConfig {
             rate_limits: RateLimitConfig {
                 auth_per_minute: get_u32("RATE_LIMIT_AUTH_PER_MINUTE", 10),
                 api_per_minute: get_u32("RATE_LIMIT_API_PER_MINUTE", 120),
+                // Distributed limiting (ADR-037): only when scaling out.
+                redis_url: get("RATE_LIMIT_REDIS_URL"),
             },
             refresh_token_days: i64::from(get_u32("REFRESH_TOKEN_DAYS", 30)),
             bind_addr: get("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".into()),

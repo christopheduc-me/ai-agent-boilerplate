@@ -1,0 +1,18 @@
+{
+  "recurring_search_id": "9a1f0c5e-2b7d-4c3a-8e6f-1d2a3b4c5d6e",
+  "job_id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "keyword": "rust releases",
+  "new_count": 2,
+  "new_results": [
+    {
+      "title": "Rust 1.99 released",
+      "url": "https://example.com/rust-1-99",
+      "published_at": "2026-05-01T00:00:00Z"
+    },
+    {
+      "title": "Undated announcement",
+      "url": "https://example.com/undated",
+      "published_at": null
+    }
+  ]
+}

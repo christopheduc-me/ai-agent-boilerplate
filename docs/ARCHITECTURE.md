@@ -11,7 +11,7 @@
 > is part of the change. Implementation gaps are marked *(planned)* here and
 > tracked in `ROADMAP.md`.
 
-Last updated: 2026-07-15
+Last updated: 2026-07-17
 
 **Language convention**: all documentation, code, comments, commit messages, and
 identifiers in this project are written in **English only**.
@@ -983,6 +983,50 @@ date, continue the cascade", never a failed job. The fake stack gains a
 The LLM enrichment call still runs for every hit (event type + summary,
 ADR-027) — stage 2 improves the date, it does not replace the enrichment.
 
+### ADR-036 — Digest webhooks for recurring searches (decided 2026-07-16, extends ADR-033)
+
+**Context**: the recurring memory can tell a run found something new, but the
+user still has to open the app to notice. Monitoring use cases need a push.
+
+**Decision**: an optional **`webhook_url`** on the recurring search (migration
+0007, `http(s)` only). When a recurring run completes **with new results**,
+`IngestResults` builds a digest — keyword, run id, `new_count`, and the new
+results only (title/url/published_at) — and a **`DigestSender` port**
+delivers it. This repository ships the **webhook adapter** (the universal
+integration surface: Slack, n8n, Zapier, a fork's endpoint); an e-mail sender
+is one more adapter behind the same port.
+
+Rules: strictly **best-effort** (a dead webhook, a deleted recurring search,
+or a lookup error are logged and never fail the ingestion), 5 s timeout, no
+digest when nothing is new, and the outbound shape is pinned by the
+`contracts/digest-webhook.json` fixture (ADR-025 — produced by the backend,
+consumed by the user's systems). Note for forks: the URL is user-supplied and
+fetched server-side — restrict egress if your deployment is sensitive to SSRF.
+
+### ADR-037 — Opt-in Redis-backed rate limiting (decided 2026-07-16, revisits ADR-017)
+
+**Context**: ADR-017 deliberately kept the per-IP limiter in-memory —
+per-instance, benign degradation — and deferred the distributed variant to
+"if the backend ever scales horizontally", preferring a reverse-proxy rule.
+Forks that do scale out asked for a ready-made in-app option, and the swap
+surface was already one file.
+
+**Decision**: a **`RedisWindowLimiter`** behind the existing middleware —
+same fixed window, one Redis counter per (scope, client IP, window index) via
+`INCR` + `EXPIRE` — activated by **`RATE_LIMIT_REDIS_URL`**; unset keeps the
+in-memory limiter (the default stays exactly ADR-017). Two rules worth
+noting:
+
+1. **Fail-open**: if Redis is unreachable (tight 1 s budgets), requests pass
+   with a warning — the limiter protects LLM spend, it must not turn a Redis
+   outage into an API outage.
+2. The `auth` and `api` scopes keep independent counters, as before.
+
+The reverse-proxy recommendation of ADR-017 still stands as the zero-code
+alternative; this adapter is for forks that want the limit inside the app
+(e.g. no shared proxy tier). Integration-tested against the compose/CI Redis
+(skipped without `REDIS_URL`), including cross-replica sharing and fail-open.
+
 ---
 
 ## 4. API contracts (summary)
@@ -1000,7 +1044,7 @@ ADR-027) — stage 2 improves the date, it does not replace the enrichment.
 | GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |
 | POST | `/api/searches/{id}/answer` | Answers the agent's clarification `{answer}` → job resumes (ADR-032; 409 unless `awaiting_input`) |
 | GET | `/api/searches/{id}/events` | SSE stream of the same payload, one `update` event per change, closes on terminal status (ADR-026) |
-| POST | `/api/recurring` | Saves a recurring search `{keyword, mode?, interval_minutes}` (ADR-033) |
+| POST | `/api/recurring` | Saves a recurring search `{keyword, mode?, interval_minutes, webhook_url?}` (ADR-033/036) |
 | GET | `/api/recurring` | Lists the user's recurring searches |
 | DELETE | `/api/recurring/{id}` | Deletes a recurring search (run history is kept) |
 
@@ -1012,6 +1056,12 @@ also enforces the per-user daily quota — ADR-017).
 | Method | Route | Description |
 |---|---|---|
 | POST | `/tasks` | `{job_id, keyword, mode, clarification?, seen_urls}` → Celery enqueue |
+
+### Outbound (Rust → the user's systems)
+
+| Method | Route | Description |
+|---|---|---|
+| POST | *the saved `webhook_url`* | Digest of a recurring run with news `{recurring_search_id, job_id, keyword, new_count, new_results[]}` (ADR-036, fixture `contracts/digest-webhook.json`) |
 
 ### Internal (worker → Rust, shared token)
 
@@ -1032,5 +1082,5 @@ also enforces the per-user daily quota — ADR-017).
 - Upgrade the SSE change-detection (ADR-026) from per-connection DB polling to
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
 - Multiple search providers with aggregation/deduplication.
-- Delivery channels for recurring-search reports (ADR-033): e-mail/webhook
-  digests when a run finds something new — a `ReportSender` port away.
+- An e-mail `DigestSender` adapter (SMTP/SES) behind the ADR-036 port, for
+  forks that prefer inboxes over webhooks.
