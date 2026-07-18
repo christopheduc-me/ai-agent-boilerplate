@@ -3,8 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import type { SearchJobDetail } from "@/api";
 import { useAuthStore } from "@/stores/auth";
-import SearchDetailView from "../SearchDetailView.vue";
-import { makePinia, makeRouter } from "./helpers";
+import { makePinia, makeRouter } from "../../views/__tests__/helpers";
+import RunPanel from "../RunPanel.vue";
 
 vi.mock("@/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/api")>();
@@ -60,8 +60,8 @@ async function mountView() {
   const pinia = makePinia();
   useAuthStore().token = "tok";
   const router = makeRouter();
-  await router.push({ name: "search-detail", params: { id: "j1" } });
-  const wrapper = mount(SearchDetailView, {
+  await router.push({ name: "searches" });
+  const wrapper = mount(RunPanel, {
     props: { id: "j1" },
     global: { plugins: [pinia, router] },
   });
@@ -71,7 +71,7 @@ async function mountView() {
 
 beforeEach(() => vi.clearAllMocks());
 
-describe("SearchDetailView", () => {
+describe("RunPanel (ADR-039 inline run panel)", () => {
   it("renders the journal and the timeline from SSE updates (ADR-026/030)", async () => {
     mocked.streamSearch.mockImplementation(async (_id, _token, onUpdate) => {
       onUpdate(completedAgentJob);

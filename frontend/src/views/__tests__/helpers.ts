@@ -10,7 +10,6 @@ export function makeRouter(): Router {
     routes: [
       { path: "/login", name: "login", component: stub },
       { path: "/", name: "searches", component: stub },
-      { path: "/searches/:id", name: "search-detail", component: stub, props: true },
     ],
   });
 }

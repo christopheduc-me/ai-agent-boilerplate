@@ -30,7 +30,9 @@ async function mountView() {
   useAuthStore().token = "tok";
   const router = makeRouter();
   await router.push({ name: "searches" });
-  const wrapper = mount(SearchesView, { global: { plugins: [pinia, router] } });
+  const wrapper = mount(SearchesView, {
+    global: { plugins: [pinia, router], stubs: { RunPanel: true } },
+  });
   await flushPromises();
   return { wrapper, router };
 }
@@ -41,10 +43,12 @@ beforeEach(() => {
   mocked.listRecurring.mockResolvedValue([]);
 });
 
-describe("SearchesView (two demos, ADR-030)", () => {
-  it("launches the workflow demo in workflow mode", async () => {
+describe("SearchesView (single-page workbench, ADR-039)", () => {
+  it("launches the workflow demo inline — no navigation", async () => {
     mocked.launchSearch.mockResolvedValue({ job_id: "j1" });
     const { wrapper, router } = await mountView();
+
+    expect(wrapper.find("[data-testid=empty-stage]").exists()).toBe(true);
 
     const demo = wrapper.find("[data-testid=workflow-demo]");
     await demo.find("input").setValue("rust");
@@ -52,8 +56,10 @@ describe("SearchesView (two demos, ADR-030)", () => {
     await flushPromises();
 
     expect(mocked.launchSearch).toHaveBeenCalledWith("rust", "tok", "workflow");
-    expect(router.currentRoute.value.name).toBe("search-detail");
-    expect(router.currentRoute.value.params.id).toBe("j1");
+    // ADR-039: the run plays out in place — same route, panel mounted.
+    expect(router.currentRoute.value.name).toBe("searches");
+    expect(wrapper.find("run-panel-stub").attributes("id")).toBe("j1");
+    expect(wrapper.find("[data-testid=empty-stage]").exists()).toBe(false);
   });
 
   it("launches the agent demo in agent mode", async () => {
@@ -82,10 +88,13 @@ describe("SearchesView (two demos, ADR-030)", () => {
     ]);
     const { wrapper } = await mountView();
 
-    const items = wrapper.findAll("li");
+    const items = wrapper.findAll(".history li");
     expect(items).toHaveLength(2);
     expect(items[1].text()).toContain("two");
     expect(items[1].find(".mode").attributes("data-mode")).toBe("agent");
+    // Picking a past run loads it in the panel (ADR-039), no navigation.
+    await items[1].find("button.job-link").trigger("click");
+    expect(wrapper.find("run-panel-stub").attributes("id")).toBe("j2");
     // Spend tracking (ADR-038): per-job cost and the sum of all runs.
     expect(items[1].text()).toContain("$0.0223");
     expect(wrapper.find("[data-testid=total-cost]").text()).toContain("$0.0323");

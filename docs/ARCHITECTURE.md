@@ -1063,6 +1063,25 @@ see what each search actually cost.
    (8500 in / 1200 out tokens), 2 searches") and, on the searches list, the
    per-run cost plus the total across listed runs.
 
+### ADR-039 — Single-page workbench (decided 2026-07-17, revisits ADR-003's page layout)
+
+**Context**: launching a run navigated to a per-search detail page. For a demo
+whose value is *watching* the agent work (live journal, HITL dialog, costs),
+the page switch broke the flow — and the user asked for everything on one page.
+
+**Decision**: the searches view becomes a **workbench**: a two-column layout
+(launchers + recurring searches + history on the left, the active run on the
+right). Launching sets the run **inline** — no navigation; picking a previous
+search loads it in the same panel. The follow logic (SSE with polling
+fallback, journal, clarification form, cost line, timeline) moves from the
+detail view into a reusable **`RunPanel`** component that re-subscribes when
+its `id` prop changes and notifies the workbench on terminal status (history
+and total cost refresh). The `/searches/:id` route and detail view are
+removed — the SPA has two routes left (login, workbench). Deep-linking a
+specific run is given up deliberately: this is a demo workbench, not a
+document store; a fork wanting shareable URLs can sync the selected run to a
+query parameter.
+
 ---
 
 ## 4. API contracts (summary)

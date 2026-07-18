@@ -156,5 +156,8 @@ test("a returning user logs in and finds the previous searches", async ({ page }
   await page.getByLabel("Password").fill(password);
   await page.getByRole("button", { name: "Log in" }).click();
   await expect(page.getByRole("heading", { name: "Previous searches" })).toBeVisible();
-  await expect(page.getByRole("link", { name: "history check" })).toBeVisible();
+  // Picking a past run loads it inline (ADR-039): same page, panel filled.
+  await page.getByRole("button", { name: "history check" }).click();
+  await expect(page.getByRole("heading", { name: "“history check”" })).toBeVisible();
+  await expect(page.getByTestId("run-panel")).toContainText("completed");
 });

@@ -98,18 +98,18 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
   list-style: none;
   margin: 0;
   padding: 0;
-  border-left: 2px solid #d0d0d0;
+  border-left: 2px solid var(--border-strong);
 }
 .month {
-  margin: 1.25rem 0 0.5rem;
-  font-size: 0.9rem;
+  margin: 1.5rem 0 0.6rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #666;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 .entry {
   position: relative;
-  padding: 0 0 1rem 1.25rem;
+  padding: 0 0 1.15rem 1.35rem;
 }
 .marker {
   position: absolute;
@@ -118,50 +118,61 @@ const undated = computed(() => props.results.filter((r) => r.published_at === nu
   width: 12px;
   height: 12px;
   border-radius: 50%;
-  border: 2px solid #3a6ea5;
-  background: #3a6ea5;
+  border: 2px solid var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 0 3px var(--surface);
 }
 .confidence-medium .marker {
-  background: transparent; /* hollow = LLM-estimated date */
+  background: var(--surface); /* hollow = LLM-estimated date */
 }
 .confidence-unknown .marker {
-  background: transparent;
-  border-color: #aaa;
+  background: var(--surface);
+  border-color: var(--text-muted);
   border-style: dashed;
 }
 .meta {
-  margin: 0;
-  font-size: 0.85rem;
-  color: #666;
+  margin: 0 0 0.15rem;
+  font-size: 0.8rem;
+  color: var(--text-muted);
   display: flex;
   gap: 0.5rem;
-  align-items: baseline;
+  align-items: center;
+  flex-wrap: wrap;
 }
 .estimated {
   font-style: italic;
 }
+.content a {
+  font-weight: 600;
+}
 .badge {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
+  font-weight: 700;
   text-transform: uppercase;
-  padding: 0.05rem 0.4rem;
-  border-radius: 3px;
-  background: #eef2f7;
-  border: 1px solid #c7d4e2;
+  letter-spacing: 0.02em;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
 }
 .summary {
   margin: 0.15rem 0 0;
-  color: #444;
+  color: var(--text);
+  font-size: 0.92rem;
 }
 .new-chip {
-  font-size: 0.7rem;
+  font-size: 0.66rem;
+  font-weight: 700;
   text-transform: uppercase;
-  padding: 0.05rem 0.4rem;
-  border-radius: 3px;
-  background: #eaf6ee;
-  border: 1px solid #b7dcc2;
-  color: #1d7a3c;
+  letter-spacing: 0.02em;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  background: var(--success-bg);
+  border: 1px solid var(--success-border);
+  color: var(--success);
 }
 .entry.seen .content {
-  opacity: 0.55; /* already delivered by a previous run (ADR-033) */
+  opacity: 0.5; /* already delivered by a previous run (ADR-033) */
 }
 </style>

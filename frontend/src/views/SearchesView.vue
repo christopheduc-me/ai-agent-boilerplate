@@ -1,8 +1,11 @@
 <script setup lang="ts">
+// Single-page workbench (ADR-039): launch either mode, follow the run, browse
+// past runs and manage recurring searches — all in place, no navigation.
 import { computed, onMounted, ref } from "vue";
 import { useRouter } from "vue-router";
 
 import { api, ApiError, type JobMode, type RecurringSearch, type SearchJob } from "@/api";
+import RunPanel from "@/components/RunPanel.vue";
 import { useAuthStore } from "@/stores/auth";
 
 const auth = useAuthStore();
@@ -13,6 +16,8 @@ const agentKeyword = ref("");
 const jobs = ref<SearchJob[]>([]);
 const error = ref<string | null>(null);
 const busy = ref(false);
+// The run displayed in the inline panel (ADR-039).
+const activeRunId = ref<string | null>(null);
 
 // Recurring searches (ADR-033).
 const recurring = ref<RecurringSearch[]>([]);
@@ -28,6 +33,24 @@ async function refresh(): Promise<void> {
     recurring.value = await auth.withAuth((token) => api.listRecurring(token));
   } catch (e) {
     if (e instanceof ApiError && e.status === 401) router.push({ name: "login" });
+  }
+}
+
+async function launch(keyword: string, mode: JobMode): Promise<void> {
+  error.value = null;
+  busy.value = true;
+  try {
+    const { job_id } = await auth.withAuth((token) => api.launchSearch(keyword, token, mode));
+    activeRunId.value = job_id; // stays on this page: the panel follows it live
+    await refresh();
+  } catch (e) {
+    if (e instanceof ApiError && e.status === 401) {
+      router.push({ name: "login" });
+      return;
+    }
+    error.value = e instanceof ApiError ? e.message : "unexpected error";
+  } finally {
+    busy.value = false;
   }
 }
 
@@ -64,23 +87,6 @@ async function removeRecurring(id: string): Promise<void> {
   }
 }
 
-async function launch(keyword: string, mode: JobMode): Promise<void> {
-  error.value = null;
-  busy.value = true;
-  try {
-    const { job_id } = await auth.withAuth((token) => api.launchSearch(keyword, token, mode));
-    router.push({ name: "search-detail", params: { id: job_id } });
-  } catch (e) {
-    if (e instanceof ApiError && e.status === 401) {
-      router.push({ name: "login" });
-      return;
-    }
-    error.value = e instanceof ApiError ? e.message : "unexpected error";
-  } finally {
-    busy.value = false;
-  }
-}
-
 // Spend tracking (ADR-038): the sum of every listed run.
 const totalCost = computed(() => jobs.value.reduce((sum, job) => sum + job.usage.cost_usd, 0));
 
@@ -88,10 +94,10 @@ onMounted(refresh);
 </script>
 
 <template>
-  <section>
-    <!-- Two demos, one plumbing (ADR-030): the fixed pipeline vs the agentic
-         loop where the LLM decides the queries and when to stop. -->
-    <div class="demos">
+  <div class="workbench">
+    <aside class="controls">
+      <!-- Two demos, one plumbing (ADR-030): the fixed pipeline vs the agentic
+           loop where the LLM decides the queries and when to stop. -->
       <form
         class="demo"
         data-testid="workflow-demo"
@@ -115,163 +121,250 @@ onMounted(refresh);
         <input v-model="agentKeyword" placeholder="Goal, e.g. rust hexagonal architecture" required />
         <button type="submit" :disabled="busy">Run the agent</button>
       </form>
-    </div>
-    <p v-if="error" class="error">{{ error }}</p>
+      <p v-if="error" class="error">{{ error }}</p>
 
-    <!-- Recurring searches with memory (ADR-033): the backend scheduler
-         re-runs them; results are flagged new/seen against previous runs. -->
-    <section class="recurring" data-testid="recurring-section">
-      <h2>Recurring searches</h2>
-      <p class="pitch">
-        Saved searches re-run automatically. Each run remembers the previous ones: results are
-        flagged <strong>new</strong> or already seen, and the agent reports the delta.
-      </p>
-      <form data-testid="recurring-form" @submit.prevent="createRecurring">
-        <input v-model="recurringKeyword" placeholder="Keyword to watch" required />
-        <select v-model="recurringMode" aria-label="Mode">
-          <option value="agent">agent</option>
-          <option value="workflow">workflow</option>
-        </select>
-        <label class="interval">
-          every
-          <input v-model.number="recurringInterval" type="number" min="1" max="10080" required />
-          min
-        </label>
-        <input
-          v-model="recurringWebhook"
-          class="webhook"
-          type="url"
-          placeholder="Webhook URL for digests (optional)"
-        />
-        <button type="submit">Watch</button>
-      </form>
-      <p v-if="recurringError" class="error">{{ recurringError }}</p>
-      <ul>
-        <li v-for="search in recurring" :key="search.id" :data-testid="`recurring-${search.id}`">
-          <strong>{{ search.keyword }}</strong>
-          <span class="mode" :data-mode="search.mode">{{ search.mode }}</span>
-          — every {{ search.interval_minutes }} min
-          <span v-if="search.last_run_at" class="last-run">
-            (last run {{ new Date(search.last_run_at).toLocaleString() }})</span
-          >
-          <span v-else class="last-run"> (first run pending)</span>
-          <span v-if="search.webhook_url" class="last-run" :title="search.webhook_url">
-            📣 digest webhook</span
-          >
-          <button type="button" class="delete" @click="removeRecurring(search.id)">Delete</button>
-        </li>
-      </ul>
-      <p v-if="recurring.length === 0" class="pitch">Nothing watched yet.</p>
-    </section>
+      <!-- Recurring searches with memory (ADR-033). -->
+      <section class="recurring" data-testid="recurring-section">
+        <h2>Recurring searches</h2>
+        <p class="pitch">
+          Saved searches re-run automatically. Each run remembers the previous ones: results are
+          flagged <strong>new</strong> or already seen, and the agent reports the delta.
+        </p>
+        <form data-testid="recurring-form" @submit.prevent="createRecurring">
+          <input v-model="recurringKeyword" placeholder="Keyword to watch" required />
+          <select v-model="recurringMode" aria-label="Mode">
+            <option value="agent">agent</option>
+            <option value="workflow">workflow</option>
+          </select>
+          <label class="interval">
+            every
+            <input v-model.number="recurringInterval" type="number" min="1" max="10080" required />
+            min
+          </label>
+          <input
+            v-model="recurringWebhook"
+            class="webhook"
+            type="url"
+            placeholder="Webhook URL for digests (optional)"
+          />
+          <button type="submit">Watch</button>
+        </form>
+        <p v-if="recurringError" class="error">{{ recurringError }}</p>
+        <ul>
+          <li v-for="search in recurring" :key="search.id" :data-testid="`recurring-${search.id}`">
+            <strong>{{ search.keyword }}</strong>
+            <span class="mode" :data-mode="search.mode">{{ search.mode }}</span>
+            — every {{ search.interval_minutes }} min
+            <span v-if="search.last_run_at" class="muted">
+              (last run {{ new Date(search.last_run_at).toLocaleString() }})</span
+            >
+            <span v-else class="muted"> (first run pending)</span>
+            <span v-if="search.webhook_url" class="muted" :title="search.webhook_url">
+              📣 digest webhook</span
+            >
+            <button type="button" class="delete" @click="removeRecurring(search.id)">Delete</button>
+          </li>
+        </ul>
+        <p v-if="recurring.length === 0" class="pitch">Nothing watched yet.</p>
+      </section>
 
-    <h2>Previous searches</h2>
-    <p v-if="jobs.length > 0" class="total-cost" data-testid="total-cost">
-      Total API spend: ${{ totalCost.toFixed(4) }}
-    </p>
-    <ul>
-      <li v-for="job in jobs" :key="job.id">
-        <RouterLink :to="{ name: 'search-detail', params: { id: job.id } }">
-          {{ job.keyword }}
-        </RouterLink>
-        <span class="mode" :data-mode="job.mode">{{ job.mode }}</span>
-        — {{ job.status }}
-        <span v-if="job.usage.cost_usd > 0" class="job-cost"
-          >— ${{ job.usage.cost_usd.toFixed(4) }}</span
-        >
-      </li>
-    </ul>
-    <p v-if="jobs.length === 0">No search yet.</p>
-  </section>
+      <!-- History: pick a run, it loads in the panel — no navigation (ADR-039). -->
+      <section class="history">
+        <h2>Previous searches</h2>
+        <p v-if="jobs.length > 0" class="muted" data-testid="total-cost">
+          Total API spend: ${{ totalCost.toFixed(4) }}
+        </p>
+        <ul>
+          <li v-for="job in jobs" :key="job.id" :class="{ selected: job.id === activeRunId }">
+            <button type="button" class="job-link" @click="activeRunId = job.id">
+              {{ job.keyword }}
+            </button>
+            <span class="mode" :data-mode="job.mode">{{ job.mode }}</span>
+            — {{ job.status }}
+            <span v-if="job.usage.cost_usd > 0" class="muted"
+              >— ${{ job.usage.cost_usd.toFixed(4) }}</span
+            >
+          </li>
+        </ul>
+        <p v-if="jobs.length === 0" class="muted">No search yet.</p>
+      </section>
+    </aside>
+
+    <main class="stage">
+      <RunPanel v-if="activeRunId" :id="activeRunId" @finished="refresh" />
+      <div v-else class="empty-stage" data-testid="empty-stage">
+        <p>Launch a workflow or agent run — it will play out right here, live.</p>
+        <p class="muted">Or pick a previous search from the history.</p>
+      </div>
+    </main>
+  </div>
 </template>
 
 <style scoped>
-.demos {
+.workbench {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  grid-template-columns: minmax(300px, 380px) 1fr;
+  gap: 1.5rem;
+  align-items: start;
+}
+@media (max-width: 860px) {
+  .workbench {
+    grid-template-columns: 1fr;
+  }
+}
+.controls {
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
-  margin-bottom: 1rem;
+}
+.stage {
+  min-height: 340px;
+  padding: 1.5rem 1.75rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
+}
+.empty-stage {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  min-height: 280px;
+  color: var(--text-muted);
+  text-align: center;
+  gap: 0.25rem;
+}
+.empty-stage p:first-child {
+  font-size: 1.05rem;
+  color: var(--text);
+  font-weight: 500;
+}
+.demo,
+.recurring,
+.history {
+  padding: 1.1rem 1.2rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 .demo {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
-  padding: 1rem;
-  border: 1px solid #dde5ee;
-  border-radius: 6px;
-  background: #f7f9fb;
+  gap: 0.65rem;
 }
-.demo h2 {
+.demo h2,
+.recurring h2,
+.history h2 {
   margin: 0;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+.demo[data-testid="agent-demo"] {
+  border-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+  background: linear-gradient(180deg, var(--accent-soft) 0%, var(--surface) 55%);
 }
 .pitch {
   margin: 0;
-  color: #555;
-  font-size: 0.9rem;
-  flex: 1;
+  color: var(--text-muted);
+  font-size: 0.88rem;
 }
 .mode {
-  font-size: 0.7rem;
+  display: inline-block;
+  font-size: 0.66rem;
+  font-weight: 700;
   text-transform: uppercase;
-  padding: 0.05rem 0.4rem;
+  letter-spacing: 0.03em;
+  padding: 0.1rem 0.45rem;
   margin-left: 0.4rem;
-  border-radius: 3px;
-  background: #eef2f7;
-  border: 1px solid #c7d4e2;
+  border-radius: 999px;
+  background: var(--surface-2);
+  border: 1px solid var(--border-strong);
+  color: var(--text-muted);
 }
 .mode[data-mode="agent"] {
-  background: #eaf6ee;
-  border-color: #b7dcc2;
-}
-.recurring {
-  margin: 1rem 0;
-  padding: 1rem;
-  border: 1px solid #dde5ee;
-  border-radius: 6px;
-}
-.recurring h2 {
-  margin: 0 0 0.25rem;
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, transparent);
+  color: var(--accent);
 }
 .recurring form {
   display: flex;
   gap: 0.5rem;
   align-items: center;
   flex-wrap: wrap;
-  margin-top: 0.5rem;
+  margin-top: 0.75rem;
 }
 .recurring form input:first-child {
   flex: 1;
-  min-width: 160px;
+  min-width: 140px;
+}
+.recurring select,
+.interval input {
+  width: auto;
 }
 .interval {
   display: flex;
   gap: 0.3rem;
   align-items: center;
+  font-size: 0.85rem;
+  color: var(--text-muted);
 }
 .interval input {
   width: 4.5rem;
 }
-.recurring ul {
+.recurring ul,
+.history ul {
   list-style: none;
-  margin: 0.5rem 0 0;
+  margin: 0.75rem 0 0;
   padding: 0;
 }
-.recurring li {
-  padding: 0.25rem 0;
+.recurring li,
+.history li {
+  padding: 0.35rem 0.4rem;
+  border-radius: var(--radius-sm);
+  font-size: 0.92rem;
 }
-.last-run {
-  color: #666;
+.history li + li,
+.recurring li + li {
+  border-top: 1px solid var(--border);
+}
+.history li.selected {
+  background: var(--accent-soft);
+  border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+.job-link {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 600;
+}
+.job-link:hover {
+  background: none;
+  text-decoration: underline;
+}
+.muted {
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 .delete {
-  margin-left: 0.6rem;
-  font-size: 0.8rem;
+  margin-left: 0.5rem;
+  padding: 0.15rem 0.5rem;
+  font-size: 0.78rem;
+  font-weight: 600;
+  color: var(--danger);
+  background: transparent;
+  border: 1px solid color-mix(in srgb, var(--danger) 35%, transparent);
 }
-.total-cost,
-.job-cost {
-  color: #666;
-  font-size: 0.85rem;
+.delete:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
-.total-cost {
-  margin: 0 0 0.5rem;
+.webhook {
+  flex: 1 1 100%;
 }
 </style>

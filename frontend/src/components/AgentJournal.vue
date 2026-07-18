@@ -42,17 +42,17 @@ const icon = (kind: string): string => icons[kind] ?? "🔍";
 <style scoped>
 .journal {
   margin: 1rem 0;
-  padding: 0.75rem 1rem;
-  background: #f7f9fb;
-  border: 1px solid #dde5ee;
-  border-radius: 6px;
+  padding: 1rem 1.1rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 .journal h3 {
-  margin: 0 0 0.5rem;
-  font-size: 0.9rem;
+  margin: 0 0 0.75rem;
+  font-size: 0.72rem;
   text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: #666;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
 }
 .journal ol {
   list-style: none;
@@ -61,26 +61,41 @@ const icon = (kind: string): string => icons[kind] ?? "🔍";
 }
 .journal li {
   display: flex;
-  gap: 0.6rem;
-  padding: 0.3rem 0;
+  gap: 0.7rem;
+  padding: 0.45rem 0;
+}
+.journal li + li {
+  border-top: 1px dashed var(--border);
 }
 .icon {
   flex: none;
-  width: 1.4rem;
-  text-align: center;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.7rem;
+  height: 1.7rem;
+  font-size: 0.85rem;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 1px solid var(--border-strong);
 }
 .action {
   margin: 0;
+  font-size: 0.92rem;
 }
 .hits {
-  color: #666;
+  color: var(--text-muted);
   font-size: 0.85rem;
 }
 .reason {
-  margin: 0;
-  color: #666;
+  margin: 0.1rem 0 0;
+  color: var(--text-muted);
   font-size: 0.85rem;
   font-style: italic;
+}
+.thinking .icon {
+  border-color: var(--accent);
+  color: var(--accent);
 }
 .pulse {
   animation: pulse 1.2s ease-in-out infinite;
@@ -92,6 +107,6 @@ const icon = (kind: string): string => icons[kind] ?? "🔍";
 }
 .empty {
   margin: 0;
-  color: #666;
+  color: var(--text-muted);
 }
 </style>
