@@ -166,9 +166,28 @@ button:disabled {
 }
 
 main {
-  max-width: 1100px;
+  max-width: 1500px;
   margin: 0 auto;
-  padding: 1.75rem 1.25rem 3rem;
+  padding: 1.25rem 1.5rem 1.5rem;
+}
+/* Slim, theme-aware scrollbars for the panes that scroll on their own. */
+.scroll-pane {
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-strong) transparent;
+}
+.scroll-pane::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+.scroll-pane::-webkit-scrollbar-thumb {
+  background: var(--border-strong);
+  border-radius: 999px;
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+.scroll-pane::-webkit-scrollbar-thumb:hover {
+  background: var(--text-muted);
+  background-clip: padding-box;
 }
 .topbar {
   position: sticky;

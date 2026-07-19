@@ -95,7 +95,7 @@ onMounted(refresh);
 
 <template>
   <div class="workbench">
-    <aside class="controls">
+    <aside class="controls scroll-pane">
       <!-- Two demos, one plumbing (ADR-030): the fixed pipeline vs the agentic
            loop where the LLM decides the queries and when to stop. -->
       <form
@@ -190,7 +190,7 @@ onMounted(refresh);
       </section>
     </aside>
 
-    <main class="stage">
+    <main class="stage scroll-pane">
       <RunPanel v-if="activeRunId" :id="activeRunId" @finished="refresh" />
       <div v-else class="empty-stage" data-testid="empty-stage">
         <p>Launch a workflow or agent run — it will play out right here, live.</p>
@@ -203,27 +203,43 @@ onMounted(refresh);
 <style scoped>
 .workbench {
   display: grid;
-  grid-template-columns: minmax(300px, 380px) 1fr;
+  grid-template-columns: minmax(360px, 430px) 1fr;
   gap: 1.5rem;
   align-items: start;
 }
-@media (max-width: 860px) {
-  .workbench {
-    grid-template-columns: 1fr;
-  }
+/* Each column scrolls on its own, bounded to the viewport, so the run panel
+   (with its long timeline) never pushes the launchers off-screen. */
+.controls,
+.stage {
+  max-height: calc(100dvh - 5.5rem);
+  overflow-y: auto;
 }
 .controls {
   display: flex;
   flex-direction: column;
   gap: 1rem;
+  padding-right: 0.4rem;
 }
 .stage {
-  min-height: 340px;
-  padding: 1.5rem 1.75rem;
+  min-height: 420px;
+  padding: 1.75rem 2rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
   box-shadow: var(--shadow-sm);
+}
+@media (max-width: 860px) {
+  .workbench {
+    grid-template-columns: 1fr;
+  }
+  .controls,
+  .stage {
+    max-height: none;
+    overflow: visible;
+  }
+  .controls {
+    padding-right: 0;
+  }
 }
 .empty-stage {
   display: flex;
@@ -243,7 +259,7 @@ onMounted(refresh);
 .demo,
 .recurring,
 .history {
-  padding: 1.1rem 1.2rem;
+  padding: 1.35rem 1.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
   background: var(--surface);
@@ -252,13 +268,13 @@ onMounted(refresh);
 .demo {
   display: flex;
   flex-direction: column;
-  gap: 0.65rem;
+  gap: 0.7rem;
 }
 .demo h2,
 .recurring h2,
 .history h2 {
   margin: 0;
-  font-size: 0.95rem;
+  font-size: 1.05rem;
   font-weight: 700;
   letter-spacing: -0.01em;
 }
