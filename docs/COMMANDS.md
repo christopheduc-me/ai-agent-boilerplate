@@ -299,7 +299,17 @@ cd frontend && npm update
 # Outdated report across the three bricks (native tools, no bot — ADR-022);
 # also run weekly by both CIs alongside the security audits
 scripts/deps-report.sh            # or: scripts/deps-report.sh backend|agent|frontend
+
+# Security audits, exactly as the weekly CI runs them (ADR-015 amendment)
+cd backend && cargo audit         # exceptions: backend/.cargo/audit.toml (justified)
+cd agent && uv export --frozen --no-emit-project -o /tmp/req.txt && uvx pip-audit -r /tmp/req.txt
+cd frontend && npm audit --audit-level=high
 ```
+
+`cargo audit` scans the lockfile, which lists optional dependencies that are
+never compiled (e.g. the unused MySQL driver). Any advisory ignored in
+`backend/.cargo/audit.toml` must carry a written justification — see the
+ADR-015 amendment in docs/ARCHITECTURE.md.
 
 ---
 

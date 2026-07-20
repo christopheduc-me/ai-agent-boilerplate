@@ -1,0 +1,22 @@
+# cargo-audit configuration (ADR-015 security amendment).
+#
+# `cargo audit` scans Cargo.lock, which is feature-agnostic: it lists every
+# optional dependency of the graph, including drivers this project never
+# compiles. Anything ignored here MUST be justified below and re-checked
+# whenever the dependency is upgraded.
+
+[advisories]
+ignore = [
+    # RUSTSEC-2023-0071 — "Marvin Attack" timing sidechannel in `rsa` 0.9.x.
+    #
+    # Not reachable here: `rsa` is a dependency of `sqlx-mysql` only, and this
+    # backend enables the `postgres` driver exclusively
+    # (sqlx `default-features = false`). Verified with:
+    #     cargo tree -i rsa --target all        -> nothing to print
+    #     cargo tree -i sqlx-mysql --target all -> nothing to print
+    # The crate is present in Cargo.lock but never built into the binary, so
+    # no RSA code path exists at runtime. Upstream has no fixed release
+    # ("No fixed upgrade is available"); revisit when `rsa` 0.10 ships or when
+    # sqlx drops the transitive dependency.
+    "RUSTSEC-2023-0071",
+]

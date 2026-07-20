@@ -500,6 +500,23 @@ Scheduled pipelines skip every other job (`.not-on-schedule` rule), so the
 weekly run is audit-only and never blocks merge requests. The weekly schedule
 itself is created in the GitLab UI (see SETUP.md §3).
 
+**Advisory exceptions (added 2026-07-18)**: `cargo audit` scans `Cargo.lock`,
+which is **feature-agnostic** — it lists optional dependencies the project
+never compiles. Exceptions therefore live in `backend/.cargo/audit.toml`
+(read by both CIs, which run the audit from `backend/`), and the policy is:
+**every ignored advisory carries a written justification and a revisit
+condition**, or it is fixed rather than silenced.
+
+Current exception — **RUSTSEC-2023-0071** ("Marvin Attack", timing sidechannel
+in `rsa` 0.9.x, no fixed release upstream): `rsa` is a dependency of
+`sqlx-mysql` only, and the backend enables the `postgres` driver exclusively
+(`sqlx` with `default-features = false`). Both `cargo tree -i rsa --target all`
+and `cargo tree -i sqlx-mysql --target all` return nothing: the crate sits in
+the lockfile but is never built into the binary, so no RSA code path exists at
+runtime. Revisit when `rsa` ships a fix or when sqlx drops the transitive
+dependency. Yanked-crate warnings (e.g. `spin` 0.9.8) stay warnings and do not
+fail the audit.
+
 ### ADR-019 — Open source on GitHub: GitHub Actions becomes the primary CI/CD (decided 2026-07-08, revisits ADR-015)
 
 **Context**: the project goes open source on GitHub. Contributor pull requests
