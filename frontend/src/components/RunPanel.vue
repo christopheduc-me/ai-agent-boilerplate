@@ -10,7 +10,9 @@ import { useRouter } from "vue-router";
 import { api, ApiError, type SearchJobDetail } from "@/api";
 import AgentJournal from "@/components/AgentJournal.vue";
 import ResultTimeline from "@/components/ResultTimeline.vue";
+import StatusPill from "@/components/StatusPill.vue";
 import { useAuthStore } from "@/stores/auth";
+import { durationBetween, timeAgo } from "@/time";
 
 const props = defineProps<{ id: string }>();
 const emit = defineEmits<{ finished: [] }>();
@@ -111,12 +113,15 @@ onBeforeUnmount(stop);
 <template>
   <section v-if="job" class="run" data-testid="run-panel">
     <h2>“{{ job.keyword }}”</h2>
-    <p class="status-line">
-      Status:
-      <span class="status" :data-status="job.status">{{ job.status }}</span>
+    <p class="status-line" aria-live="polite">
+      <StatusPill :status="job.status" />
       <span v-if="job.status === 'pending' || job.status === 'running'" class="live">
         <span class="dot" aria-hidden="true" /> live
       </span>
+      <span class="when">started {{ timeAgo(job.created_at) }}</span>
+      <span v-if="job.completed_at" class="when">
+        · took {{ durationBetween(job.created_at, job.completed_at) }}</span
+      >
     </p>
     <p v-if="job.error" class="error">{{ job.error }}</p>
     <!-- API spend of this run (ADR-038); $0 with the fake providers. -->
@@ -162,7 +167,15 @@ onBeforeUnmount(stop);
       :highlight-new="job.recurring_search_id !== null"
     />
   </section>
-  <p v-else class="loading">Loading…</p>
+  <!-- Skeleton while the first update is in flight — the panel's shape,
+       not a bare "Loading…", so the stage doesn't jump when data lands. -->
+  <div v-else class="skeleton" data-testid="run-skeleton" aria-hidden="true">
+    <div class="sk sk-title" />
+    <div class="sk sk-line" />
+    <div class="sk sk-block" />
+    <div class="sk sk-line" />
+    <div class="sk sk-line short" />
+  </div>
 </template>
 
 <style scoped>
@@ -179,29 +192,8 @@ onBeforeUnmount(stop);
   color: var(--text-muted);
   font-size: 0.9rem;
 }
-.status {
-  font-weight: 700;
-  text-transform: capitalize;
-  padding: 0.1rem 0.55rem;
-  border-radius: 999px;
-  background: var(--surface-2);
-  border: 1px solid var(--border-strong);
-  color: var(--text);
-}
-.status[data-status="completed"] {
-  background: var(--success-bg);
-  border-color: var(--success-border);
-  color: var(--success);
-}
-.status[data-status="failed"] {
-  background: color-mix(in srgb, var(--danger) 12%, transparent);
-  border-color: color-mix(in srgb, var(--danger) 35%, transparent);
-  color: var(--danger);
-}
-.status[data-status="awaiting_input"] {
-  background: var(--warn-bg);
-  border-color: var(--warn-border);
-  color: #b45309;
+.when {
+  color: var(--text-muted);
 }
 .live {
   display: inline-flex;
@@ -255,7 +247,40 @@ onBeforeUnmount(stop);
 .cost strong {
   color: var(--text);
 }
-.loading {
-  color: var(--text-muted);
+/* --- loading skeleton --- */
+.skeleton {
+  display: grid;
+  gap: 0.7rem;
+}
+.sk {
+  border-radius: var(--radius-sm);
+  background: linear-gradient(
+    90deg,
+    var(--surface-2) 25%,
+    var(--border) 50%,
+    var(--surface-2) 75%
+  );
+  background-size: 200% 100%;
+  animation: shimmer 1.4s linear infinite;
+}
+.sk-title {
+  width: 45%;
+  height: 1.6rem;
+}
+.sk-line {
+  width: 85%;
+  height: 0.9rem;
+}
+.sk-line.short {
+  width: 60%;
+}
+.sk-block {
+  width: 100%;
+  height: 7rem;
+}
+@keyframes shimmer {
+  to {
+    background-position: -200% 0;
+  }
 }
 </style>

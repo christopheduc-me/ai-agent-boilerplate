@@ -3,18 +3,33 @@
 // policy decision — searches, the finish, the self-critique review — streamed
 // over SSE while the agent works. Rendering only — the reasons come verbatim
 // from the agent.
+import { ref, watch } from "vue";
+
 import type { AgentStep } from "@/api";
 
-defineProps<{ steps: AgentStep[]; live: boolean }>();
+const props = defineProps<{ steps: AgentStep[]; live: boolean }>();
 
 const icons: Record<string, string> = { finish: "✔", critique: "🧐", report: "📣" };
 const icon = (kind: string): string => icons[kind] ?? "🔍";
+
+// Auto-follow: while the run is live the journal grows inside a bounded
+// scroll pane (ADR-039) — keep the newest entry in view so the user watches
+// the loop think without scrolling. Finished runs are left alone.
+const tail = ref<HTMLElement | null>(null);
+watch(
+  () => props.steps.length,
+  async () => {
+    if (!props.live) return;
+    await new Promise(requestAnimationFrame); // let the new entry render
+    tail.value?.scrollIntoView?.({ block: "nearest", behavior: "smooth" });
+  },
+);
 </script>
 
 <template>
   <section class="journal" data-testid="agent-journal">
     <h3>Agent decisions</h3>
-    <ol>
+    <ol aria-live="polite">
       <li v-for="step in steps" :key="step.seq" :data-kind="step.kind">
         <span class="icon" aria-hidden="true">{{ icon(step.kind) }}</span>
         <div>
@@ -30,7 +45,7 @@ const icon = (kind: string): string => icons[kind] ?? "🔍";
           <p class="reason">{{ step.reason }}</p>
         </div>
       </li>
-      <li v-if="live" class="thinking" data-testid="agent-thinking">
+      <li v-if="live" ref="tail" class="thinking" data-testid="agent-thinking">
         <span class="icon pulse" aria-hidden="true">…</span>
         <p class="action">thinking</p>
       </li>

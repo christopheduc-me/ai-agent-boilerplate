@@ -82,9 +82,24 @@ describe("SearchesView (single-page workbench, ADR-039)", () => {
       search_calls: 1,
       cost_usd: cost,
     });
+    const twoHoursAgo = new Date(Date.now() - 2 * 3600_000).toISOString();
     mocked.listSearches.mockResolvedValue([
-      { id: "j1", keyword: "one", mode: "workflow", status: "completed", usage: usage(0.01) },
-      { id: "j2", keyword: "two", mode: "agent", status: "running", usage: usage(0.0223) },
+      {
+        id: "j1",
+        keyword: "one",
+        mode: "workflow",
+        status: "completed",
+        usage: usage(0.01),
+        created_at: twoHoursAgo,
+      },
+      {
+        id: "j2",
+        keyword: "two",
+        mode: "agent",
+        status: "running",
+        usage: usage(0.0223),
+        created_at: twoHoursAgo,
+      },
     ]);
     const { wrapper } = await mountView();
 
@@ -92,12 +107,34 @@ describe("SearchesView (single-page workbench, ADR-039)", () => {
     expect(items).toHaveLength(2);
     expect(items[1].text()).toContain("two");
     expect(items[1].find(".mode").attributes("data-mode")).toBe("agent");
+    // Status is a colored pill, same component as the run panel.
+    expect(items[1].find(".status").attributes("data-status")).toBe("running");
+    // Launch time, relative — the API's created_at surfaced at last.
+    expect(items[1].text()).toContain("2 h ago");
     // Picking a past run loads it in the panel (ADR-039), no navigation.
     await items[1].find("button.job-link").trigger("click");
     expect(wrapper.find("run-panel-stub").attributes("id")).toBe("j2");
     // Spend tracking (ADR-038): per-job cost and the sum of all runs.
     expect(items[1].text()).toContain("$0.0223");
     expect(wrapper.find("[data-testid=total-cost]").text()).toContain("$0.0323");
+  });
+
+  it("makes a job waiting on the user stand out in the history (ADR-032)", async () => {
+    mocked.listSearches.mockResolvedValue([
+      {
+        id: "j3",
+        keyword: "ambiguous goal",
+        mode: "agent",
+        status: "awaiting_input",
+        usage: { llm_calls: 1, llm_input_tokens: 5, llm_output_tokens: 5, search_calls: 0, cost_usd: 0.001 },
+        created_at: new Date().toISOString(),
+      },
+    ]);
+    const { wrapper } = await mountView();
+
+    const row = wrapper.find(".history li");
+    expect(row.classes()).toContain("attention");
+    expect(row.find(".status").text()).toContain("needs your answer");
   });
 
   it("creates and deletes a recurring search (ADR-033)", async () => {

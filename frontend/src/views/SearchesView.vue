@@ -6,7 +6,9 @@ import { useRouter } from "vue-router";
 
 import { api, ApiError, type JobMode, type RecurringSearch, type SearchJob } from "@/api";
 import RunPanel from "@/components/RunPanel.vue";
+import StatusPill from "@/components/StatusPill.vue";
 import { useAuthStore } from "@/stores/auth";
+import { timeAgo } from "@/time";
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -109,7 +111,7 @@ onMounted(refresh);
           timeline. Deterministic and cheap.
         </p>
         <input v-model="workflowKeyword" placeholder="Keyword, e.g. rust hexagonal architecture" required />
-        <button type="submit" :disabled="busy">Run the workflow</button>
+        <button type="submit" :disabled="busy">{{ busy ? "Launching…" : "Run the workflow" }}</button>
       </form>
 
       <form class="demo" data-testid="agent-demo" @submit.prevent="launch(agentKeyword, 'agent')">
@@ -119,7 +121,7 @@ onMounted(refresh);
           to stop — watch its decision journal live.
         </p>
         <input v-model="agentKeyword" placeholder="Goal, e.g. rust hexagonal architecture" required />
-        <button type="submit" :disabled="busy">Run the agent</button>
+        <button type="submit" :disabled="busy">{{ busy ? "Launching…" : "Run the agent" }}</button>
       </form>
       <p v-if="error" class="error">{{ error }}</p>
 
@@ -156,7 +158,7 @@ onMounted(refresh);
             <span class="mode" :data-mode="search.mode">{{ search.mode }}</span>
             — every {{ search.interval_minutes }} min
             <span v-if="search.last_run_at" class="muted">
-              (last run {{ new Date(search.last_run_at).toLocaleString() }})</span
+              (last run {{ timeAgo(search.last_run_at) }})</span
             >
             <span v-else class="muted"> (first run pending)</span>
             <span v-if="search.webhook_url" class="muted" :title="search.webhook_url">
@@ -175,14 +177,22 @@ onMounted(refresh);
           Total API spend: ${{ totalCost.toFixed(4) }}
         </p>
         <ul>
-          <li v-for="job in jobs" :key="job.id" :class="{ selected: job.id === activeRunId }">
-            <button type="button" class="job-link" @click="activeRunId = job.id">
+          <li
+            v-for="job in jobs"
+            :key="job.id"
+            :class="{
+              selected: job.id === activeRunId,
+              attention: job.status === 'awaiting_input',
+            }"
+          >
+            <button type="button" class="job-link" :title="job.keyword" @click="activeRunId = job.id">
               {{ job.keyword }}
             </button>
             <span class="mode" :data-mode="job.mode">{{ job.mode }}</span>
-            — {{ job.status }}
+            <StatusPill :status="job.status" />
+            <span class="muted">{{ timeAgo(job.created_at) }}</span>
             <span v-if="job.usage.cost_usd > 0" class="muted"
-              >— ${{ job.usage.cost_usd.toFixed(4) }}</span
+              >${{ job.usage.cost_usd.toFixed(4) }}</span
             >
           </li>
         </ul>
@@ -342,6 +352,12 @@ onMounted(refresh);
   border-radius: var(--radius-sm);
   font-size: 0.92rem;
 }
+.history li {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+}
 .history li + li,
 .recurring li + li {
   border-top: 1px solid var(--border);
@@ -349,6 +365,12 @@ onMounted(refresh);
 .history li.selected {
   background: var(--accent-soft);
   border-left: 3px solid var(--accent);
+  padding-left: 0.5rem;
+}
+/* The agent is waiting on the user (ADR-032) — must not drown in the list. */
+.history li.attention {
+  background: var(--warn-bg);
+  border-left: 3px solid var(--warn-border);
   padding-left: 0.5rem;
 }
 .job-link {
@@ -359,6 +381,14 @@ onMounted(refresh);
   cursor: pointer;
   font: inherit;
   font-weight: 600;
+  /* Long keywords must not wrap the whole row — truncate with a tooltip. */
+  flex: 1 1 auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: left;
 }
 .job-link:hover {
   background: none;

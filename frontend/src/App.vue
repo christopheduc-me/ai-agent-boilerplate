@@ -46,6 +46,7 @@ function logout(): void {
   --success-border: #a6e9c2;
   --warn-bg: #fffaeb;
   --warn-border: #fbe08a;
+  --warn-text: #b45309;
   --radius: 12px;
   --radius-sm: 8px;
   --shadow-sm: 0 1px 2px rgba(16, 24, 40, 0.06);
@@ -72,6 +73,7 @@ function logout(): void {
     --success-border: rgba(34, 197, 94, 0.32);
     --warn-bg: rgba(251, 191, 36, 0.1);
     --warn-border: rgba(251, 191, 36, 0.32);
+    --warn-text: #fbbf24;
     --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
     --shadow: 0 8px 28px rgba(0, 0, 0, 0.45);
     --ring: 0 0 0 3px rgba(139, 92, 246, 0.35);
@@ -80,6 +82,17 @@ function logout(): void {
 
 * {
   box-sizing: border-box;
+}
+/* Vestibular-safe: kill the pulse/shimmer loops and smooth scrolling. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
 }
 html {
   color-scheme: light dark;
