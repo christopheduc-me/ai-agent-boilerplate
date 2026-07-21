@@ -21,7 +21,7 @@ test("register, launch a search and read the results timeline", async ({ page })
   // Detail view: live status (SSE with polling fallback, ADR-026) until the
   // fake-provider job completes.
   await expect(page.getByRole("heading", { name: "“playwright e2e”" })).toBeVisible();
-  await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
+  await expect(page.getByTestId("run-status")).toContainText("completed", { timeout: 30_000 });
 
   // Timeline (ADR-027): month groups in date order, newest first — one per
   // date-cascade stage (ADR-011/035).
@@ -73,7 +73,7 @@ test("the agent demo streams the decision journal and renders the timeline", asy
   await expect(journal.locator("li[data-kind='critique']")).toContainText("All 5 results relate");
 
   // The loop's results land in the same timeline as the workflow mode.
-  await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
+  await expect(page.getByTestId("run-status")).toContainText("completed", { timeout: 30_000 });
   await expect(page.getByTestId("unknown-date-section")).toBeVisible();
 });
 
@@ -94,7 +94,8 @@ test("the agent asks for clarification and resumes with the answer", async ({ pa
   const request = page.getByTestId("clarification-request");
   await expect(request).toBeVisible({ timeout: 30_000 });
   await expect(request).toContainText("Your goal looks ambiguous");
-  await expect(page.getByText("Status:")).toContainText("awaiting_input");
+  // The awaiting_input status renders as a human sentence on the pill.
+  await expect(page.getByTestId("run-status")).toContainText("needs your answer");
 
   await request.getByPlaceholder("Your answer").fill("the cars");
   await request.getByRole("button", { name: "Answer" }).click();
@@ -103,7 +104,7 @@ test("the agent asks for clarification and resumes with the answer", async ({ pa
   await expect(page.getByTestId("clarification-recap")).toContainText("“the cars”", {
     timeout: 30_000,
   });
-  await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
+  await expect(page.getByTestId("run-status")).toContainText("completed", { timeout: 30_000 });
   const journal = page.getByTestId("agent-journal");
   await expect(journal.locator("li[data-kind]")).toHaveCount(4, { timeout: 30_000 });
   await expect(page.getByTestId("unknown-date-section")).toBeVisible();
@@ -146,7 +147,7 @@ test("a returning user logs in and finds the previous searches", async ({ page }
   await expect(page.getByRole("heading", { name: "Workflow demo" })).toBeVisible();
   await page.getByTestId("workflow-demo").getByPlaceholder(/Keyword/).fill("history check");
   await page.getByRole("button", { name: "Run the workflow" }).click();
-  await expect(page.getByText("Status:")).toContainText("completed", { timeout: 30_000 });
+  await expect(page.getByTestId("run-status")).toContainText("completed", { timeout: 30_000 });
 
   // Fresh browser state = the HttpOnly refresh cookie is gone (ADR-008):
   // logging back in must list the search launched above.

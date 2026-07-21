@@ -113,7 +113,7 @@ onBeforeUnmount(stop);
 <template>
   <section v-if="job" class="run" data-testid="run-panel">
     <h2>“{{ job.keyword }}”</h2>
-    <p class="status-line" aria-live="polite">
+    <p class="status-line" data-testid="run-status" aria-live="polite">
       <StatusPill :status="job.status" />
       <span v-if="job.status === 'pending' || job.status === 'running'" class="live">
         <span class="dot" aria-hidden="true" /> live
