@@ -12,10 +12,16 @@ plantuml -tsvg docs/diagrams/*.puml
 
 ---
 
-## Detailed architecture — Excalidraw (editable overview)
+## Detailed architecture — the runtime view (Excalidraw, editable)
 
 **Source**: [architecture.excalidraw](architecture.excalidraw) ·
 **Render**: [architecture.png](architecture.png) (embedded in the root README)
+
+**The question it answers: what runs, on which port, and who talks to whom.**
+This is the diagram for deploying, debugging a dead connection, or following
+one search across the four processes. Its logical sibling below (the
+hexagonal PlantUML) answers the *why is it built this way* question — the two
+deliberately overlap on the brick internals but are kept separate on purpose.
 
 [![Detailed architecture](architecture.png)](architecture.png)
 
@@ -35,9 +41,15 @@ and overwrite `architecture.png` so the READMEs stay in sync.
 
 ---
 
-## Hexagonal architecture — both server bricks
+## Hexagonal architecture — the logical view (both server bricks)
 
 **Source**: [hexagonal-architecture.puml](hexagonal-architecture.puml) · **ADRs**: 002, 004, 012, 021
+
+**The question it answers: why is it testable and swappable.** Where the
+runtime view above shows what runs, this one shows the ports-and-adapters
+structure that no deployment diagram can carry — in particular each port's
+production/test adapter pair, which is the argument the whole boilerplate
+rests on.
 
 The 10-second version of the architecture argument: two pure cores (no
 axum/sqlx/reqwest on the Rust side, no celery/fastapi/httpx/langchain on the
