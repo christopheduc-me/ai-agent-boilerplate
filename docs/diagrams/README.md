@@ -12,6 +12,29 @@ plantuml -tsvg docs/diagrams/*.puml
 
 ---
 
+## Detailed architecture — Excalidraw (editable overview)
+
+**Source**: [architecture.excalidraw](architecture.excalidraw) ·
+**Render**: [architecture.png](architecture.png) (embedded in the root README)
+
+[![Detailed architecture](architecture.png)](architecture.png)
+
+The whole system on one hand-drawn canvas: every container with its port, the
+hexagonal internals of both server bricks (domain / application / adapters
+with their key ADRs), the two inter-brick HTTP contracts (`POST /tasks` and
+the `/internal/*` callbacks — ADR-006), the data stores, the paid external
+APIs, the digest webhook, and the opt-in observability consoles (Jaeger,
+Flower).
+
+Unlike the PlantUML sources below, this one is meant to be **edited visually**:
+open the file at [excalidraw.com](https://excalidraw.com) (menu → Open) or
+with the VS Code *Excalidraw* extension, rearrange, then save it back — the
+`.excalidraw` file is the source of truth. After editing, re-export the
+committed render (app menu → Export image → PNG, scale 2×, with background)
+and overwrite `architecture.png` so the READMEs stay in sync.
+
+---
+
 ## Hexagonal architecture — both server bricks
 
 **Source**: [hexagonal-architecture.puml](hexagonal-architecture.puml) · **ADRs**: 002, 004, 012, 021

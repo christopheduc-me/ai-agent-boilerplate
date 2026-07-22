@@ -73,18 +73,13 @@ the patterns you would otherwise rebuild from scratch on every agent project.
 
 ## Architecture
 
-```
-Vue SPA ──▶ Rust API (Axum) ──▶ FastAPI micro-API ──▶ Redis ──▶ Celery worker
- (JWT)        │    ▲                (Celery client)              (LangChain agent)
-              ▼    │                                              1. web search (Tavily)
-         PostgreSQL└──── HTTP callbacks (started/results/failure) 2. per-hit enrichment (Claude):
-                                                                     date, event type, summary
-                                                                  3. sort by publication date
-```
+[![Detailed architecture](docs/diagrams/architecture.png)](docs/diagrams/architecture.png)
 
 The worker never touches the database — results flow back through
 authenticated HTTP callbacks, so a single application owns the schema
-([ADR-006](docs/ARCHITECTURE.md)).
+([ADR-006](docs/ARCHITECTURE.md)). The diagram is an editable
+[Excalidraw file](docs/diagrams/architecture.excalidraw) — see
+[docs/diagrams/](docs/diagrams/README.md) for the full catalog.
 
 ## Stack
 
