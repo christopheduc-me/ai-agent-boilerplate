@@ -121,5 +121,18 @@ services:
       - "16686:16686" # UI
       - "4318:4318" # OTLP/HTTP (also for bricks running on the host)
 
+  # Celery monitoring console (ADR-040): live view of the agent workers,
+  # queued/running/failed tasks and retries, straight from the Redis broker.
+  # Dev-only, like Jaeger — the workbench links to it (http://localhost:5555).
+  flower:
+    profiles: ["observability"]
+    image: mher/flower:2.0
+    command: ["celery", "--broker=redis://redis:6379/0", "flower", "--port=5555"]
+    ports:
+      - "5555:5555"
+    depends_on:
+      redis:
+        condition: service_healthy
+
 volumes:
   pgdata:

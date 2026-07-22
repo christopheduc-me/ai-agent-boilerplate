@@ -46,7 +46,8 @@ the patterns you would otherwise rebuild from scratch on every agent project.
 - **Observability** — `X-Request-Id` correlation propagated across all four
   processes, structured JSON logs behind a `LOG_FORMAT` switch, and opt-in
   OpenTelemetry traces (one search = one distributed trace, local Jaeger via a
-  compose profile).
+  compose profile) plus a Flower console for the Celery workers — both linked
+  from the app's "Ops consoles" card.
 - **Fully containerized** — multi-stage Dockerfiles, one compose file for dev
   (infra-only or full profile) and a production override with Caddy/TLS.
 - **CI** — GitHub Actions: lint + test on every PR, images published to GHCR

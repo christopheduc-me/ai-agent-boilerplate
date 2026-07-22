@@ -1101,6 +1101,27 @@ query parameter.
 
 ---
 
+### ADR-040 — Ops consoles: Flower + workbench links (decided 2026-07-21)
+
+**Context**: the stack has monitoring UIs (Jaeger for traces, ADR-029) but no
+view of the Celery workers themselves — are they up, what ran, what retried,
+what failed — and nothing on the workbench points at any of these consoles.
+
+**Decision**: a **Flower** service (`mher/flower`, official Celery monitoring
+UI) joins the compose **`observability` profile**, reading the Redis broker
+directly — no code change, no new dependency in the agent brick, dev-only like
+Jaeger. The workbench gains an **"Ops consoles" card** linking Flower
+(`:5555`) and Jaeger (`:16686`) on the app's own hostname, so it also works
+when the stack runs on a remote dev box. The links are static: probing each
+console to hide dead links was rejected (browsers block the cross-port
+`fetch` probes without CORS on the consoles, and the failure mode — a link
+that doesn't answer with a stopped profile — is self-explanatory). Production
+deployments don't publish these ports (`deploy/docker-compose.prod.yml`
+doesn't include the profile); a fork wanting them exposed must put them
+behind its own auth proxy — Flower ships none by default.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

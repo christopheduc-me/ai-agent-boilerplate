@@ -43,6 +43,14 @@ Entry points once up:
 | PostgreSQL | localhost:5433 (`app`/`app`, db `aiagent`) |
 | Redis | localhost:6379 |
 
+With `--profile observability` (also linked from the workbench's "Ops
+consoles" card, ADR-040):
+
+| Console | URL |
+|---|---|
+| Flower (Celery workers & tasks) | http://localhost:5555 |
+| Jaeger (distributed traces) | http://localhost:16686 |
+
 ## 2. Docker — infra only (default profile)
 
 The recommended dev mode: containers for PostgreSQL + Redis, everything else local
@@ -184,6 +192,14 @@ npx playwright install chromium             # one-time browser download
 npm run test:e2e                            # register -> search -> timeline
 E2E_BASE_URL=http://other-host:8080 npm run test:e2e   # any base URL
 npx playwright show-report                  # inspect a failed run
+```
+
+### Worker console (Flower — ADR-040, opt-in)
+
+```sh
+# Live view of the Celery workers: tasks, retries, failures — no key needed
+docker compose --profile observability up -d flower
+open http://localhost:5555
 ```
 
 ### Traces (OpenTelemetry + Jaeger — ADR-029, opt-in)

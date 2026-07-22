@@ -92,6 +92,13 @@ async function removeRecurring(id: string): Promise<void> {
 // Spend tracking (ADR-038): the sum of every listed run.
 const totalCost = computed(() => jobs.value.reduce((sum, job) => sum + job.usage.cost_usd, 0));
 
+// Ops consoles (ADR-040): dev-stack UIs published on fixed host ports by the
+// compose observability profile. Same host as the app so remote dev works.
+const opsConsoles = [
+  { name: "Flower", role: "Celery workers & tasks", port: 5555 },
+  { name: "Jaeger", role: "distributed traces", port: 16686 },
+].map((c) => ({ ...c, url: `http://${window.location.hostname}:${c.port}` }));
+
 onMounted(refresh);
 </script>
 
@@ -198,6 +205,21 @@ onMounted(refresh);
         </ul>
         <p v-if="jobs.length === 0" class="muted">No search yet.</p>
       </section>
+
+      <!-- Ops consoles (ADR-040): the dev stack's monitoring UIs. -->
+      <section class="ops" data-testid="ops-consoles">
+        <h2>Ops consoles</h2>
+        <p class="pitch">
+          Dev-stack monitoring UIs — start them with
+          <code>docker compose --profile observability up -d</code>.
+        </p>
+        <ul>
+          <li v-for="console in opsConsoles" :key="console.name">
+            <a :href="console.url" target="_blank" rel="noopener">{{ console.name }}</a>
+            <span class="muted"> — {{ console.role }}</span>
+          </li>
+        </ul>
+      </section>
     </aside>
 
     <main class="stage scroll-pane">
@@ -268,7 +290,8 @@ onMounted(refresh);
 }
 .demo,
 .recurring,
-.history {
+.history,
+.ops {
   padding: 1.35rem 1.5rem;
   border: 1px solid var(--border);
   border-radius: var(--radius);
@@ -282,7 +305,8 @@ onMounted(refresh);
 }
 .demo h2,
 .recurring h2,
-.history h2 {
+.history h2,
+.ops h2 {
   margin: 0;
   font-size: 1.05rem;
   font-weight: 700;
@@ -341,10 +365,25 @@ onMounted(refresh);
   width: 4.5rem;
 }
 .recurring ul,
-.history ul {
+.history ul,
+.ops ul {
   list-style: none;
   margin: 0.75rem 0 0;
   padding: 0;
+}
+.ops li {
+  padding: 0.25rem 0;
+  font-size: 0.92rem;
+}
+.ops a {
+  font-weight: 600;
+}
+.ops code {
+  font-size: 0.8rem;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0.05rem 0.3rem;
 }
 .recurring li,
 .history li {

@@ -173,6 +173,16 @@ describe("SearchesView (single-page workbench, ADR-039)", () => {
     expect(mocked.deleteRecurring).toHaveBeenCalledWith("r1", "tok");
   });
 
+  it("links the ops consoles on the current host (ADR-040)", async () => {
+    const { wrapper } = await mountView();
+
+    const ops = wrapper.find("[data-testid=ops-consoles]");
+    const hrefs = ops.findAll("a").map((a) => a.attributes("href"));
+    // jsdom serves the tests from localhost — the links must follow the host.
+    expect(hrefs).toContain("http://localhost:5555"); // Flower (Celery workers)
+    expect(hrefs).toContain("http://localhost:16686"); // Jaeger (traces)
+  });
+
   it("shows quota errors from the backend (ADR-017)", async () => {
     const { ApiError } = await import("@/api");
     mocked.launchSearch.mockRejectedValue(new ApiError(429, "daily search quota reached"));
