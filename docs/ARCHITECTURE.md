@@ -334,6 +334,11 @@ the Dockerfile serves dev (profile `full`), CI, and deployment.
 - Images tagged `$CI_COMMIT_SHORT_SHA` + `latest` on the default branch
   (see ADR-015).
 - One `.dockerignore` per brick (excludes `target/`, `node_modules/`, `.venv/`, etc.).
+- The nginx `/api` proxy re-resolves the backend hostname per request
+  (`resolver 127.0.0.11` + variable `proxy_pass`, added 2026-07-22): a literal
+  `proxy_pass` hostname is resolved once at nginx startup, so recreating the
+  backend container (new IP) 502'd every API call until the frontend
+  container was restarted too.
 
 ### ADR-015 — CI/CD: GitLab CI, GitLab registry
 
