@@ -12,6 +12,8 @@ lives in [ROADMAP.md](ROADMAP.md).
 - [x] First commit on `main` + push to GitHub — done (2026-07-09, full
       verification green beforehand: 101 tests across the three bricks).
 - [ ] `cp .env.example .env` and fill in `ANTHROPIC_API_KEY` + `TAVILY_API_KEY`
+      (no Anthropic key needed with a local model: `AGENT_LLM_BACKEND=ollama`,
+      see ADR-041 and `docs/COMMANDS.md` §“Local LLM”)
       (local development only — never committed). No keys yet? Set
       `AGENT_PROVIDERS=fake` instead to run the whole stack keyless with
       deterministic results (ADR-021).

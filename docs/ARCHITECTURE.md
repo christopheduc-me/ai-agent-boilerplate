@@ -256,6 +256,11 @@ configuration, not a rewrite.
 
 **Config**: `ANTHROPIC_API_KEY`, `AGENT_MODEL_ID`.
 
+*Amended by ADR-041 (2026-07-22)*: the same adapters can now run on a local
+model instead — `AGENT_LLM_BACKEND=ollama` + `AGENT_LLM_BASE_URL` (then
+`AGENT_MODEL_ID` names the local model and `ANTHROPIC_API_KEY` is no longer
+required); usage guide in `docs/COMMANDS.md` §“Local LLM”.
+
 ### ADR-011 — Publication date extraction: cascade strategy
 
 Publication dates are often missing or wrong. Strategy, in order:
