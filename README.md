@@ -31,7 +31,9 @@ the patterns you would otherwise rebuild from scratch on every agent project.
 - **Hexagonal architecture on both server bricks** — pure domains with zero
   infrastructure dependencies; use cases depend on ports (Rust traits / Python
   Protocols); adapters implement them. Swapping the LLM, the search provider,
-  or the database is configuration, not surgery.
+  or the database is configuration, not surgery — including running the agent
+  on a **local model** (`AGENT_LLM_BACKEND=ollama`, ADR-041) instead of the
+  Anthropic API.
 - **TDD throughout** — 190+ tests; the domain is tested with fakes of the ports,
   and **no test ever calls a paid service** (live provider tests are opt-in
   behind `RUN_LIVE_TESTS=1`).

@@ -15,6 +15,7 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.64b0",
     "opentelemetry-instrumentation-celery>=0.64b0",
     "opentelemetry-instrumentation-httpx>=0.64b0",
+    "langchain-ollama>=1.1.0",
 ]
 
 [dependency-groups]

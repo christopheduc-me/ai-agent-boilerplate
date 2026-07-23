@@ -6,9 +6,9 @@ import respx
 
 from aiagent.adapters.llm import (
     ENRICHMENT_PROMPT,
-    ClaudeAgentPolicy,
-    ClaudeHitEnricher,
-    ClaudeResultCritic,
+    LlmAgentPolicy,
+    LlmHitEnricher,
+    LlmResultCritic,
     parse_action,
     parse_critique,
     parse_enrichment,
@@ -100,11 +100,11 @@ def test_parse_enrichment_degrades_gracefully() -> None:
     assert degraded.summary is None
 
 
-# ---------------------------------------------------------------- ClaudeHitEnricher
+# ---------------------------------------------------------------- LlmHitEnricher
 
 
 class FakeChatModel:
-    """Stands in for ChatAnthropic: records the prompt, replies with `content`.
+    """Stands in for the chat model: records the prompt, replies with `content`.
 
     The model call is the only thing faked — prompt building and reply parsing
     (the adapter's actual logic) run for real (ADR-012).
@@ -123,11 +123,11 @@ def a_hit(title: str = "T") -> RawSearchHit:
     return RawSearchHit(title=title, url="https://t", snippet="an excerpt", published_at=None)
 
 
-def test_claude_enricher_builds_the_prompt_and_parses_the_reply() -> None:
+def test_llm_enricher_builds_the_prompt_and_parses_the_reply() -> None:
     llm = FakeChatModel(
         content='{"published_date": "2026-03-01", "event_type": "funding", "summary": "$10M."}'
     )
-    enricher = ClaudeHitEnricher("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+    enricher = LlmHitEnricher(llm)  # type: ignore[arg-type]
 
     enrichment = enricher.enrich(a_hit(title="My Article"))
 
@@ -139,19 +139,12 @@ def test_claude_enricher_builds_the_prompt_and_parses_the_reply() -> None:
     )
 
 
-def test_claude_enricher_tolerates_structured_content_blocks() -> None:
+def test_llm_enricher_tolerates_structured_content_blocks() -> None:
     # Some models return content as a list of blocks; the adapter must not
     # crash — non-JSON stringification degrades to a neutral enrichment.
     blocks = [{"type": "text", "text": "{}"}]
-    enricher = ClaudeHitEnricher("m", llm=FakeChatModel(content=blocks))  # type: ignore[arg-type]
+    enricher = LlmHitEnricher(FakeChatModel(content=blocks))  # type: ignore[arg-type]
     assert enricher.enrich(a_hit()) == HitEnrichment()
-
-
-def test_claude_enricher_builds_the_real_client_when_a_key_is_present(monkeypatch) -> None:
-    # Construction only — no request is ever sent (ADR-012).
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test-key-never-used")
-    enricher = ClaudeHitEnricher("claude-opus-4-8")
-    assert enricher._llm is not None  # noqa: SLF001 - asserting the wiring
 
 
 # ---------------------------------------------------------------- http sink
@@ -267,9 +260,9 @@ def test_parse_action_tolerates_code_fences() -> None:
     assert parse_action(fenced) == SearchAction(query="q", reason="r")
 
 
-def test_claude_policy_shows_the_transcript_and_parses_the_decision() -> None:
+def test_llm_policy_shows_the_transcript_and_parses_the_decision() -> None:
     llm = FakeChatModel(content='{"action": "search", "query": "rust news", "reason": "start"}')
-    policy = ClaudeAgentPolicy("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+    policy = LlmAgentPolicy(llm)  # type: ignore[arg-type]
     steps = [AgentStep(seq=1, kind=AgentStepKind.SEARCH, detail="rust", reason="r", new_hits=2)]
 
     action = policy.decide("rust", steps, [a_hit(title="Rust 1.99 released")])
@@ -327,11 +320,11 @@ def test_parse_critique_degrades_to_a_neutral_review() -> None:
         assert critique.irrelevant_urls == () and critique.gap_query is None
 
 
-def test_claude_critic_lists_the_results_and_parses_the_verdict() -> None:
+def test_llm_critic_lists_the_results_and_parses_the_verdict() -> None:
     llm = FakeChatModel(
         content='{"assessment": "One gap.", "irrelevant_urls": [], "gap_query": "rust 2026"}'
     )
-    critic = ClaudeResultCritic("claude-opus-4-8", llm=llm)  # type: ignore[arg-type]
+    critic = LlmResultCritic(llm)  # type: ignore[arg-type]
 
     critique = critic.critique("rust", [a_hit(title="Rust 1.99 released")])
 

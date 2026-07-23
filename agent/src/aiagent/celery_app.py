@@ -33,9 +33,13 @@ def _check_required_env(**_kwargs: Any) -> None:
     """Fail-fast (ADR-020): without the provider keys, every task would fail at
     runtime — refuse to start instead. Fires only in the worker process, so the
     FastAPI container (which needs no provider key) is unaffected. With fake
-    providers (ADR-021) no key is needed at all."""
+    providers (ADR-021) no key is needed at all; with a local LLM backend
+    (ADR-041) only the search key remains required."""
     if os.environ.get("AGENT_PROVIDERS", "live") != "fake":
-        require_env("agent-worker", "ANTHROPIC_API_KEY", "TAVILY_API_KEY")
+        keys = ["TAVILY_API_KEY"]
+        if os.environ.get("AGENT_LLM_BACKEND", "anthropic") == "anthropic":
+            keys.append("ANTHROPIC_API_KEY")
+        require_env("agent-worker", *keys)
     forbid_placeholders("agent-worker", "INTERNAL_API_TOKEN")
 
 

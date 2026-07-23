@@ -49,6 +49,12 @@ class Settings:
     # "live" (Tavily + Claude) or "fake" (deterministic in-process adapters,
     # no API key needed — e2e tests and keyless local development, ADR-021).
     providers: str
+    # LLM backend behind the live adapters (ADR-041): "anthropic" (hosted,
+    # needs ANTHROPIC_API_KEY) or "ollama" (local server, no key —
+    # AGENT_MODEL_ID then names a local model, e.g. "qwen3:14b").
+    llm_backend: str
+    # Ollama server URL; from a compose container use host.docker.internal.
+    llm_base_url: str
     # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
     # at most one policy LLM call plus one provider search.
     agent_max_steps: int
@@ -66,6 +72,8 @@ class Settings:
             internal_api_token=os.environ.get("INTERNAL_API_TOKEN", "change-me"),
             agent_model_id=os.environ.get("AGENT_MODEL_ID", "claude-opus-4-8"),
             providers=os.environ.get("AGENT_PROVIDERS", "live"),
+            llm_backend=os.environ.get("AGENT_LLM_BACKEND", "anthropic"),
+            llm_base_url=os.environ.get("AGENT_LLM_BASE_URL", "http://localhost:11434"),
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
             llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
             llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),

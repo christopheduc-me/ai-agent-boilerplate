@@ -1,5 +1,8 @@
-"""LLM adapters backed by Claude via langchain-anthropic: the HitEnricher
-(ADR-010/011/027) and the AgentPolicy driving the agentic loop (ADR-030)."""
+"""LLM adapters: the HitEnricher (ADR-010/011/027), the AgentPolicy driving
+the agentic loop (ADR-030) and the ResultCritic (ADR-031). Prompts, defensive
+parsing and usage metering are provider-agnostic: the chat model itself
+(Anthropic API or a local Ollama — ADR-041) is injected, built by
+`chat_model.make_chat_model`."""
 
 import json
 from datetime import datetime
@@ -87,25 +90,14 @@ def parse_enrichment(text: str) -> HitEnrichment:
     return HitEnrichment(published_at=published_at, event_type=event_type, summary=summary)
 
 
-class ClaudeHitEnricher:
+class LlmHitEnricher:
     """Live adapter — requires ANTHROPIC_API_KEY; the model call itself is
     never exercised in CI (ADR-012). `llm` is injectable so the prompt/parse
     logic around it stays unit-testable with a fake chat model."""
 
-    def __init__(
-        self,
-        model_id: str,
-        llm: "BaseChatModel | None" = None,
-        meter: UsageMeter | None = None,
-    ) -> None:
+    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
         self._meter = meter
-        if llm is not None:
-            self._llm = llm
-            return
-        from langchain_anthropic import ChatAnthropic
-
-        # `model` / `max_tokens` are pydantic aliases mypy cannot see.
-        self._llm = ChatAnthropic(model=model_id, max_tokens=256)  # type: ignore[call-arg]
+        self._llm = llm
 
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
         prompt = ENRICHMENT_PROMPT.format(title=hit.title, url=hit.url, snippet=hit.snippet)
@@ -165,25 +157,14 @@ def parse_action(text: str) -> AgentAction:
     return FinishAction(reason=reason)
 
 
-class ClaudeAgentPolicy:
+class LlmAgentPolicy:
     """Live AgentPolicy (ADR-030) — the LLM sees the goal, the transcript of
     its own past decisions and the collected titles (token-frugal), and picks
-    the next action. Same injectable-`llm` pattern as ClaudeHitEnricher."""
+    the next action. Same injectable-`llm` pattern as LlmHitEnricher."""
 
-    def __init__(
-        self,
-        model_id: str,
-        llm: "BaseChatModel | None" = None,
-        meter: UsageMeter | None = None,
-    ) -> None:
+    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
         self._meter = meter
-        if llm is not None:
-            self._llm = llm
-            return
-        from langchain_anthropic import ChatAnthropic
-
-        # `model` / `max_tokens` are pydantic aliases mypy cannot see.
-        self._llm = ChatAnthropic(model=model_id, max_tokens=256)  # type: ignore[call-arg]
+        self._llm = llm
 
     def decide(self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]) -> AgentAction:
         transcript = "\n".join(f'- "{s.detail}" -> {s.new_hits} new' for s in steps) or "- none yet"
@@ -241,24 +222,13 @@ def parse_critique(text: str) -> Critique:
     return Critique(assessment=assessment.strip(), irrelevant_urls=irrelevant, gap_query=gap_query)
 
 
-class ClaudeResultCritic:
+class LlmResultCritic:
     """Live ResultCritic (ADR-031) — one call reviewing the whole result set;
-    same injectable-`llm` pattern as the other Claude adapters."""
+    same injectable-`llm` pattern as the other adapters."""
 
-    def __init__(
-        self,
-        model_id: str,
-        llm: "BaseChatModel | None" = None,
-        meter: UsageMeter | None = None,
-    ) -> None:
+    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
         self._meter = meter
-        if llm is not None:
-            self._llm = llm
-            return
-        from langchain_anthropic import ChatAnthropic
-
-        # `model` / `max_tokens` are pydantic aliases mypy cannot see.
-        self._llm = ChatAnthropic(model=model_id, max_tokens=512)  # type: ignore[call-arg]
+        self._llm = llm
 
     def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
         listing = "\n".join(f"- {h.title} — {h.url}\n  {h.snippet}" for h in hits[:30]) or "- none"

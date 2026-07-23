@@ -53,10 +53,13 @@ def test_tavily_returns_hits_our_mapping_understands() -> None:
 
 
 def test_claude_enricher_extracts_the_stated_date_and_type() -> None:
-    from aiagent.adapters.llm import ClaudeHitEnricher
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmHitEnricher
     from aiagent.config import Settings
 
-    enrichment = ClaudeHitEnricher(Settings.from_env().agent_model_id).enrich(release_hit())
+    enrichment = LlmHitEnricher(make_chat_model(Settings.from_env(), max_tokens=256)).enrich(
+        release_hit()
+    )
 
     # The snippet states the date in prose: the model must return it as ISO
     # (a drift here means dates silently fall back to `medium`/`unknown`).
@@ -68,10 +71,11 @@ def test_claude_enricher_extracts_the_stated_date_and_type() -> None:
 
 
 def test_claude_policy_starts_an_unambiguous_goal_with_a_search() -> None:
-    from aiagent.adapters.llm import ClaudeAgentPolicy
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmAgentPolicy
     from aiagent.config import Settings
 
-    action = ClaudeAgentPolicy(Settings.from_env().agent_model_id).decide(
+    action = LlmAgentPolicy(make_chat_model(Settings.from_env(), max_tokens=256)).decide(
         "rust 1.99 release notes and reactions", [], []
     )
 
@@ -82,7 +86,8 @@ def test_claude_policy_starts_an_unambiguous_goal_with_a_search() -> None:
 
 
 def test_claude_critic_keeps_on_topic_results() -> None:
-    from aiagent.adapters.llm import ClaudeResultCritic
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmResultCritic
     from aiagent.config import Settings
 
     hits = [
@@ -93,7 +98,7 @@ def test_claude_critic_keeps_on_topic_results() -> None:
             snippet="A hands-on look at the Rust 1.99 release and its build-time gains.",
         ),
     ]
-    critique = ClaudeResultCritic(Settings.from_env().agent_model_id).critique(
+    critique = LlmResultCritic(make_chat_model(Settings.from_env(), max_tokens=512)).critique(
         "rust 1.99 release", hits
     )
 

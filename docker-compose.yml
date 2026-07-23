@@ -93,7 +93,20 @@ services:
       AGENT_MODEL_ID: ${AGENT_MODEL_ID:-claude-opus-4-8}
       # "fake" = deterministic keyless providers (e2e / keyless dev, ADR-021).
       AGENT_PROVIDERS: ${AGENT_PROVIDERS:-live}
+      # "anthropic" (hosted) or "ollama" — a model running on the host
+      # (ADR-041); the default base URL points at the host's Ollama.
+      AGENT_LLM_BACKEND: ${AGENT_LLM_BACKEND:-anthropic}
+      AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-http://host.docker.internal:11434}
+      # Spend-tracking rates (ADR-038); set the LLM rates to 0 with a local
+      # backend. Were previously not passed through — the worker silently
+      # priced every run at the defaults.
+      LLM_COST_INPUT_PER_MTOK: ${LLM_COST_INPUT_PER_MTOK:-5.0}
+      LLM_COST_OUTPUT_PER_MTOK: ${LLM_COST_OUTPUT_PER_MTOK:-25.0}
+      SEARCH_COST_PER_CALL: ${SEARCH_COST_PER_CALL:-0.008}
       OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+    # Lets the worker reach the host's Ollama on Linux too (no-op elsewhere).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     depends_on:
       redis:
         condition: service_healthy

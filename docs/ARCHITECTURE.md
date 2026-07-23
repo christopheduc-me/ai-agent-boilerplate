@@ -1127,6 +1127,41 @@ behind its own auth proxy — Flower ships none by default.
 
 ---
 
+### ADR-041 — Local LLM backend via a chat-model factory (decided 2026-07-22)
+
+**Context**: the live LLM adapters (enricher, policy, critic — ADR-010/030/031)
+hardcoded `ChatAnthropic` in their constructors, so running the agent against
+a model on the developer's own machine (Ollama) required either code changes
+or a whole parallel adapter set.
+
+**Decision**: the LLM *brand* is a construction detail, not a port. The
+adapters already typed their logic against langchain's `BaseChatModel` —
+prompts, defensive parsing and usage metering are provider-agnostic — so they
+now **require the chat model injected** and a single factory
+(`adapters/chat_model.py`) builds it from the environment:
+`AGENT_LLM_BACKEND=anthropic` (default, hosted, needs `ANTHROPIC_API_KEY`) or
+`ollama` (local server at `AGENT_LLM_BASE_URL`, no key; `AGENT_MODEL_ID` then
+names the local model). The classes were renamed `Claude*` → `Llm*`
+accordingly. Adding a backend (e.g. an OpenAI-compatible local server —
+LM Studio, vLLM) is one `elif` in the factory, never a new adapter class:
+writing an `OllamaEnricher` would have duplicated every prompt and parser.
+
+Consequences: the worker's fail-fast check (ADR-020) requires
+`ANTHROPIC_API_KEY` only on the `anthropic` backend (Tavily stays required in
+live mode — search remains remote); the compose worker resolves
+`host.docker.internal` (with the Linux `host-gateway` mapping) so a
+containerized worker reaches the host's Ollama; with a local backend the
+ADR-038 cost rates should be set to 0. Small local models follow the JSON
+instructions less reliably — the defensive parsing degrades instead of
+failing (ADR-030's guarantee), and an opt-in drift test
+(`RUN_OLLAMA_TESTS=1`, mirroring ADR-012) checks a local model against the
+same extraction bar as the hosted one. The factory disables Ollama's
+*thinking* mode: reasoning models (gemma4, deepseek-r1…) otherwise burn the
+whole `num_predict` budget on hidden reasoning and return empty content for
+these short strict-JSON tasks — found the hard way, live, on 2026-07-22.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

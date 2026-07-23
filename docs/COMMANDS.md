@@ -181,6 +181,27 @@ docker compose --profile full down          # teardown (remember to revert .env)
 `AGENT_PROVIDERS=fake` also works for keyless local development (the worker
 starts without ANTHROPIC/TAVILY keys and returns deterministic results).
 
+### Local LLM (Ollama — ADR-041)
+
+Run the live agent against a model on your own machine instead of the
+Anthropic API (Tavily stays required for the searches):
+
+```sh
+ollama pull qwen3:14b                       # once; any instruct model works
+# In .env (or exported): the backend, the local model, zero LLM cost rates
+AGENT_LLM_BACKEND=ollama
+AGENT_MODEL_ID=qwen3:14b
+LLM_COST_INPUT_PER_MTOK=0
+LLM_COST_OUTPUT_PER_MTOK=0
+# Local bricks reach it at localhost (the default); compose containers use
+# the preconfigured http://host.docker.internal:11434 automatically.
+
+# Opt-in drift check of the local model (mirrors the ADR-012 live tests)
+cd agent
+RUN_OLLAMA_TESTS=1 AGENT_LLM_BACKEND=ollama AGENT_MODEL_ID=qwen3:14b \
+  uv run pytest tests/test_live_ollama.py -v
+```
+
 ### Browser tests (Playwright — ADR-028)
 
 Same stack as the smoke script (boot it first, see above), driven through a

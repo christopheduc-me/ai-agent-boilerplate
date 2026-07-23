@@ -32,13 +32,14 @@ def build_providers(
 
         return FakeSearchProvider(meter), FakeHitEnricher(meter), FakePageDateFetcher()
 
-    from aiagent.adapters.llm import ClaudeHitEnricher
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmHitEnricher
     from aiagent.adapters.page import HttpPageDateFetcher
     from aiagent.adapters.tavily import TavilySearchProvider
 
     return (
         TavilySearchProvider(meter=meter),
-        ClaudeHitEnricher(settings.agent_model_id, meter=meter),
+        LlmHitEnricher(make_chat_model(settings, max_tokens=256), meter=meter),
         HttpPageDateFetcher(),
     )
 
@@ -50,9 +51,10 @@ def build_policy(settings: Settings, meter: UsageMeter | None = None) -> AgentPo
 
         return FakeAgentPolicy(meter)
 
-    from aiagent.adapters.llm import ClaudeAgentPolicy
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmAgentPolicy
 
-    return ClaudeAgentPolicy(settings.agent_model_id, meter=meter)
+    return LlmAgentPolicy(make_chat_model(settings, max_tokens=256), meter=meter)
 
 
 def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultCritic:
@@ -62,9 +64,10 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
 
         return FakeResultCritic(meter)
 
-    from aiagent.adapters.llm import ClaudeResultCritic
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmResultCritic
 
-    return ClaudeResultCritic(settings.agent_model_id, meter=meter)
+    return LlmResultCritic(make_chat_model(settings, max_tokens=512), meter=meter)
 
 
 @app.task(

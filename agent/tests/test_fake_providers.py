@@ -35,6 +35,8 @@ def settings_with(providers: str) -> Settings:
         llm_cost_input_per_mtok=5.0,
         llm_cost_output_per_mtok=25.0,
         search_cost_per_call=0.008,
+        llm_backend="anthropic",
+        llm_base_url="http://localhost:11434",
     )
 
 
