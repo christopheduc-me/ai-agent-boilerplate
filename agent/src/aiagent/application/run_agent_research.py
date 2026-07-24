@@ -9,7 +9,7 @@ live journal, and the final enrich/sort/deliver shared with the workflow mode.
 
 import logging
 
-from aiagent.application.run_research import resolve_hit
+from aiagent.application.run_research import resolve_hits
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
@@ -182,7 +182,7 @@ def run_agent_research(
         if critic is not None:
             hits = _self_critique(job_id, goal, hits, steps, search, critic, reporter, max_steps)
 
-        results = sort_by_publication_date([resolve_hit(hit, enricher, page_dates) for hit in hits])
+        results = sort_by_publication_date(resolve_hits(hits, enricher, page_dates))
         if seen_urls is not None:
             # Recurring run (ADR-033): flag the delta against previous runs
             # and journal the verdict — the agent says whether the run was

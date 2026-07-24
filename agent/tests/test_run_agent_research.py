@@ -43,8 +43,8 @@ class MappedSearch:
 
 
 class NeutralEnricher:
-    def enrich(self, hit: RawSearchHit) -> HitEnrichment:
-        return HitEnrichment()
+    def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]:
+        return [HitEnrichment() for _ in hits]
 
 
 class RecordingSink:

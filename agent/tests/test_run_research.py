@@ -29,14 +29,19 @@ class FakeEnricher:
     def __init__(self, known: dict[str, datetime] | None = None):
         self.known = known or {}
         self.seen: list[str] = []
+        self.calls = 0
 
-    def enrich(self, hit: RawSearchHit) -> HitEnrichment:
-        self.seen.append(hit.title)
-        return HitEnrichment(
-            published_at=self.known.get(hit.title),
-            event_type=EventType.RESEARCH,
-            summary=f"summary of {hit.title}",
-        )
+    def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]:
+        self.calls += 1
+        self.seen.extend(hit.title for hit in hits)
+        return [
+            HitEnrichment(
+                published_at=self.known.get(hit.title),
+                event_type=EventType.RESEARCH,
+                summary=f"summary of {hit.title}",
+            )
+            for hit in hits
+        ]
 
 
 class RecordingSink:
@@ -83,6 +88,8 @@ def test_date_cascade_provider_then_llm_then_unknown() -> None:
     assert by_title["undatable"].date_confidence == DateConfidence.UNKNOWN
     # Every hit is enriched (event type + summary, ADR-027) — even dated ones.
     assert enricher.seen == ["from-provider", "from-llm", "undatable"]
+    # ADR-042: the whole result set is enriched in a single batched port call.
+    assert enricher.calls == 1
     assert by_title["from-provider"].event_type == EventType.RESEARCH
     assert by_title["undatable"].summary == "summary of undatable"
     # The provider's date always wins over the LLM's (ADR-011).

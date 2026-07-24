@@ -1167,6 +1167,29 @@ these short strict-JSON tasks — found the hard way, live, on 2026-07-22.
 
 ---
 
+### ADR-042 — Batched concurrent enrichment (decided 2026-07-23)
+
+**Context**: both use cases enrich a whole result set, but the `HitEnricher`
+port was single-hit and the use cases looped over it — 9 hits meant 9
+*sequential* LLM round-trips, the dominant share of a run's wall-clock time
+(measured on the ADR-041 full-stack validation).
+
+**Decision**: the port becomes **batch-shaped** — `enrich_many(hits)` returns
+one enrichment per hit in order — because that is the shape both callers
+actually need; a use case never enriches a single hit. The live adapter
+implements it with one `llm.batch(...)` (langchain fans the per-hit calls out
+concurrently, replies stay in prompt order), **bounded by `max_concurrency=5`**
+so a burst of hits cannot hammer the Anthropic API or overload a local Ollama
+(ADR-041). Still one LLM call per hit (ADR-027's cost model is unchanged);
+usage is metered on the caller's thread after the batch returns, so the
+`UsageMeter` needs no thread-safety. The fakes stay sequential (determinism);
+the single-hit `enrich` survives as an adapter convenience for the live drift
+tests (ADR-012). Page-date fetches (ADR-035) remain sequential — they only run
+for hits without a provider date; parallelizing them is a possible follow-up
+if profiles ever show them dominating.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

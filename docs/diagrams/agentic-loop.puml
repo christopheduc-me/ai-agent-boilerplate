@@ -67,7 +67,8 @@ partition "Self-critique (ADR-031) — agent mode only" {
 }
 
 partition "Shared tail (same as workflow mode)" {
-  :enrich every hit (ADR-027)
+  :enrich every hit — one batched, concurrent
+  LLM pass (ADR-027/042)
   date cascade (ADR-011) + event type + summary;
   :sort by publication date, undated last;
   :deliver (POST /internal/jobs/{id}/results)

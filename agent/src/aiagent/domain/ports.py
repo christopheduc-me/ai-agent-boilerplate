@@ -59,11 +59,14 @@ class PageDateFetcher(Protocol):
 
 
 class HitEnricher(Protocol):
-    """LLM-backed enrichment (ADR-027): one call per hit returning the
+    """LLM-backed enrichment (ADR-027): one LLM call per hit returning the
     publication date (used only when the provider gave none, ADR-011), the
-    event type, and a one-line summary for the timeline."""
+    event type, and a one-line summary for the timeline. The port is
+    batch-shaped (ADR-042): both use cases enrich a whole result set at once,
+    so adapters can issue the per-hit calls concurrently. Returns one
+    enrichment per hit, in the same order."""
 
-    def enrich(self, hit: RawSearchHit) -> HitEnrichment: ...
+    def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]: ...
 
 
 class ResultSink(Protocol):

@@ -2,6 +2,7 @@
 
 from aiagent.domain.models import (
     DateConfidence,
+    HitEnrichment,
     RawSearchHit,
     ResearchResult,
     as_utc,
@@ -12,16 +13,29 @@ from aiagent.domain.models import (
 from aiagent.domain.ports import HitEnricher, PageDateFetcher, ResultSink, SearchProvider
 
 
-def resolve_hit(
-    hit: RawSearchHit,
+def resolve_hits(
+    hits: list[RawSearchHit],
     enricher: HitEnricher,
     page_dates: PageDateFetcher | None = None,
+) -> list[ResearchResult]:
+    """Enriches a whole result set through one batched port call (ADR-042 —
+    the adapter parallelizes the per-hit LLM calls), then resolves each date."""
+    enrichments = enricher.enrich_many(hits)
+    return [
+        resolve_hit(hit, enrichment, page_dates)
+        for hit, enrichment in zip(hits, enrichments, strict=True)
+    ]
+
+
+def resolve_hit(
+    hit: RawSearchHit,
+    enrichment: HitEnrichment,
+    page_dates: PageDateFetcher | None = None,
 ) -> ResearchResult:
-    """Enrichment (ADR-027) + full date cascade (ADR-011/035): the provider's
-    date wins (high); else the date the page declares about itself (high,
-    ADR-035); else the LLM's guess (medium); else unknown. The page is only
-    fetched when the provider gave no date."""
-    enrichment = enricher.enrich(hit)
+    """Date cascade (ADR-011/035) over an already-computed enrichment: the
+    provider's date wins (high); else the date the page declares about itself
+    (high, ADR-035); else the LLM's guess (medium); else unknown. The page is
+    only fetched when the provider gave no date."""
     page_date = None
     if hit.published_at is None and page_dates is not None:
         page_date = page_dates.fetch_published_date(hit.url)
@@ -65,7 +79,7 @@ def run_research(
         # Canonical-URL deduplication (ADR-034): drop retagged duplicates
         # before paying for their enrichment.
         hits = dedupe_hits(search.search(keyword))
-        results = sort_by_publication_date([resolve_hit(hit, enricher, page_dates) for hit in hits])
+        results = sort_by_publication_date(resolve_hits(hits, enricher, page_dates))
         if seen_urls is not None:
             # Recurring run (ADR-033): flag what previous runs already saw.
             results = flag_new(results, seen_urls)

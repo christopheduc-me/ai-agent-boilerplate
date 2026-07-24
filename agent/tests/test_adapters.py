@@ -113,10 +113,15 @@ class FakeChatModel:
     def __init__(self, content: object) -> None:
         self.content = content
         self.prompts: list[str] = []
+        self.batch_configs: list[dict | None] = []
 
     def invoke(self, prompt: str) -> "FakeChatModel":
         self.prompts.append(prompt)
         return self  # quacks like an AIMessage: has .content
+
+    def batch(self, prompts: list[str], config: dict | None = None) -> list["FakeChatModel"]:
+        self.batch_configs.append(config)
+        return [self.invoke(p) for p in prompts]
 
 
 def a_hit(title: str = "T") -> RawSearchHit:
@@ -137,6 +142,42 @@ def test_llm_enricher_builds_the_prompt_and_parses_the_reply() -> None:
     assert llm.prompts[0] == ENRICHMENT_PROMPT.format(
         title="My Article", url="https://t", snippet="an excerpt"
     )
+
+
+def test_llm_enricher_batches_hits_through_one_bounded_batch_call() -> None:
+    # ADR-042: one llm.batch per result set (concurrent under the hood),
+    # bounded so a burst of hits cannot hammer the provider.
+    llm = FakeChatModel(
+        content='{"published_date": null, "event_type": "release", "summary": "S."}'
+    )
+    enricher = LlmHitEnricher(llm)  # type: ignore[arg-type]
+
+    enrichments = enricher.enrich_many([a_hit(title="A"), a_hit(title="B"), a_hit(title="C")])
+
+    assert [e.event_type for e in enrichments] == [EventType.RELEASE] * 3
+    assert len(llm.batch_configs) == 1  # one batch, not three invokes
+    assert llm.batch_configs[0] == {"max_concurrency": 5}
+    assert [f"Title: {t}" in p for t, p in zip(["A", "B", "C"], llm.prompts, strict=True)] == [
+        True,
+        True,
+        True,
+    ]
+
+
+def test_llm_enricher_meters_every_call_of_the_batch() -> None:
+    from aiagent.domain.usage import UsageMeter
+
+    llm = FakeChatModel(content="{}")
+    meter = UsageMeter()
+    LlmHitEnricher(llm, meter=meter).enrich_many([a_hit(), a_hit()])  # type: ignore[arg-type]
+
+    assert meter.snapshot().llm_calls == 2
+
+
+def test_llm_enricher_returns_no_enrichment_for_no_hits() -> None:
+    llm = FakeChatModel(content="{}")
+    assert LlmHitEnricher(llm).enrich_many([]) == []  # type: ignore[arg-type]
+    assert llm.batch_configs == []  # no pointless provider round-trip
 
 
 def test_llm_enricher_tolerates_structured_content_blocks() -> None:

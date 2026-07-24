@@ -96,6 +96,9 @@ class FakeHitEnricher(_FakeLlm):
     """Deterministic enrichment: a date only for the hit designed to exercise
     the LLM stage of the cascade, a stable event type and summary for all."""
 
+    def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]:
+        return [self.enrich(hit) for hit in hits]
+
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
         self._count()
         published_at = None

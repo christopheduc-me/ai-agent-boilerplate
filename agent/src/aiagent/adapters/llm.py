@@ -23,7 +23,7 @@ from aiagent.domain.models import (
 from aiagent.domain.usage import UsageMeter
 
 if TYPE_CHECKING:
-    from langchain_core.language_models import BaseChatModel
+    from langchain_core.language_models import BaseChatModel, LanguageModelInput
 
 ENRICHMENT_PROMPT = """\
 You analyze a web search result about a topic and reply with a single JSON
@@ -95,16 +95,41 @@ class LlmHitEnricher:
     never exercised in CI (ADR-012). `llm` is injectable so the prompt/parse
     logic around it stays unit-testable with a fake chat model."""
 
-    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
+    def __init__(
+        self,
+        llm: "BaseChatModel",
+        meter: UsageMeter | None = None,
+        concurrency: int = 5,
+    ) -> None:
         self._meter = meter
         self._llm = llm
+        # Bounds the parallel per-hit calls (ADR-042): fast, without letting a
+        # burst of hits hammer the provider (or overload a local Ollama).
+        self._concurrency = concurrency
+
+    def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]:
+        if not hits:
+            return []
+        prompts: list[LanguageModelInput] = [
+            ENRICHMENT_PROMPT.format(title=hit.title, url=hit.url, snippet=hit.snippet)
+            for hit in hits
+        ]
+        # One langchain batch = the per-hit calls run concurrently under the
+        # hood; replies come back in prompt order. Usage is recorded here, on
+        # the caller's thread — the meter needs no thread-safety.
+        responses = self._llm.batch(prompts, config={"max_concurrency": self._concurrency})
+        enrichments = []
+        for response in responses:
+            record_llm_usage(self._meter, response)
+            content = (
+                response.content if isinstance(response.content, str) else str(response.content)
+            )
+            enrichments.append(parse_enrichment(content))
+        return enrichments
 
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
-        prompt = ENRICHMENT_PROMPT.format(title=hit.title, url=hit.url, snippet=hit.snippet)
-        response = self._llm.invoke(prompt)
-        record_llm_usage(self._meter, response)
-        content = response.content if isinstance(response.content, str) else str(response.content)
-        return parse_enrichment(content)
+        """Single-hit convenience (live drift tests, ADR-012)."""
+        return self.enrich_many([hit])[0]
 
 
 POLICY_PROMPT = """\
