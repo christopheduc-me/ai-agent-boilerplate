@@ -55,6 +55,12 @@ class Settings:
     llm_backend: str
     # Ollama server URL; from a compose container use host.docker.internal.
     llm_base_url: str
+    # Per-call hardening (ADR-044): a hung or flaky LLM call must not stall the
+    # worker until Celery's coarse retry. Timeout bounds each call; max_retries
+    # absorbs transient network blips before that (Anthropic only — Ollama has
+    # no built-in retry and relies on the Celery task retry).
+    llm_timeout_seconds: float
+    llm_max_retries: int
     # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
     # at most one policy LLM call plus one provider search.
     agent_max_steps: int
@@ -74,6 +80,8 @@ class Settings:
             providers=os.environ.get("AGENT_PROVIDERS", "live"),
             llm_backend=os.environ.get("AGENT_LLM_BACKEND", "anthropic"),
             llm_base_url=os.environ.get("AGENT_LLM_BASE_URL", "http://localhost:11434"),
+            llm_timeout_seconds=float(os.environ.get("AGENT_LLM_TIMEOUT_SECONDS", "60")),
+            llm_max_retries=int(os.environ.get("AGENT_LLM_MAX_RETRIES", "2")),
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
             llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
             llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),

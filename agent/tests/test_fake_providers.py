@@ -37,6 +37,8 @@ def settings_with(providers: str) -> Settings:
         search_cost_per_call=0.008,
         llm_backend="anthropic",
         llm_base_url="http://localhost:11434",
+        llm_timeout_seconds=60.0,
+        llm_max_retries=2,
     )
 
 

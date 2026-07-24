@@ -1220,6 +1220,26 @@ would have dropped to `other`. The fakes and unit tests exercise both the
 structured happy path and the text fallback; the opt-in live tests (ADR-012 /
 ADR-041) validate the real tool-use and json_schema paths on each backend.
 
+### ADR-044 — Per-call timeout and retries on the LLM clients (decided 2026-07-24)
+
+**Context**: the chat-model factory (ADR-041) built the clients with no
+explicit timeout or retry. A hung call — a cold Ollama loading a large model
+into VRAM, a slow network to the Anthropic API — could block a worker for
+minutes, and the batched enrichment (ADR-042) makes it worse: one stalled call
+holds up the whole batch, hence the whole run. The only safety net was
+Celery's task-level retry (ADR-016), which fires on a *failed* task, not on a
+merely slow call.
+
+**Decision**: the factory bounds every call, from two env-driven settings with
+sane defaults — `AGENT_LLM_TIMEOUT_SECONDS` (60) and `AGENT_LLM_MAX_RETRIES`
+(2). On Anthropic they map to the client's native `default_request_timeout`
+and `max_retries`. ChatOllama has no direct timeout, so it receives one through
+`client_kwargs={"timeout": ...}` (passed to the underlying HTTP client), and
+has no built-in retry — a failed local call falls back to the Celery task
+retry, which is the right layer for it. The two layers compose: the per-call
+timeout caps latency and absorbs transient blips fast; Celery's retry with
+backoff still covers a task that fails outright.
+
 ---
 
 ## 4. API contracts (summary)

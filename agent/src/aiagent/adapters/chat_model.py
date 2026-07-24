@@ -23,7 +23,13 @@ def make_chat_model(settings: Settings, max_tokens: int) -> "BaseChatModel":
         from langchain_anthropic import ChatAnthropic
 
         # `model` / `max_tokens` are pydantic aliases mypy cannot see.
-        return ChatAnthropic(model=settings.agent_model_id, max_tokens=max_tokens)  # type: ignore[call-arg]
+        return ChatAnthropic(  # type: ignore[call-arg]
+            model=settings.agent_model_id,
+            max_tokens=max_tokens,
+            # Per-call hardening (ADR-044).
+            default_request_timeout=settings.llm_timeout_seconds,
+            max_retries=settings.llm_max_retries,
+        )
     if settings.llm_backend == "ollama":
         from langchain_ollama import ChatOllama
 
@@ -35,6 +41,10 @@ def make_chat_model(settings: Settings, max_tokens: int) -> "BaseChatModel":
             # num_predict budget on hidden reasoning and return empty content
             # for these short strict-JSON tasks.
             reasoning=False,
+            # ChatOllama has no direct timeout; it reaches the underlying http
+            # client through client_kwargs (ADR-044). Ollama has no built-in
+            # retry — a failed call falls back to the Celery task retry.
+            client_kwargs={"timeout": settings.llm_timeout_seconds},
         )
     raise ValueError(
         f"unknown AGENT_LLM_BACKEND {settings.llm_backend!r} — expected one of {BACKENDS}"
