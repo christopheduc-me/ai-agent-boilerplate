@@ -6,9 +6,14 @@ import respx
 
 from aiagent.adapters.llm import (
     ENRICHMENT_PROMPT,
+    ActionReply,
+    CritiqueReply,
+    EnrichmentReply,
     LlmAgentPolicy,
     LlmHitEnricher,
     LlmResultCritic,
+    action_from_reply,
+    enrichment_from_reply,
     parse_action,
     parse_critique,
     parse_enrichment,
@@ -104,22 +109,30 @@ def test_parse_enrichment_degrades_gracefully() -> None:
 
 
 class FakeChatModel:
-    """Stands in for the chat model: records the prompt, replies with `content`.
+    """Stands in for the chat model in structured-output mode (ADR-043):
+    records the prompt, replies with `parsed` (the validated schema instance —
+    the happy path) or with `parsed=None` and raw `content` (native structured
+    output failed → the adapter must fall back to text parsing). Prompt
+    building, conversion and fallback parsing run for real (ADR-012)."""
 
-    The model call is the only thing faked — prompt building and reply parsing
-    (the adapter's actual logic) run for real (ADR-012).
-    """
-
-    def __init__(self, content: object) -> None:
+    def __init__(self, content: object = "", parsed: object = None) -> None:
         self.content = content
+        self.parsed = parsed
         self.prompts: list[str] = []
         self.batch_configs: list[dict | None] = []
+        self.schema: object = None
 
-    def invoke(self, prompt: str) -> "FakeChatModel":
+    def with_structured_output(self, schema: object, include_raw: bool = False) -> "FakeChatModel":
+        assert include_raw, "adapters must keep the raw message (usage metering, ADR-038)"
+        self.schema = schema
+        return self
+
+    def invoke(self, prompt: str) -> dict:
         self.prompts.append(prompt)
-        return self  # quacks like an AIMessage: has .content
+        # `raw` quacks like an AIMessage: has .content and no usage_metadata.
+        return {"raw": self, "parsed": self.parsed}
 
-    def batch(self, prompts: list[str], config: dict | None = None) -> list["FakeChatModel"]:
+    def batch(self, prompts: list[str], config: dict | None = None) -> list[dict]:
         self.batch_configs.append(config)
         return [self.invoke(p) for p in prompts]
 
@@ -128,9 +141,10 @@ def a_hit(title: str = "T") -> RawSearchHit:
     return RawSearchHit(title=title, url="https://t", snippet="an excerpt", published_at=None)
 
 
-def test_llm_enricher_builds_the_prompt_and_parses_the_reply() -> None:
+def test_llm_enricher_converts_the_structured_reply() -> None:
+    # ADR-043 happy path: the model filled the native schema.
     llm = FakeChatModel(
-        content='{"published_date": "2026-03-01", "event_type": "funding", "summary": "$10M."}'
+        parsed=EnrichmentReply(published_date="2026-03-01", event_type="funding", summary="$10M.")
     )
     enricher = LlmHitEnricher(llm)  # type: ignore[arg-type]
 
@@ -139,17 +153,49 @@ def test_llm_enricher_builds_the_prompt_and_parses_the_reply() -> None:
     assert enrichment.published_at == datetime(2026, 3, 1, tzinfo=UTC)
     assert enrichment.event_type == EventType.FUNDING
     assert enrichment.summary == "$10M."
+    assert llm.schema is EnrichmentReply
     assert llm.prompts[0] == ENRICHMENT_PROMPT.format(
         title="My Article", url="https://t", snippet="an excerpt"
+    )
+
+
+def test_llm_enricher_falls_back_to_text_parsing_when_structuring_failed() -> None:
+    # ADR-043 degradation: parsed=None but the raw content happens to be JSON
+    # (a model that ignored the tool but still answered) — nothing is lost.
+    llm = FakeChatModel(
+        content='{"published_date": "2026-03-01", "event_type": "funding", "summary": "$10M."}'
+    )
+    enrichment = LlmHitEnricher(llm).enrich(a_hit())  # type: ignore[arg-type]
+
+    assert enrichment.published_at == datetime(2026, 3, 1, tzinfo=UTC)
+    assert enrichment.event_type == EventType.FUNDING
+
+
+def test_enrichment_reply_degrades_field_by_field() -> None:
+    # An invented event type or a prose date must not void the whole reply.
+    enrichment = enrichment_from_reply(
+        EnrichmentReply(published_date="last spring", event_type="product-launch", summary=" S. ")
+    )
+    assert enrichment.published_at is None
+    assert enrichment.event_type == EventType.OTHER
+    assert enrichment.summary == "S."
+
+
+def test_enrichment_reply_is_case_tolerant_on_the_event_type() -> None:
+    # Schema-mode models capitalize the enum freely ("Release", "RESEARCH") —
+    # found live with gemma4 returning "Software Release". Must not fall to OTHER.
+    assert enrichment_from_reply(EnrichmentReply(event_type="Release")).event_type == (
+        EventType.RELEASE
+    )
+    assert enrichment_from_reply(EnrichmentReply(event_type="RESEARCH")).event_type == (
+        EventType.RESEARCH
     )
 
 
 def test_llm_enricher_batches_hits_through_one_bounded_batch_call() -> None:
     # ADR-042: one llm.batch per result set (concurrent under the hood),
     # bounded so a burst of hits cannot hammer the provider.
-    llm = FakeChatModel(
-        content='{"published_date": null, "event_type": "release", "summary": "S."}'
-    )
+    llm = FakeChatModel(parsed=EnrichmentReply(event_type="release", summary="S."))
     enricher = LlmHitEnricher(llm)  # type: ignore[arg-type]
 
     enrichments = enricher.enrich_many([a_hit(title="A"), a_hit(title="B"), a_hit(title="C")])
@@ -301,8 +347,8 @@ def test_parse_action_tolerates_code_fences() -> None:
     assert parse_action(fenced) == SearchAction(query="q", reason="r")
 
 
-def test_llm_policy_shows_the_transcript_and_parses_the_decision() -> None:
-    llm = FakeChatModel(content='{"action": "search", "query": "rust news", "reason": "start"}')
+def test_llm_policy_shows_the_transcript_and_converts_the_decision() -> None:
+    llm = FakeChatModel(parsed=ActionReply(action="search", query="rust news", reason="start"))
     policy = LlmAgentPolicy(llm)  # type: ignore[arg-type]
     steps = [AgentStep(seq=1, kind=AgentStepKind.SEARCH, detail="rust", reason="r", new_hits=2)]
 
@@ -313,6 +359,27 @@ def test_llm_policy_shows_the_transcript_and_parses_the_decision() -> None:
     assert "Goal: rust" in prompt
     assert '- "rust" -> 2 new' in prompt
     assert "- Rust 1.99 released" in prompt
+
+
+def test_llm_policy_falls_back_to_text_parsing_when_structuring_failed() -> None:
+    llm = FakeChatModel(content='{"action": "search", "query": "rust news", "reason": "start"}')
+    action = LlmAgentPolicy(llm).decide("rust", [], [])  # type: ignore[arg-type]
+    assert action == SearchAction(query="rust news", reason="start")
+
+
+def test_action_reply_without_its_required_detail_degrades_to_finish() -> None:
+    # A search without a query or an ask without a question must never crash
+    # the loop — same guarantee as the text parser (ADR-030).
+    assert isinstance(action_from_reply(ActionReply(action="search", reason="r")), FinishAction)
+    assert isinstance(action_from_reply(ActionReply(action="ask", reason="r")), FinishAction)
+    ask = action_from_reply(ActionReply(action="ask", question="Which one?", reason="r"))
+    assert isinstance(ask, AskAction) and ask.question == "Which one?"
+
+
+def test_action_reply_is_case_tolerant_on_the_action() -> None:
+    # Schema-mode models may capitalize the action ("Search") — must still run.
+    got = action_from_reply(ActionReply(action="Search", query="rust", reason="go"))
+    assert isinstance(got, SearchAction) and got.query == "rust"
 
 
 @respx.mock
@@ -361,10 +428,8 @@ def test_parse_critique_degrades_to_a_neutral_review() -> None:
         assert critique.irrelevant_urls == () and critique.gap_query is None
 
 
-def test_llm_critic_lists_the_results_and_parses_the_verdict() -> None:
-    llm = FakeChatModel(
-        content='{"assessment": "One gap.", "irrelevant_urls": [], "gap_query": "rust 2026"}'
-    )
+def test_llm_critic_lists_the_results_and_converts_the_verdict() -> None:
+    llm = FakeChatModel(parsed=CritiqueReply(assessment="One gap.", gap_query="rust 2026"))
     critic = LlmResultCritic(llm)  # type: ignore[arg-type]
 
     critique = critic.critique("rust", [a_hit(title="Rust 1.99 released")])
@@ -372,6 +437,13 @@ def test_llm_critic_lists_the_results_and_parses_the_verdict() -> None:
     assert critique == Critique(assessment="One gap.", gap_query="rust 2026")
     prompt = llm.prompts[0]
     assert "Goal: rust" in prompt and "- Rust 1.99 released" in prompt
+
+
+def test_llm_critic_falls_back_to_text_parsing_when_structuring_failed() -> None:
+    llm = FakeChatModel(content="prose, definitely not a filled schema")
+    critique = LlmResultCritic(llm).critique("rust", [a_hit()])  # type: ignore[arg-type]
+    # Neutral degradation (ADR-031): nothing dropped, no gap.
+    assert critique.irrelevant_urls == () and critique.gap_query is None
 
 
 # ---------------------------------------------------------------- clarification (ADR-032)

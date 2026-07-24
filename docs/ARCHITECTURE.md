@@ -1188,6 +1188,38 @@ tests (ADR-012). Page-date fetches (ADR-035) remain sequential — they only run
 for hits without a provider date; parallelizing them is a possible follow-up
 if profiles ever show them dominating.
 
+### ADR-043 — Native structured output for the LLM adapters (decided 2026-07-24)
+
+**Context**: the three LLM adapters (enricher, policy, critic) asked the model
+to "reply with a single JSON object" in prose and parsed the raw text
+defensively. That works but is fragile — precisely where it matters most, on
+the small local models the ADR-041 backend enables, which drift from strict
+JSON far more than the hosted ones.
+
+**Decision**: each adapter binds a **pydantic reply schema**
+(`EnrichmentReply`, `ActionReply`, `CritiqueReply`) through langchain's
+`with_structured_output(schema, include_raw=True)` — tool calling on Anthropic
+(`function_calling`), grammar-constrained decoding on Ollama (`json_schema`,
+its default). The field descriptions carry the instructions the prompts used
+to spell out, so the prompts shrink to the task. Conversion functions
+(`enrichment_from_reply` etc.) map the validated schema onto the domain types,
+still degrading **field by field** (an invented event type → `other`, a prose
+date → unknown) so a well-formed but nonsensical reply never voids the whole
+result. `include_raw=True` keeps the underlying message so the `UsageMeter`
+(ADR-038) still sees token counts.
+
+The legacy text parsers (`parse_enrichment`/`parse_action`/`parse_critique`)
+are **kept as a fallback**: when the native path returns no parsed object (a
+model that ignored the tool, a schema-validation failure), the raw text runs
+through them — the reply degrades, the job never crashes, preserving ADR-030's
+"malformed reply is a neutral value, never an exception" guarantee at two
+levels now. Conversion is **case-tolerant** on the enum-like fields
+(`event_type`, `action`): schema-mode models capitalize freely — found live on
+2026-07-24 with gemma4 returning `"Software Release"`, which the strict enum
+would have dropped to `other`. The fakes and unit tests exercise both the
+structured happy path and the text fallback; the opt-in live tests (ADR-012 /
+ADR-041) validate the real tool-use and json_schema paths on each backend.
+
 ---
 
 ## 4. API contracts (summary)
