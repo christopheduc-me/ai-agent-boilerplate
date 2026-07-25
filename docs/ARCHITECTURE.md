@@ -1240,6 +1240,35 @@ retry, which is the right layer for it. The two layers compose: the per-call
 timeout caps latency and absorbs transient blips fast; Celery's retry with
 backoff still covers a task that fails outright.
 
+### ADR-045 — Model evaluation harness (decided 2026-07-24)
+
+**Context**: the local-LLM backend (ADR-041) raises an immediate question it
+gave no way to answer — *which* local model is good enough? The opt-in live
+tests (ADR-012/041) are pass/fail drift checks, not a way to compare models
+side by side.
+
+**Decision**: a small evaluation harness in `aiagent/evaluation.py` scores a
+model on the agent's three LLM capabilities — enrichment, policy, critique —
+against a set of **golden cases** with known-good answers, and a CLI prints a
+**comparison table** across the models you name
+(`python -m aiagent.evaluation ollama:gemma4:latest anthropic:claude-opus-4-8`).
+Each capability gets a coarse 0–100% score; the table also shows total latency
+and indicative cost (0 for local backends, the ADR-038 env rates for the
+hosted one), so the "good enough / fast enough / cheap enough" trade-off is
+visible at a glance.
+
+It is explicitly a **directional signal, not a benchmark**: the case set is
+tiny and the scoring coarse, enough to separate a model that follows the task
+from one that does not, cheaply. It reuses the existing adapters unchanged —
+the same `LlmHitEnricher`/`LlmAgentPolicy`/`LlmResultCritic` over a chat model
+from the factory (ADR-041) — so it measures exactly what production runs, and a
+shared `UsageMeter` (ADR-038) yields the cost column for free. The scoring and
+runner are **pure and unit-tested with fakes** (a raised error becomes a
+zero-scored result, never stops the sweep); only the CLI touches real, paid
+providers, so like the live tests it is invoked by hand, never in CI. Forks
+extend the three case lists (`ENRICHMENT_CASES`, `POLICY_CASES`,
+`CRITIC_CASES`) with cases from their own domain.
+
 ---
 
 ## 4. API contracts (summary)

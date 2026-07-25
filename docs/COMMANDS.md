@@ -202,6 +202,28 @@ RUN_OLLAMA_TESTS=1 AGENT_LLM_BACKEND=ollama AGENT_MODEL_ID=qwen3:14b \
   uv run pytest tests/test_live_ollama.py -v
 ```
 
+### Compare models — evaluation harness (ADR-045)
+
+Answer "which model is good enough?" — score any backend/model on the agent's
+three LLM capabilities and print a comparison table. Calls real providers
+(paid for Anthropic, free for local Ollama), so run it by hand, never in CI.
+
+```sh
+cd agent
+# Compare several models side by side; specs are `backend:model_id`
+uv run python -m aiagent.evaluation \
+  ollama:gemma4:latest ollama:qwen3:14b anthropic:claude-opus-4-8
+# No args -> evaluate the .env-configured backend/model
+uv run python -m aiagent.evaluation
+# -v prints every case's score and detail
+uv run python -m aiagent.evaluation -v ollama:gemma4:latest
+```
+
+The table shows per-capability scores (enrichment / policy / critic),
+overall, total latency and indicative cost (0 for local). It is a directional
+signal, not a benchmark — extend the golden cases in `aiagent/evaluation.py`
+for your own domain.
+
 ### Browser tests (Playwright — ADR-028)
 
 Same stack as the smoke script (boot it first, see above), driven through a
