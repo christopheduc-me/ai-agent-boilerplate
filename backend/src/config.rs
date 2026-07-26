@@ -48,6 +48,9 @@ pub struct AppConfig {
     pub rate_limits: RateLimitConfig,
     pub refresh_token_days: i64,
     pub bind_addr: String,
+    /// Shared secret for signing outbound digest webhooks (ADR-047). None
+    /// (unset/empty) leaves digests unsigned — opt-in, like the Redis limiter.
+    pub digest_signing_secret: Option<String>,
     /// Degraded-mode notices to log once tracing is up (dev fallbacks, ADR-013).
     pub warnings: Vec<&'static str>,
 }
@@ -106,6 +109,7 @@ impl AppConfig {
             },
             refresh_token_days: i64::from(get_u32("REFRESH_TOKEN_DAYS", 30)),
             bind_addr: get("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".into()),
+            digest_signing_secret: get("DIGEST_SIGNING_SECRET"),
             warnings,
         })
     }

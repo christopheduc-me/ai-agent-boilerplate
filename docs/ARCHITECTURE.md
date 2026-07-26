@@ -1024,6 +1024,10 @@ ADR-027) — stage 2 improves the date, it does not replace the enrichment.
 
 ### ADR-036 — Digest webhooks for recurring searches (decided 2026-07-16, extends ADR-033)
 
+> *Hardened by ADR-047 (2026-07-25)*: digests are optionally **HMAC-SHA256
+> signed** (`X-Signature-256`) when `DIGEST_SIGNING_SECRET` is set, so a
+> consumer can authenticate them; `job_id` remains the at-least-once dedup key.
+
 **Context**: the recurring memory can tell a run found something new, but the
 user still has to open the app to notice. Monitoring use cases need a push.
 
@@ -1324,6 +1328,41 @@ maintained checkpointer over a hand-rolled one. A fork minimizing image size
 can set `AGENT_ORCHESTRATOR=loop` (LangGraph is then unused, though still
 installed) or replace the saver with a lean custom `BaseCheckpointSaver`.
 
+### ADR-047 — HMAC signing of digest webhooks (decided 2026-07-25, hardens ADR-036)
+
+**Context**: the digest webhook (ADR-036) POSTs to a user-supplied URL with no
+signature. Redelivery is handled — the payload carries `job_id`, so consumers
+dedup on it (at-least-once) — but **authenticity** is not: webhook URLs leak
+(logs, configs, `Referer`), and anyone who learns the URL can POST a forged
+digest the consumer cannot tell from a real one. Dedup stops accidental
+doubles; it does nothing against a malicious sender.
+
+**Decision**: an **opt-in HMAC-SHA256 signature**, the same pattern GitHub /
+Stripe / Slack use for their webhooks. With `DIGEST_SIGNING_SECRET` set, the
+`WebhookDigestSender` signs the exact bytes it sends and adds
+`X-Signature-256: sha256=<hex>`; the consumer recomputes
+`HMAC-SHA256(secret, raw_body)` and compares in constant time before trusting
+the payload. Unset (the default), digests go unsigned — opt-in like the Redis
+rate limiter (ADR-037), since the common case is a URL on a trusted internal
+tool. It stays a one-adapter concern behind the `DigestSender` port: the domain
+and the `job_id` dedup contract are untouched, and the signed bytes are the
+canonical body (serialized once, signed and sent), so the consumer verifies
+over what it received, never a re-serialization.
+
+Scope kept deliberately small: **body-only** signature (authenticity +
+integrity). Replay protection (a signed timestamp the consumer age-checks, à la
+Stripe) is a documented extension, not shipped — the digest is idempotent on
+`job_id`, so a replay is already a harmless duplicate to a correct consumer.
+
+Consumer verification (Python):
+
+```python
+import hashlib, hmac
+def valid(secret: str, raw_body: bytes, header: str) -> bool:
+    expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(expected, header)  # constant-time
+```
+
 ---
 
 ## 4. API contracts (summary)
@@ -1358,7 +1397,7 @@ also enforces the per-user daily quota — ADR-017).
 
 | Method | Route | Description |
 |---|---|---|
-| POST | *the saved `webhook_url`* | Digest of a recurring run with news `{recurring_search_id, job_id, keyword, new_count, new_results[]}` (ADR-036, fixture `contracts/digest-webhook.json`) |
+| POST | *the saved `webhook_url`* | Digest of a recurring run with news `{recurring_search_id, job_id, keyword, new_count, new_results[]}` (ADR-036, fixture `contracts/digest-webhook.json`). Dedup on `job_id` (at-least-once). Signed `X-Signature-256: sha256=<HMAC-SHA256 of the body>` when `DIGEST_SIGNING_SECRET` is set (ADR-047) |
 
 ### Internal (worker → Rust, shared token)
 
