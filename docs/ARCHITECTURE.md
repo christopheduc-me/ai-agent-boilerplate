@@ -325,7 +325,7 @@ the Dockerfile serves dev (profile `full`), CI, and deployment.
 | Agent — FastAPI API | `agent/Dockerfile` | `python:3.12-slim` + **uv** (deps installed from `uv.lock`) | same slim base, non-root user |
 | Agent — Celery worker | `agent/Dockerfile` (same image) | — | same image, different `command` (`celery -A ... worker`) |
 | Vue frontend | `frontend/Dockerfile` | `node:22-alpine` (`npm ci && npm run build`) | `nginx:alpine` serving static files + reverse-proxying `/api` → backend |
-| PostgreSQL / Redis | official images (`postgres:16-alpine`, `redis:7-alpine`) | — | — |
+| PostgreSQL / Redis | official images (`postgres:16-alpine`, `redis/redis-stack-server` — core Redis for the Celery broker **+** RediSearch for the LangGraph checkpointer, ADR-046; plain `redis:7-alpine` suffices only with `AGENT_ORCHESTRATOR=loop`) | — | — |
 
 **Rules**:
 - A single image for the FastAPI API and the Celery worker (same code, same
@@ -829,6 +829,11 @@ needs it.
 
 ### ADR-030 — Two research modes: the workflow and the agentic loop (decided 2026-07-12)
 
+> *Amended by ADR-046 (2026-07-25)*: the agent mode now has **two
+> orchestrators** — the LangGraph `StateGraph` (default) and this hand-rolled
+> loop (`AGENT_ORCHESTRATOR=loop`). Both drive the same ports; everything below
+> about the loop still holds and is asserted for both.
+
 **Context**: the original flow is a *workflow* — a fixed pipeline (one search,
 enrich, sort) where the LLM is a component the code calls. A boilerplate named
 "AI agent" should also demonstrate an actual **agent**: the LLM deciding the
@@ -1268,6 +1273,56 @@ zero-scored result, never stops the sweep); only the CLI touches real, paid
 providers, so like the live tests it is invoked by hand, never in CI. Forks
 extend the three case lists (`ENRICHMENT_CASES`, `POLICY_CASES`,
 `CRITIC_CASES`) with cases from their own domain.
+
+### ADR-046 — LangGraph as the default agent orchestrator (decided 2026-07-25, revisits ADR-030)
+
+**Context**: the agent mode ran on a hand-rolled loop (ADR-030) — pure,
+testable, framework-free, and a good teaching artifact. But most projects that
+fork this boilerplate build on **LangGraph**, and the loop gave them no
+starting point for it. The goal: ship LangGraph as the orchestrator forks start
+from, without sacrificing the hexagonal architecture or the loop as a
+reference.
+
+**Decision**: a **second orchestrator** for `mode=agent`, selected by
+`AGENT_ORCHESTRATOR` (**`langgraph`** default, `loop` keeps ADR-030). It is an
+**adapter** (`adapters/orchestration/langgraph_agent.py`): a LangGraph
+`StateGraph` whose nodes (`decide`/`search`/`ask`/`finalize`/`critique`) call
+the **same domain ports** — so `domain/` and `application/` stay framework-free
+and adopting LangGraph is exactly the "swap an adapter, not a rewrite" the
+hexagonal split promised. Parity with the loop is asserted test-for-test
+(dedup, budget, journal, critique + repair, recurring delta, ask-guard).
+
+Two capabilities the graph adds:
+- **Durable checkpointing** — the graph state is persisted at every super-step
+  in **Redis**, keyed by `job_id`. Redis is the worker's own infrastructure
+  (the Celery broker), so this respects ADR-006: the worker still never
+  touches the database. Postgres — the other obvious store — is therefore
+  ruled out here, not just unnecessary. The saver needs **RediSearch**, so the
+  compose Redis image becomes `redis/redis-stack-server` (core Redis + the
+  module); `redis:7-alpine` works only with `AGENT_ORCHESTRATOR=loop`.
+- **Native HITL** (ADR-032) via `interrupt()`: the clarification pause is a
+  first-class graph primitive. The worker sees the interrupt, fires the
+  `question` callback once (job → `awaiting_input`) and ends; the user's answer
+  re-dispatches a task that **resumes the graph from its checkpoint**, so the
+  searches done before the pause are not redone — the win over the loop's
+  re-dispatch-from-scratch.
+
+Design constraints honored: the checkpointed state holds **only JSON-friendly
+primitives** (hits/steps as dicts), converted to/from domain types at the node
+boundary — the default checkpoint serializer round-trips our frozen dataclasses
+only through a *deprecated* pickle fallback, which an exemplary boilerplate must
+not depend on. Failure/idempotency semantics match the loop and ADR-016
+(deliver replaces, steps upsert on `(job_id, seq)`; a resumed task re-runs the
+post-graph enrich/deliver tail, which is idempotent at the backend). The
+enrich pass stays batched (ADR-042) and the tail (sort, `flag_new`, deliver)
+is shared with the workflow mode.
+
+**Cost**: `langgraph-checkpoint-redis` pulls a heavy transitive chain
+(`numpy`, `redisvl`, `ml-dtypes`) for RediSearch/vector features this project
+does not use — a deliberate weight trade accepted for a correct, standard,
+maintained checkpointer over a hand-rolled one. A fork minimizing image size
+can set `AGENT_ORCHESTRATOR=loop` (LangGraph is then unused, though still
+installed) or replace the saver with a lean custom `BaseCheckpointSaver`.
 
 ---
 

@@ -16,6 +16,7 @@ def settings(**overrides) -> Settings:
         agent_model_id="claude-opus-4-8",
         providers="live",
         agent_max_steps=5,
+        agent_orchestrator="langgraph",
         llm_cost_input_per_mtok=0.0,
         llm_cost_output_per_mtok=0.0,
         search_cost_per_call=0.0,

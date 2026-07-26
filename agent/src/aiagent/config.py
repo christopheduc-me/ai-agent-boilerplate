@@ -64,6 +64,11 @@ class Settings:
     # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
     # at most one policy LLM call plus one provider search.
     agent_max_steps: int
+    # Orchestration of the agent mode (ADR-046): "langgraph" (default, a
+    # StateGraph with durable Redis checkpointing and native interrupt-based
+    # HITL) or "loop" (the framework-free hand-rolled loop of ADR-030). Both
+    # drive the same domain ports; the workflow mode is unaffected.
+    agent_orchestrator: str
     # Indicative pricing (ADR-038), USD; set the rates matching your model and
     # search plan. Defaults documented in .env.example.
     llm_cost_input_per_mtok: float
@@ -83,6 +88,7 @@ class Settings:
             llm_timeout_seconds=float(os.environ.get("AGENT_LLM_TIMEOUT_SECONDS", "60")),
             llm_max_retries=int(os.environ.get("AGENT_LLM_MAX_RETRIES", "2")),
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
+            agent_orchestrator=os.environ.get("AGENT_ORCHESTRATOR", "langgraph"),
             llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
             llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),
             search_cost_per_call=float(os.environ.get("SEARCH_COST_PER_CALL", "0.008")),

@@ -1,10 +1,14 @@
 """Celery tasks: thin glue wiring adapters into the use case (no business logic)."""
 
 import logging
+from collections.abc import Iterator
+from contextlib import contextmanager
+from typing import TYPE_CHECKING, Any
 
 from aiagent.application import run_agent_research, run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
+from aiagent.domain.models import ResearchResult
 from aiagent.domain.ports import (
     AgentPolicy,
     HitEnricher,
@@ -14,7 +18,23 @@ from aiagent.domain.ports import (
 )
 from aiagent.domain.usage import Pricing, UsageMeter
 
+if TYPE_CHECKING:
+    from langgraph.checkpoint.base import BaseCheckpointSaver
+
 logger = logging.getLogger(__name__)
+
+
+@contextmanager
+def _agent_checkpointer(settings: Settings) -> "Iterator[BaseCheckpointSaver[Any]]":
+    """Durable checkpoint store for the LangGraph orchestrator (ADR-046),
+    keyed by job_id. Redis is the worker's own infrastructure (the Celery
+    broker), so this respects ADR-006 — the worker still never touches the
+    database. A seam so tests can supply an in-memory saver instead."""
+    from langgraph.checkpoint.redis import RedisSaver
+
+    with RedisSaver.from_conn_string(settings.redis_url) as checkpointer:
+        checkpointer.setup()  # idempotent: creates the Redis indices once
+        yield checkpointer
 
 
 def build_providers(
@@ -68,6 +88,66 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
     from aiagent.adapters.llm import LlmResultCritic
 
     return LlmResultCritic(make_chat_model(settings, max_tokens=512), meter=meter)
+
+
+def _run_agent(
+    settings: Settings,
+    job_id: str,
+    keyword: str,
+    clarification: str | None,
+    search: SearchProvider,
+    enricher: HitEnricher,
+    policy: AgentPolicy,
+    critic: ResultCritic | None,
+    # HttpResultSink structurally satisfies ResultSink + StepReporter +
+    # ClarificationRequester; typed Any to pass it in all three roles.
+    sink: Any,
+    memory: set[str] | None,
+    page_dates: PageDateFetcher,
+) -> list[ResearchResult] | None:
+    """Dispatches the agent mode to the configured orchestrator (ADR-046).
+    Both drive the same ports; `sink` also acts as StepReporter and
+    ClarificationRequester. Returns the results, or None when paused."""
+    if settings.agent_orchestrator == "loop":
+        goal = keyword
+        if clarification:
+            goal = f'{keyword} (user clarification: "{clarification}")'
+        return run_agent_research(
+            job_id,
+            goal,
+            search,
+            enricher,
+            policy,
+            sink,
+            sink,
+            critic=critic,
+            clarifier=sink,
+            clarification=clarification,
+            seen_urls=memory,
+            page_dates=page_dates,
+            max_steps=settings.agent_max_steps,
+        )
+    from aiagent.adapters.orchestration.langgraph_agent import run_agent_graph
+
+    with _agent_checkpointer(settings) as checkpointer:
+        return run_agent_graph(
+            job_id,
+            keyword,
+            search,
+            enricher,
+            policy,
+            sink,
+            sink,
+            checkpointer,
+            critic=critic,
+            clarifier=sink,
+            seen_urls=memory,
+            page_dates=page_dates,
+            max_steps=settings.agent_max_steps,
+            # The re-dispatch after an answer carries it as `clarification`;
+            # for the graph that means: resume from the checkpoint (ADR-046).
+            resume_answer=clarification,
+        )
 
 
 @app.task(
@@ -141,27 +221,24 @@ def run_research_task(
 
     try:
         if policy is not None:
-            # Agent mode (ADR-030/031/032): the policy drives the loop, the
+            # Agent mode (ADR-030/031/032): the policy drives the decisions, the
             # critic reviews the results before delivery, and the sink also
-            # implements StepReporter + ClarificationRequester. The user's
-            # answer (if any) is folded into the goal for the policy.
-            goal = keyword
-            if clarification:
-                goal = f'{keyword} (user clarification: "{clarification}")'
-            outcome = run_agent_research(
+            # implements StepReporter + ClarificationRequester. Two orchestrators
+            # (ADR-046) share these ports: the LangGraph StateGraph (default,
+            # durable checkpointing + native interrupt HITL) or the hand-rolled
+            # loop (AGENT_ORCHESTRATOR=loop).
+            outcome = _run_agent(
+                settings,
                 job_id,
-                goal,
+                keyword,
+                clarification,
                 search,
                 enricher,
                 policy,
+                critic,
                 sink,
-                sink,
-                critic=critic,
-                clarifier=sink,
-                clarification=clarification,
-                seen_urls=memory,
-                page_dates=page_dates,
-                max_steps=settings.agent_max_steps,
+                memory,
+                page_dates,
             )
             if outcome is None:
                 # Paused (ADR-032): the job awaits the user's answer; a fresh

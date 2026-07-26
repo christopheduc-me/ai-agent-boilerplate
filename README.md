@@ -61,6 +61,12 @@ the patterns you would otherwise rebuild from scratch on every agent project.
   deterministic workflow or an LLM-driven decision loop (budget-capped, URL
   deduplication, live decision journal over SSE), so the boilerplate
   demonstrates both canonical patterns and the trade-off between them.
+- **LangGraph, hexagonally** — the agent mode runs on a **LangGraph
+  `StateGraph`** by default (durable Redis checkpointing, native
+  `interrupt()`-based human-in-the-loop that resumes mid-graph), wired as an
+  adapter over the same domain ports — so the framework stays at the edge and
+  the framework-free loop is still there behind `AGENT_ORCHESTRATOR=loop`
+  (ADR-046).
 - **Recurring searches with memory** — saved keywords re-run on an interval by
   the backend scheduler; each run remembers previously delivered URLs, flags
   what is **new**, the agent reports the delta ("nothing new since the last

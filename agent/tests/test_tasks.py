@@ -17,11 +17,31 @@ from aiagent.tasks import run_research_task
 BACKEND = "http://backend-test:8000"
 
 
-@pytest.fixture()
-def fake_env(monkeypatch) -> None:
+@pytest.fixture(params=["loop", "langgraph"])
+def fake_env(request, monkeypatch) -> None:
+    """Exercises both agent orchestrators (ADR-046). For langgraph, the durable
+    Redis checkpointer is swapped for a per-test in-memory one — same graph, no
+    Redis in unit tests; the real RedisSaver path is covered by the live e2e."""
     monkeypatch.setenv("BACKEND_INTERNAL_URL", BACKEND)
     monkeypatch.setenv("INTERNAL_API_TOKEN", "test-token")
     monkeypatch.setenv("AGENT_PROVIDERS", "fake")
+    monkeypatch.setenv("AGENT_ORCHESTRATOR", request.param)
+    if request.param == "langgraph":
+        from contextlib import contextmanager
+
+        from langgraph.checkpoint.memory import InMemorySaver
+
+        import aiagent.tasks as tasks_mod
+
+        # One saver shared across calls in a test, so a HITL resume finds the
+        # checkpoint left by the paused run (mirrors durable Redis across tasks).
+        saver = InMemorySaver()
+
+        @contextmanager
+        def _mem_checkpointer(_settings):  # type: ignore[no-untyped-def]
+            yield saver
+
+        monkeypatch.setattr(tasks_mod, "_agent_checkpointer", _mem_checkpointer)
 
 
 @respx.mock
