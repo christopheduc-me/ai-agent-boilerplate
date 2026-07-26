@@ -335,9 +335,13 @@ def run_agent_graph(
                 config,
             )
 
-        if _interrupt_question(compiled, config) is not None:
-            question = _interrupt_question(compiled, config)
-            assert clarifier is not None and question is not None
+        # An interrupt (ADR-032 pause) surfaces in the invoke return itself —
+        # the reliable in-process signal. Reading it back from get_state()
+        # instead raced against the Redis checkpoint write and could miss the
+        # pause, delivering the (empty) partial state as a completed job.
+        question = _interrupt_question(outcome)
+        if question is not None:
+            assert clarifier is not None
             clarifier.request_clarification(job_id, question)
             return None
 
@@ -351,15 +355,18 @@ def run_agent_graph(
 
 
 def _has_checkpoint(compiled: Any, config: dict[str, Any]) -> bool:
+    # Resume path only: read a checkpoint written by an earlier, fully finished
+    # task (the paused run) — safely flushed, unlike a same-invoke read-back.
     return compiled.get_state(config).created_at is not None
 
 
-def _interrupt_question(compiled: Any, config: dict[str, Any]) -> str | None:
-    """The pending clarification question if the graph paused, else None."""
-    snapshot = compiled.get_state(config)
-    for task in snapshot.tasks:
-        for intr in task.interrupts:
-            return str(intr.value)
+def _interrupt_question(outcome: Any) -> str | None:
+    """The pending clarification question if the graph paused, from the invoke
+    return value (`__interrupt__`), else None."""
+    if isinstance(outcome, dict):
+        interrupts = outcome.get("__interrupt__")
+        if interrupts:
+            return str(interrupts[0].value)
     return None
 
 
