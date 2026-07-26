@@ -1,0 +1,52 @@
+@startuml langgraph-agent-graph
+' The LangGraph StateGraph for the agent mode (ADR-046), the default
+' orchestrator. Nodes call the same domain ports as the hand-rolled loop
+' (ADR-030) — policy, search provider, critic, step reporter — so the domain
+' stays framework-free. State is checkpointed to Redis (keyed by job_id) at
+' every super-step, so an interrupt() pause resumes mid-graph instead of
+' re-running the searches already done.
+
+hide empty description
+
+state decide : policy.decide(goal, journal, hits)\nthe LLM picks the next action
+state search : provider.search(query)\ndedup by canonical URL, keep new hits\njournal «search» (query, reason, new_hits)
+state ask : interrupt(question)\npause for the user (HITL, ADR-032)
+state finalize : journal «finish» (reason)
+state critique : critic.critique(goal, hits) — ADR-031\ndrop off-topic, one repair search if budget left\njournal «critique» (assessment)
+
+[*] --> decide : invoke({goal})\n**or** Command(resume=answer)
+
+decide --> search : action = search
+decide --> ask : action = ask\n(goal ambiguous, no clarification yet\nAND a clarifier is wired)
+decide --> finalize : action = finish\n**or** step budget spent (cost guard)
+
+search --> decide : back to the policy\nwith the growing transcript
+ask --> decide : on resume: answer folded into the goal,\nasked = true (one question per job)
+
+finalize --> critique
+critique --> [*]
+
+note right of ask
+  **interrupt() = the pause.** The worker sees the
+  interrupt, fires POST /internal/jobs/{id}/question
+  once (job -> awaiting_input) and the task ends.
+  The user's answer re-dispatches a task that resumes
+  **this** graph from its Redis checkpoint — the
+  searches done before the pause are not redone.
+end note
+
+note bottom of decide
+  **Durable checkpoint** after every super-step:
+  Redis, keyed by job_id (ADR-046). The checkpointed
+  state holds JSON primitives only (hits/steps as
+  dicts) — no pickling of domain dataclasses.
+end note
+
+note bottom of critique
+  After END the worker runs the **shared tail** (as in
+  the workflow mode): batched enrichment (ADR-042),
+  sort by date, flag the recurring delta (ADR-033),
+  then deliver — POST /internal/jobs/{id}/results.
+end note
+
+@enduml

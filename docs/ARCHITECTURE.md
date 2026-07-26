@@ -1294,7 +1294,8 @@ reference.
 the **same domain ports** — so `domain/` and `application/` stay framework-free
 and adopting LangGraph is exactly the "swap an adapter, not a rewrite" the
 hexagonal split promised. Parity with the loop is asserted test-for-test
-(dedup, budget, journal, critique + repair, recurring delta, ask-guard).
+(dedup, budget, journal, critique + repair, recurring delta, ask-guard). The
+graph topology is diagrammed in `docs/diagrams/langgraph-agent-graph.puml`.
 
 Two capabilities the graph adds:
 - **Durable checkpointing** — the graph state is persisted at every super-step

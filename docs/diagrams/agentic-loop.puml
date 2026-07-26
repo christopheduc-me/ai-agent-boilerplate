@@ -1,4 +1,8 @@
 @startuml agentic-loop
+' The decision flow of the agent mode. It applies to BOTH orchestrators
+' (ADR-046): the literal shape of the hand-rolled loop (AGENT_ORCHESTRATOR=loop)
+' and the logic the LangGraph StateGraph reproduces node-for-node. For the
+' graph's topology see langgraph-agent-graph.puml.
 ' The agentic research loop (ADR-030) with self-critique (ADR-031) and
 ' human-in-the-loop clarification (ADR-032). The LLM policy drives the control
 ' flow; the loop only enforces the mechanics: URL deduplication, the step

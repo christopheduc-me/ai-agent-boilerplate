@@ -93,7 +93,14 @@ that a fork breaks first when it doesn't know them):
 
 **Source**: [agentic-loop.puml](agentic-loop.puml) · **ADRs**: 030, 031, 032
 
-What actually happens inside `run_agent_research`, the boilerplate's flagship
+The **decision flow** of the agent mode — the queries, the ask, the finish, the
+self-critique. It applies to **both orchestrators** (ADR-046): it is the
+literal shape of the hand-rolled loop (`AGENT_ORCHESTRATOR=loop`) and the
+decision logic the LangGraph `StateGraph` reproduces node-for-node. For the
+graph's own topology (nodes, edges, checkpoint, interrupt), see the next
+diagram.
+
+What actually happens inside the loop, the boilerplate's flagship
 feature, in one visual instead of three ADRs:
 
 - the **LLM policy drives the control flow** (search / ask / finish); the loop
@@ -109,6 +116,30 @@ feature, in one visual instead of three ADRs:
   have in common.
 
 ![Agentic loop](agentic-loop.svg)
+
+---
+
+## The agent's LangGraph execution graph — StateGraph (default orchestrator)
+
+**Source**: [langgraph-agent-graph.puml](langgraph-agent-graph.puml) · **ADRs**: 046 (031, 032, 033, 042)
+
+The **topology** of the default agent orchestrator (ADR-046): the LangGraph
+`StateGraph` whose nodes call the same domain ports as the loop above. Where
+the activity diagram shows *what the agent decides*, this shows *how the graph
+is wired* — and the two things a graph buys over the plain loop:
+
+- the nodes (`decide` → `search` / `ask` / `finalize` → `critique`) and the
+  conditional edges the policy's action selects, with the budget-bounded
+  `search → decide` cycle;
+- **`interrupt()` as the HITL pause** (ADR-032): the worker fires the
+  `question` callback once and ends; the answer resumes **this** graph from its
+  checkpoint, so the searches done before the pause are not redone;
+- the **durable Redis checkpoint** (keyed by `job_id`) taken at every
+  super-step, holding JSON primitives only;
+- the **shared tail** after `END` (batched enrich → sort → deliver) common with
+  the workflow mode.
+
+![LangGraph agent StateGraph](langgraph-agent-graph.svg)
 
 ---
 
