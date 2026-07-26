@@ -1310,7 +1310,13 @@ Two capabilities the graph adds:
   `question` callback once (job → `awaiting_input`) and ends; the user's answer
   re-dispatches a task that **resumes the graph from its checkpoint**, so the
   searches done before the pause are not redone — the win over the loop's
-  re-dispatch-from-scratch.
+  re-dispatch-from-scratch. The pause is detected from the **`invoke()` return
+  value** (`__interrupt__`), never from a post-`invoke` `get_state()`: that
+  read-back races the Redis checkpoint write and can miss the interrupt,
+  silently delivering the empty partial state as a completed job (a
+  non-deterministic bug that passed locally and failed in CI, 2026-07-26).
+  Reading control signals from the checkpoint store right after writing it is
+  the trap; the in-process invoke result is the source of truth.
 
 Design constraints honored: the checkpointed state holds **only JSON-friendly
 primitives** (hits/steps as dicts), converted to/from domain types at the node
