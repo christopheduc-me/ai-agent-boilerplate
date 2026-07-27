@@ -1428,3 +1428,12 @@ also enforces the per-user daily quota — ADR-017).
 - Multiple search providers with aggregation/deduplication.
 - An e-mail `DigestSender` adapter (SMTP/SES) behind the ADR-036 port, for
   forks that prefer inboxes over webhooks.
+- **Anthropic prompt caching — measured and deferred (2026-07-26).** The stable
+  prefix of each live LLM call (the structured-output tool schema + the prompt
+  instructions) is 733–928 tokens on `claude-opus-4-8` — below its 1024-token
+  cache minimum, so a `cache_control` breakpoint would silently no-op
+  (`cache_creation_input_tokens: 0`). Measured with `count_tokens`; the tool
+  schema (ADR-043) is the bulk (~630–763 tokens), the instructions ~100–180.
+  The prefix clears the **512-token** minimum on Opus 5, and the batched
+  enrichment (ADR-042) reuses one prefix across a run — so revisit this if the
+  default model moves to Opus 5 (or a lower cache minimum ships).
