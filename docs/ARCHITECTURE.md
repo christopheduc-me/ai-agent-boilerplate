@@ -720,6 +720,27 @@ HIGH/CRITICAL CVEs with **trivy** (`--ignore-unfixed`: only actionable
 findings) — the cargo/pip/npm audits cover application dependencies, trivy
 covers the **base images** (debian-slim, python-slim, nginx-alpine).
 
+**npm audit resolution (added 2026-07-27)**: unlike `cargo audit`, `npm audit`
+has no lockfile-external ignore file, so the policy here is **fix, never
+silence** — the gate stays `npm audit --audit-level=high` with no allowlist.
+Two high advisories (a `brace-expansion` ReDoS/OOM DoS reachable through the
+lint/test toolchain, and a `postcss` build-time path-traversal) were cleared by
+upgrading the frontend dev toolchain to current majors: **eslint 9 → 10**
+(with `eslint-plugin-vue` 9 → 10), **vitest + @vitest/coverage-v8 3 → 4**, and
+**vue-tsc 2 → 3** (Volar 3). No production dependency and no shipped bundle code
+was affected — every advisory sat in build/lint/test tooling — and `vite`
+stayed on 6 (all three upgrades accept it). The one pin that survives is
+`package.json` → `overrides: { "brace-expansion": "5.0.8" }`: the OOM advisory's
+vulnerable range is the **continuous** `<=5.0.7`, so *every* published version
+except `5.0.8` is affected (the per-major "latests" 1.1.16 / 2.1.2 are still
+inside the range). brace-expansion is a single stable `expand()` function across
+all majors, so forcing one version on every consumer (minimatch → glob →
+js-beautify → `@vue/test-utils`) is safe; `npm ls brace-expansion` shows a
+single 5.0.8. `package.json` cannot carry a comment — this note is that pin's
+written justification, and its revisit condition is: drop the override once
+`@vue/test-utils` (via `js-beautify`) ships a tree that no longer resolves
+brace-expansion `<5.0.8`.
+
 ### ADR-022 amendment — local pre-commit hooks (added 2026-07-10)
 
 **lefthook** (single multi-platform Go binary) provides opt-in pre-commit
