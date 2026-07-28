@@ -1299,6 +1299,22 @@ providers, so like the live tests it is invoked by hand, never in CI. Forks
 extend the three case lists (`ENRICHMENT_CASES`, `POLICY_CASES`,
 `CRITIC_CASES`) with cases from their own domain.
 
+**Amendment — pre-release gate (added 2026-07-27)**: the harness is the
+regression net for the part of the system unit tests are blind to. Tests run
+against port fakes (ADR-012), so they never touch the real prompts or model; a
+prompt edit, a model bump, or a LangChain/LangGraph upgrade can stay CI-green
+while the agent's output quality drops. The `--fail-under PCT` flag makes the
+live run a **gate**: it prints the table and exits non-zero if any model's
+overall score falls under the floor (the pure `failures_below` helper is
+unit-tested; the flag validates its 0..1 range before any provider is built).
+The deliberate split — the harness's fake-backed scoring/runner already run in
+CI via `test_evaluation.py`, but the live gate stays **local, invoked by hand
+before a release** — keeps Anthropic keys out of the repo's CI entirely
+(GitHub withholds secrets from fork PRs anyway, and a scheduled live run would
+spend real budget). Forks that want automation can add a `workflow_dispatch`
+job wiring `--fail-under` to their own repo secret; the boilerplate ships only
+the local ritual (see COMMANDS.md).
+
 ### ADR-046 — LangGraph as the default agent orchestrator (decided 2026-07-25, revisits ADR-030)
 
 **Context**: the agent mode ran on a hand-rolled loop (ADR-030) — pure,

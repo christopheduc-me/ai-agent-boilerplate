@@ -403,6 +403,25 @@ def format_table(rows: list[tuple[str, Report, float]]) -> str:
     return "\n".join(lines)
 
 
+def failures_below(rows: list[tuple[str, Report, float]], threshold: float) -> list[str]:
+    """Model specs whose overall score is under `threshold` (0..1), each with a
+    human-readable reason (the per-capability breakdown, so a single collapsed
+    capability is visible). An empty list means every model cleared the bar —
+    this is what the `--fail-under` pre-release gate keys its exit code on."""
+    messages: list[str] = []
+    for label, report, _cost in rows:
+        overall = report.overall()
+        if overall < threshold:
+            caps = " ".join(
+                f"{c}={_fmt_pct(report.capability_score(c)).strip()}"
+                for c in ("enrichment", "policy", "critic")
+            )
+            messages.append(
+                f"{label}: overall {overall * 100:.0f}% < {threshold * 100:.0f}% ({caps})"
+            )
+    return messages
+
+
 def main(argv: list[str] | None = None) -> None:
     parser = argparse.ArgumentParser(
         prog="python -m aiagent.evaluation",
@@ -417,7 +436,18 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--verbose", "-v", action="store_true", help="print every case's score and detail"
     )
+    parser.add_argument(
+        "--fail-under",
+        type=float,
+        default=None,
+        metavar="PCT",
+        help="exit non-zero if any model's overall score is below PCT (0..1) — the "
+        "pre-release quality gate; run it by hand with a real backend before shipping "
+        "a prompt or model change (deliberately not in CI: no API keys there, ADR-045)",
+    )
     args = parser.parse_args(argv)
+    if args.fail_under is not None and not 0.0 <= args.fail_under <= 1.0:
+        raise SystemExit(f"--fail-under expects a fraction in 0..1, got {args.fail_under}")
 
     base = Settings.from_env()
     specs = args.models or [f"{base.llm_backend}:{base.agent_model_id}"]
@@ -433,6 +463,14 @@ def main(argv: list[str] | None = None) -> None:
 
     print()
     print(format_table(rows))
+
+    if args.fail_under is not None:
+        failures = failures_below(rows, args.fail_under)
+        if failures:
+            print()
+            for message in failures:
+                print(f"FAIL {message}")
+            raise SystemExit(1)
 
 
 if __name__ == "__main__":

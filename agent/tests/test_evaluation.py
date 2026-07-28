@@ -213,3 +213,30 @@ def test_format_table_lists_every_model_and_the_headers() -> None:
     table = format_table([("ollama:gemma4:latest", report, 0.0)])
     assert "MODEL" in table and "overall" in table
     assert "ollama:gemma4:latest" in table
+
+
+# ---------------------------------------------------------------- gate
+
+
+def _report_scoring(overall_pairs: list[tuple[str, float]]) -> Report:
+    from aiagent.evaluation import CaseResult
+
+    return Report(results=[CaseResult(cap, cap, score, 0.0, "") for cap, score in overall_pairs])
+
+
+def test_failures_below_returns_models_under_the_bar() -> None:
+    from aiagent.evaluation import failures_below
+
+    passing = ("anthropic:good", _report_scoring([("enrichment", 1.0), ("policy", 1.0)]), 0.0)
+    failing = ("ollama:weak", _report_scoring([("enrichment", 0.4), ("policy", 0.6)]), 0.0)
+    msgs = failures_below([passing, failing], 0.8)
+    assert len(msgs) == 1
+    assert "ollama:weak" in msgs[0]
+    assert "50%" in msgs[0]  # overall (0.4 + 0.6) / 2
+
+
+def test_failures_below_is_empty_when_every_model_clears_the_bar() -> None:
+    from aiagent.evaluation import failures_below
+
+    rows = [("anthropic:good", _report_scoring([("enrichment", 0.9), ("policy", 1.0)]), 0.0)]
+    assert failures_below(rows, 0.8) == []

@@ -217,12 +217,23 @@ uv run python -m aiagent.evaluation \
 uv run python -m aiagent.evaluation
 # -v prints every case's score and detail
 uv run python -m aiagent.evaluation -v ollama:gemma4:latest
+# Pre-release quality gate: exit non-zero if overall drops below a floor
+uv run python -m aiagent.evaluation --fail-under 0.8 anthropic:claude-opus-4-8
 ```
 
 The table shows per-capability scores (enrichment / policy / critic),
 overall, total latency and indicative cost (0 for local). It is a directional
 signal, not a benchmark — extend the golden cases in `aiagent/evaluation.py`
 for your own domain.
+
+**Pre-release ritual (the regression net for the non-deterministic part).**
+Unit tests use port fakes (ADR-012), so they never exercise the real prompts or
+model — a prompt edit, a model bump, or a LangChain/LangGraph upgrade can pass
+CI green and still degrade the agent. Before shipping such a change, run the
+harness live with `--fail-under`: it prints the table and exits non-zero if any
+model's overall score is under the floor, turning "eyeball the numbers" into a
+clear PASS/FAIL. It stays **local, not CI** — keeping API keys out of the
+repo's CI is the deliberate trade-off (ADR-045).
 
 ### Browser tests (Playwright — ADR-028)
 
