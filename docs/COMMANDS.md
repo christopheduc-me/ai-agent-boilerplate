@@ -39,6 +39,7 @@ Entry points once up:
 |---|---|
 | Frontend (nginx) | http://localhost:8080 |
 | Rust backend API | http://localhost:8000 (healthz: `/healthz`) |
+| API docs (Swagger UI) | http://localhost:8000/api/docs (raw spec: `/api/openapi.json`) — ADR-049 |
 | Agent FastAPI | http://localhost:8001 (healthz: `/healthz`) |
 | PostgreSQL | localhost:5433 (`app`/`app`, db `aiagent`) |
 | Redis | localhost:6379 |
@@ -137,6 +138,10 @@ cargo test --test http_api                  # the HTTP integration test file
 cargo test full_search_lifecycle            # a single test by name
 cargo test domain::                         # all domain tests
 cargo test -- --nocapture                   # show stdout/tracing while testing
+
+# OpenAPI docs (ADR-049): browsable at /api/docs. Regenerate the committed spec
+# after changing a public endpoint or DTO (a drift test enforces it):
+cargo run --example openapi > ../docs/openapi.json
 ```
 
 ### Agent (Python)

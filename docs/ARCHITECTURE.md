@@ -1485,11 +1485,29 @@ This is the discipline the monorepo's atomic-source guarantee does *not* give
 you at the deploy layer.
 
 **Cost**: one dependency (`zod`, ~18 kB gzip in the bundle) — the price of real
-runtime validation on the one side that had none. A generated OpenAPI client
-(utoipa → `openapi-typescript`) was considered and deferred: it earns its
-keep when the bricks split into **separate repos** (a published, versioned
-schema is then the decoupling artifact), which is out of scope while the
-boilerplate stays a monorepo. Noted in §5.
+runtime validation on the one side that had none.
+
+**Amendment — OpenAPI documentation (added 2026-07-29)**: the public API now
+also carries a machine-generated **OpenAPI 3.1 spec** (`utoipa`), served as
+interactive **Swagger UI at `/api/docs`** and raw JSON at `/api/openapi.json`
+(assets vendored — self-hosted, no CDN). This is **documentation, not a second
+source of truth**: the contract stays pinned by the fixtures + zod above; the
+spec is derived from the same handlers and DTOs, and a committed
+`docs/openapi.json` is drift-checked in CI (`backend/tests/openapi.rs`,
+regenerated via `cargo run --example openapi`). One deliberate architectural
+note: `utoipa::ToSchema` is derived on a few **domain** wire types
+(`SearchResult`, `JobUsage`, `AgentStep`, the enums) alongside the `serde`
+derives already there. This does **not** breach the domain-purity rule
+(ADR-002/004): `utoipa` core is a representation-level derive with **no I/O** —
+same category as `serde` — and the framework pieces (Swagger UI, the `OpenApi`
+assembly, the routes) live entirely in the HTTP adapter. Deriving it in the
+adapter instead would mean a hand-kept duplicate of every wire shape — exactly
+the drift this ADR removes.
+
+A **generated TS/Python client** from that spec (via `openapi-typescript` /
+`datamodel-code-generator`) remains deferred (§5): it earns its keep only when
+the bricks split into **separate repos**, where a published, versioned schema
+becomes the decoupling artifact. Now that the spec exists, that step is cheap.
 
 ---
 
@@ -1549,13 +1567,14 @@ also enforces the per-user daily quota — ADR-017).
 - Multiple search providers with aggregation/deduplication.
 - An e-mail `DigestSender` adapter (SMTP/SES) behind the ADR-036 port, for
   forks that prefer inboxes over webhooks.
-- **Generated API client from an OpenAPI schema (utoipa → `openapi-typescript`).**
-  Today the contract is pinned by fixtures asserted on all three sides (ADR-049)
-  — proportionate while the boilerplate is a **monorepo** (one CI validates
-  every side atomically). If a fork splits the bricks into **separate repos**,
-  promote the schema to the source of truth: annotate the axum handlers with
-  `utoipa`, publish a versioned `openapi.json` as the release artifact, and
-  generate the TS client (and Python models) from it — the published schema is
+- **Generated API client from the OpenAPI schema.** The `openapi.json` already
+  exists (ADR-049 amendment: `utoipa`, served at `/api/docs`) but is used only
+  as **documentation** — the contract is pinned by fixtures + zod, proportionate
+  while the boilerplate is a **monorepo** (one CI validates every side
+  atomically). If a fork splits the bricks into **separate repos**, promote the
+  schema to the source of truth: publish a versioned `openapi.json` as the
+  release artifact and **generate** the TS client (and Python models) from it
+  (`openapi-typescript` / `datamodel-code-generator`) — the published schema is
   then the inter-repo decoupling mechanism the co-located fixtures can no longer
   be. Independent *deployment* is already supported (ADR-006); this is only
   needed for independent *repositories/teams*.

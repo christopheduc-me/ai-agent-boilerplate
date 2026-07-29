@@ -1,0 +1,888 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "AI agent boilerplate — public API",
+    "description": "The browser-facing API (auth, searches, recurring searches). Contract pinned by fixtures + zod (ADR-049).",
+    "license": {
+      "name": "MIT"
+    },
+    "version": "0.1.0"
+  },
+  "paths": {
+    "/api/auth/login": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "login",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Access token in body; refresh token set as an HttpOnly cookie (ADR-008)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Invalid email or password",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/logout": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Revokes the refresh token and clears the cookie. Always succeeds (idempotent).",
+        "operationId": "logout",
+        "responses": {
+          "204": {
+            "description": "Refresh token revoked, cookie cleared"
+          }
+        }
+      }
+    },
+    "/api/auth/refresh": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Rotates the refresh cookie and returns a fresh access token (ADR-008).",
+        "operationId": "refresh",
+        "responses": {
+          "200": {
+            "description": "Rotated refresh cookie, new access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccessTokenResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid refresh cookie",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/register": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "operationId": "register",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CredentialsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Account created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Email already registered",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid credentials",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/recurring": {
+      "get": {
+        "tags": [
+          "recurring"
+        ],
+        "operationId": "list_recurring",
+        "responses": {
+          "200": {
+            "description": "The user's recurring searches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RecurringView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "recurring"
+        ],
+        "operationId": "create_recurring",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateRecurringRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Recurring search created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecurringView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Invalid keyword or interval",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many recurring searches",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/recurring/{id}": {
+      "delete": {
+        "tags": [
+          "recurring"
+        ],
+        "operationId": "delete_recurring",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Recurring search id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/searches": {
+      "get": {
+        "tags": [
+          "searches"
+        ],
+        "operationId": "list_searches",
+        "responses": {
+          "200": {
+            "description": "The user's searches, newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/JobView"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      },
+      "post": {
+        "tags": [
+          "searches"
+        ],
+        "operationId": "create_search",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSearchRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Search launched",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobCreatedResponse"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Empty keyword",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Daily quota exceeded (ADR-017)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/searches/{id}": {
+      "get": {
+        "tags": [
+          "searches"
+        ],
+        "operationId": "get_search",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job detail: fields, results and the agent journal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobDetailView"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    },
+    "/api/searches/{id}/answer": {
+      "post": {
+        "tags": [
+          "searches"
+        ],
+        "summary": "The user answers the agent's clarification question (ADR-032).",
+        "operationId": "answer_search",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Job id",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnswerRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "204": {
+            "description": "Answer stored; the job resumes (ADR-032)"
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Job is not awaiting input",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        },
+        "security": [
+          {
+            "bearer": []
+          }
+        ]
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "AccessTokenResponse": {
+        "type": "object",
+        "description": "`{ \"access_token\": \"…\" }` — the short-lived bearer; the refresh token is set\nas an HttpOnly cookie (ADR-008), not in the body.",
+        "required": [
+          "access_token"
+        ],
+        "properties": {
+          "access_token": {
+            "type": "string"
+          }
+        }
+      },
+      "AccountResponse": {
+        "type": "object",
+        "description": "`{ \"id\": \"…\", \"email\": \"…\" }` — a created account.",
+        "required": [
+          "id",
+          "email"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AgentStep": {
+        "type": "object",
+        "description": "One decision of the agentic loop (ADR-030), recorded for the live journal.\n`kind` stays an open string (\"search\" / \"finish\" today) so newer agents can\nintroduce step kinds without breaking older backends.",
+        "required": [
+          "seq",
+          "kind",
+          "detail",
+          "reason"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "new_hits": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "seq": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "AnswerRequest": {
+        "type": "object",
+        "required": [
+          "answer"
+        ],
+        "properties": {
+          "answer": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateRecurringRequest": {
+        "type": "object",
+        "required": [
+          "keyword",
+          "interval_minutes"
+        ],
+        "properties": {
+          "interval_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/JobMode"
+          },
+          "webhook_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Digest target (ADR-036): notified when a run finds new results."
+          }
+        }
+      },
+      "CreateSearchRequest": {
+        "type": "object",
+        "required": [
+          "keyword"
+        ],
+        "properties": {
+          "keyword": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/JobMode"
+          }
+        }
+      },
+      "CredentialsRequest": {
+        "type": "object",
+        "required": [
+          "email",
+          "password"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "DateConfidence": {
+        "type": "string",
+        "enum": [
+          "high",
+          "medium",
+          "unknown"
+        ]
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "description": "`{ \"error\": \"…\" }` — the uniform error body (ADR-018).",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "EventType": {
+        "type": "string",
+        "description": "Coarse classification of what a result reports, shown as a badge on the\nfrontend timeline (ADR-027).",
+        "enum": [
+          "announcement",
+          "release",
+          "funding",
+          "legal",
+          "incident",
+          "research",
+          "opinion",
+          "other"
+        ]
+      },
+      "JobCreatedResponse": {
+        "type": "object",
+        "description": "`{ \"job_id\": \"…\" }` — a launched search.",
+        "required": [
+          "job_id"
+        ],
+        "properties": {
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "JobDetailView": {
+        "allOf": [
+          {
+            "$ref": "#/components/schemas/JobView"
+          },
+          {
+            "type": "object",
+            "required": [
+              "results",
+              "steps"
+            ],
+            "properties": {
+              "results": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/SearchResult"
+                }
+              },
+              "steps": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AgentStep"
+                }
+              }
+            }
+          }
+        ],
+        "description": "Full job detail: the job fields, its results, and the agent journal (ADR-030,\nempty in workflow mode). `#[serde(flatten)]` keeps the job fields at the top\nlevel, so the wire shape is identical to serving `JobView` plus the two\narrays — pinned by the contract fixture (ADR-049)."
+      },
+      "JobMode": {
+        "type": "string",
+        "description": "How the research runs (ADR-030): the fixed pipeline, or the agentic loop\nwhere the LLM policy decides the queries and when to stop. The default\nkeeps pre-ADR-030 clients and payloads working unchanged.",
+        "enum": [
+          "workflow",
+          "agent"
+        ]
+      },
+      "JobStatus": {
+        "type": "string",
+        "enum": [
+          "pending",
+          "running",
+          "awaiting_input",
+          "completed",
+          "failed"
+        ]
+      },
+      "JobUsage": {
+        "type": "object",
+        "description": "Per-run API spend (ADR-038). Accumulates across task attempts and HITL\nresumes — each attempt spends real provider credits.",
+        "required": [
+          "llm_calls",
+          "llm_input_tokens",
+          "llm_output_tokens",
+          "search_calls",
+          "cost_usd"
+        ],
+        "properties": {
+          "cost_usd": {
+            "type": "number",
+            "format": "double"
+          },
+          "llm_calls": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "llm_input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "llm_output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "search_calls": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "JobView": {
+        "type": "object",
+        "required": [
+          "id",
+          "keyword",
+          "mode",
+          "status",
+          "usage",
+          "created_at"
+        ],
+        "properties": {
+          "answer": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/JobMode"
+          },
+          "question": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "recurring_search_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "$ref": "#/components/schemas/JobStatus"
+          },
+          "usage": {
+            "$ref": "#/components/schemas/JobUsage"
+          }
+        }
+      },
+      "RecurringView": {
+        "type": "object",
+        "required": [
+          "id",
+          "keyword",
+          "mode",
+          "interval_minutes",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "interval_minutes": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "keyword": {
+            "type": "string"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "mode": {
+            "$ref": "#/components/schemas/JobMode"
+          },
+          "webhook_url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "SearchResult": {
+        "type": "object",
+        "required": [
+          "title",
+          "url",
+          "snippet",
+          "date_confidence"
+        ],
+        "properties": {
+          "date_confidence": {
+            "$ref": "#/components/schemas/DateConfidence"
+          },
+          "event_type": {
+            "$ref": "#/components/schemas/EventType"
+          },
+          "is_new": {
+            "type": "boolean",
+            "description": "False when a recurring run already saw this URL (ADR-033); one-shot\nsearches leave every result new. Default keeps older payloads working."
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "raw": {},
+          "snippet": {
+            "type": "string"
+          },
+          "summary": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "securitySchemes": {
+      "bearer": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    }
+  },
+  "tags": [
+    {
+      "name": "auth",
+      "description": "Registration, login, session refresh (ADR-008)"
+    },
+    {
+      "name": "searches",
+      "description": "Launch and read searches (ADR-030/032)"
+    },
+    {
+      "name": "recurring",
+      "description": "Scheduled recurring searches (ADR-033)"
+    }
+  ]
+}

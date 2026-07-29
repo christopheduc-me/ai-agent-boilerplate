@@ -28,6 +28,12 @@ tracing-opentelemetry = "0.33.0"
 opentelemetry-otlp = { version = "0.32.0", default-features = false, features = ["http-proto", "reqwest-blocking-client", "trace"] }
 redis = { version = "1.4.0", default-features = false, features = ["tokio-comp", "connection-manager"] }
 hmac = "0.13.0"
+# OpenAPI documentation (ADR-049 amendment). `utoipa` is a representation-level
+# derive (like serde, no I/O) so it may annotate domain wire types; the Swagger
+# UI is an adapter concern. `vendored` bundles the UI assets — no build-time
+# network fetch, self-hosted at /api/docs.
+utoipa = { version = "5", features = ["chrono", "uuid"] }
+utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }

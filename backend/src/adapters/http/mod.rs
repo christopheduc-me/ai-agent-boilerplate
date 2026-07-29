@@ -16,6 +16,8 @@ use axum::{Json, Router};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use utoipa::{OpenApi, ToSchema};
+use utoipa_swagger_ui::SwaggerUi;
 use uuid::Uuid;
 
 use crate::application::answer_clarification::AnswerError;
@@ -34,7 +36,8 @@ use crate::domain::ports::{
     RefreshTokenRepository, TokenService, UserRepository,
 };
 use crate::domain::{
-    AgentStep, JobMode, JobStatus, JobUsage, RecurringSearch, ResearchJob, SearchResult,
+    AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
+    ResearchJob, SearchResult,
 };
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
@@ -122,6 +125,114 @@ impl AppState {
     }
 }
 
+// ---------------------------------------------------------------- OpenAPI (ADR-049 amendment)
+
+/// `{ "job_id": "…" }` — a launched search.
+#[derive(Serialize, ToSchema)]
+#[allow(dead_code)]
+struct JobCreatedResponse {
+    job_id: Uuid,
+}
+
+/// `{ "access_token": "…" }` — the short-lived bearer; the refresh token is set
+/// as an HttpOnly cookie (ADR-008), not in the body.
+#[derive(Serialize, ToSchema)]
+#[allow(dead_code)]
+struct AccessTokenResponse {
+    access_token: String,
+}
+
+/// `{ "id": "…", "email": "…" }` — a created account.
+#[derive(Serialize, ToSchema)]
+#[allow(dead_code)]
+struct AccountResponse {
+    id: Uuid,
+    email: String,
+}
+
+/// `{ "error": "…" }` — the uniform error body (ADR-018).
+#[derive(Serialize, ToSchema)]
+#[allow(dead_code)]
+struct ErrorResponse {
+    error: String,
+}
+
+/// Declares the `bearer` (JWT) auth scheme referenced by the protected paths.
+struct SecurityAddon;
+
+impl utoipa::Modify for SecurityAddon {
+    fn modify(&self, openapi: &mut utoipa::openapi::OpenApi) {
+        use utoipa::openapi::security::{HttpAuthScheme, HttpBuilder, SecurityScheme};
+        if let Some(components) = openapi.components.as_mut() {
+            components.add_security_scheme(
+                "bearer",
+                SecurityScheme::Http(
+                    HttpBuilder::new()
+                        .scheme(HttpAuthScheme::Bearer)
+                        .bearer_format("JWT")
+                        .build(),
+                ),
+            );
+        }
+    }
+}
+
+/// The public HTTP API (ADR-049 amendment). This documents only the public
+/// surface (Vue → Rust); the `/internal/*` worker callbacks (ADR-006) are pinned
+/// by the contract fixtures instead. The contract's source of truth stays the
+/// zod schemas + fixtures (ADR-049) — this is browsable documentation, served
+/// self-hosted at `/api/docs`, with the raw spec at `/api/openapi.json`.
+#[derive(OpenApi)]
+#[openapi(
+    modifiers(&SecurityAddon),
+    info(
+        title = "AI agent boilerplate — public API",
+        description = "The browser-facing API (auth, searches, recurring searches). \
+                       Contract pinned by fixtures + zod (ADR-049).",
+        version = env!("CARGO_PKG_VERSION"),
+        license(name = "MIT"),
+    ),
+    paths(
+        register,
+        login,
+        refresh,
+        logout,
+        create_search,
+        list_searches,
+        get_search,
+        answer_search,
+        create_recurring,
+        list_recurring,
+        delete_recurring,
+    ),
+    components(schemas(
+        CredentialsRequest,
+        CreateSearchRequest,
+        CreateRecurringRequest,
+        AnswerRequest,
+        JobView,
+        JobDetailView,
+        RecurringView,
+        JobCreatedResponse,
+        AccessTokenResponse,
+        AccountResponse,
+        ErrorResponse,
+        SearchResult,
+        AgentStep,
+        JobUsage,
+        JobStatus,
+        JobMode,
+        EventType,
+        DateConfidence,
+    )),
+    tags(
+        (name = "auth", description = "Registration, login, session refresh (ADR-008)"),
+        (name = "searches", description = "Launch and read searches (ADR-030/032)"),
+        (name = "recurring", description = "Scheduled recurring searches (ADR-033)"),
+    ),
+)]
+pub struct ApiDoc;
+
 pub fn router(state: AppState) -> Router {
     router_with_limits(state, RateLimitConfig::default())
 }
@@ -158,6 +269,9 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
 
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
+        // Interactive API docs (ADR-049 amendment): Swagger UI at /api/docs,
+        // raw spec at /api/openapi.json. Assets are vendored (self-hosted).
+        .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
         .merge(auth_routes)
         .merge(api_routes)
         .route("/internal/jobs/{id}/started", post(internal_started))
@@ -252,13 +366,13 @@ fn check_internal_token(state: &AppState, headers: &HeaderMap) -> Option<Respons
 
 // ---------------------------------------------------------------- DTOs
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CredentialsRequest {
     email: String,
     password: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateSearchRequest {
     keyword: String,
     // Workflow (fixed pipeline) or agent (decision loop, ADR-030); defaulted
@@ -267,7 +381,7 @@ struct CreateSearchRequest {
     mode: JobMode,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct JobView {
     id: Uuid,
     keyword: String,
@@ -303,7 +417,7 @@ impl From<&ResearchJob> for JobView {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct CreateRecurringRequest {
     keyword: String,
     #[serde(default)]
@@ -314,7 +428,7 @@ struct CreateRecurringRequest {
     webhook_url: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ToSchema)]
 struct RecurringView {
     id: Uuid,
     keyword: String,
@@ -354,13 +468,19 @@ struct QuestionRequest {
     question: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, ToSchema)]
 struct AnswerRequest {
     answer: String,
 }
 
 // ---------------------------------------------------------------- public handlers
 
+#[utoipa::path(post, path = "/api/auth/register", tag = "auth",
+    request_body = CredentialsRequest,
+    responses(
+        (status = 201, description = "Account created", body = AccountResponse),
+        (status = 409, description = "Email already registered", body = ErrorResponse),
+        (status = 422, description = "Invalid credentials", body = ErrorResponse)))]
 async fn register(State(state): State<AppState>, Json(body): Json<CredentialsRequest>) -> Response {
     match state.register.execute(&body.email, &body.password).await {
         Ok(user) => (
@@ -381,6 +501,11 @@ async fn register(State(state): State<AppState>, Json(body): Json<CredentialsReq
     }
 }
 
+#[utoipa::path(post, path = "/api/auth/login", tag = "auth",
+    request_body = CredentialsRequest,
+    responses(
+        (status = 200, description = "Access token in body; refresh token set as an HttpOnly cookie (ADR-008)", body = AccessTokenResponse),
+        (status = 401, description = "Invalid email or password", body = ErrorResponse)))]
 async fn login(State(state): State<AppState>, Json(body): Json<CredentialsRequest>) -> Response {
     match state.login.execute(&body.email, &body.password).await {
         Ok(tokens) => session_response(&state, tokens),
@@ -395,6 +520,10 @@ async fn login(State(state): State<AppState>, Json(body): Json<CredentialsReques
 }
 
 /// Rotates the refresh cookie and returns a fresh access token (ADR-008).
+#[utoipa::path(post, path = "/api/auth/refresh", tag = "auth",
+    responses(
+        (status = 200, description = "Rotated refresh cookie, new access token", body = AccessTokenResponse),
+        (status = 401, description = "Missing or invalid refresh cookie", body = ErrorResponse)))]
 async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let Some(presented) = read_refresh_cookie(&headers) else {
         return error_body(StatusCode::UNAUTHORIZED, "missing refresh token");
@@ -414,6 +543,8 @@ async fn refresh(State(state): State<AppState>, headers: HeaderMap) -> Response 
 }
 
 /// Revokes the refresh token and clears the cookie. Always succeeds (idempotent).
+#[utoipa::path(post, path = "/api/auth/logout", tag = "auth",
+    responses((status = 204, description = "Refresh token revoked, cookie cleared")))]
 async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
     if let Some(presented) = read_refresh_cookie(&headers) {
         if let Err(e) = state.refresh.revoke(&presented).await {
@@ -427,6 +558,13 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .into_response()
 }
 
+#[utoipa::path(post, path = "/api/searches", tag = "searches",
+    security(("bearer" = [])),
+    request_body = CreateSearchRequest,
+    responses(
+        (status = 202, description = "Search launched", body = JobCreatedResponse),
+        (status = 422, description = "Empty keyword", body = ErrorResponse),
+        (status = 429, description = "Daily quota exceeded (ADR-017)", body = ErrorResponse)))]
 async fn create_search(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
@@ -454,6 +592,9 @@ async fn create_search(
     }
 }
 
+#[utoipa::path(get, path = "/api/searches", tag = "searches",
+    security(("bearer" = [])),
+    responses((status = 200, description = "The user's searches, newest first", body = [JobView])))]
 async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
     match state.queries.list(user_id).await {
         Ok(jobs) => Json(jobs.iter().map(JobView::from).collect::<Vec<_>>()).into_response(),
@@ -466,6 +607,13 @@ async fn list_searches(State(state): State<AppState>, AuthUser(user_id): AuthUse
 
 // ---------------------------------------------------------------- recurring searches (ADR-033)
 
+#[utoipa::path(post, path = "/api/recurring", tag = "recurring",
+    security(("bearer" = [])),
+    request_body = CreateRecurringRequest,
+    responses(
+        (status = 201, description = "Recurring search created", body = RecurringView),
+        (status = 422, description = "Invalid keyword or interval", body = ErrorResponse),
+        (status = 429, description = "Too many recurring searches", body = ErrorResponse)))]
 async fn create_recurring(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
@@ -497,6 +645,9 @@ async fn create_recurring(
     }
 }
 
+#[utoipa::path(get, path = "/api/recurring", tag = "recurring",
+    security(("bearer" = [])),
+    responses((status = 200, description = "The user's recurring searches", body = [RecurringView])))]
 async fn list_recurring(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
     match state.recurring.list(user_id).await {
         Ok(searches) => Json(
@@ -513,6 +664,12 @@ async fn list_recurring(State(state): State<AppState>, AuthUser(user_id): AuthUs
     }
 }
 
+#[utoipa::path(delete, path = "/api/recurring/{id}", tag = "recurring",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Recurring search id")),
+    responses(
+        (status = 204, description = "Deleted"),
+        (status = 404, description = "Not found", body = ErrorResponse)))]
 async fn delete_recurring(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
@@ -531,6 +688,14 @@ async fn delete_recurring(
 }
 
 /// The user answers the agent's clarification question (ADR-032).
+#[utoipa::path(post, path = "/api/searches/{id}/answer", tag = "searches",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Job id")),
+    request_body = AnswerRequest,
+    responses(
+        (status = 204, description = "Answer stored; the job resumes (ADR-032)"),
+        (status = 404, description = "Not found", body = ErrorResponse),
+        (status = 409, description = "Job is not awaiting input", body = ErrorResponse)))]
 async fn answer_search(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
@@ -556,6 +721,18 @@ async fn answer_search(
     }
 }
 
+/// Full job detail: the job fields, its results, and the agent journal (ADR-030,
+/// empty in workflow mode). `#[serde(flatten)]` keeps the job fields at the top
+/// level, so the wire shape is identical to serving `JobView` plus the two
+/// arrays — pinned by the contract fixture (ADR-049).
+#[derive(Serialize, ToSchema)]
+struct JobDetailView {
+    #[serde(flatten)]
+    job: JobView,
+    results: Vec<SearchResult>,
+    steps: Vec<AgentStep>,
+}
+
 /// The job detail payload, shared by `GET /api/searches/{id}` and the SSE
 /// stream (ADR-026) so both surfaces always carry the same shape. Public so the
 /// cross-language contract test (ADR-049) can pin its exact wire shape.
@@ -564,11 +741,12 @@ pub fn job_detail_json(
     results: &[SearchResult],
     steps: &[AgentStep],
 ) -> serde_json::Value {
-    let mut body = serde_json::to_value(JobView::from(job)).expect("serializable view");
-    body["results"] = serde_json::to_value(results).expect("serializable results");
-    // The agent journal (ADR-030); always present, empty in workflow mode.
-    body["steps"] = serde_json::to_value(steps).expect("serializable steps");
-    body
+    serde_json::to_value(JobDetailView {
+        job: JobView::from(job),
+        results: results.to_vec(),
+        steps: steps.to_vec(),
+    })
+    .expect("serializable job detail")
 }
 
 /// The recurring-search payload served by `POST`/`GET /api/recurring`. Single
@@ -578,6 +756,12 @@ pub fn recurring_search_json(search: &RecurringSearch) -> serde_json::Value {
     serde_json::to_value(RecurringView::from(search)).expect("serializable recurring view")
 }
 
+#[utoipa::path(get, path = "/api/searches/{id}", tag = "searches",
+    security(("bearer" = [])),
+    params(("id" = Uuid, Path, description = "Job id")),
+    responses(
+        (status = 200, description = "Job detail: fields, results and the agent journal", body = JobDetailView),
+        (status = 404, description = "Not found", body = ErrorResponse)))]
 async fn get_search(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,

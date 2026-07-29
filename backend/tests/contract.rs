@@ -89,6 +89,22 @@ async fn user_with_job(app: &Router) -> (String, String) {
 }
 
 #[tokio::test]
+async fn openapi_spec_is_served() {
+    let app = app();
+    let (status, body) = call(
+        &app,
+        Request::builder()
+            .uri("/api/openapi.json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, 200);
+    assert_eq!(body["openapi"], "3.1.0");
+    assert!(body["paths"]["/api/searches/{id}"]["get"].is_object());
+}
+
+#[tokio::test]
 async fn backend_consumes_the_results_callback_fixture() {
     let app = app();
     let (bearer, job_id) = user_with_job(&app).await;

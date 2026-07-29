@@ -1,8 +1,9 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
+use utoipa::ToSchema;
 use uuid::Uuid;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum JobStatus {
     Pending,
@@ -19,7 +20,7 @@ pub enum JobStatus {
 /// How the research runs (ADR-030): the fixed pipeline, or the agentic loop
 /// where the LLM policy decides the queries and when to stop. The default
 /// keeps pre-ADR-030 clients and payloads working unchanged.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default, ToSchema)]
 #[serde(rename_all = "lowercase")]
 pub enum JobMode {
     #[default]
@@ -30,7 +31,7 @@ pub enum JobMode {
 /// One decision of the agentic loop (ADR-030), recorded for the live journal.
 /// `kind` stays an open string ("search" / "finish" today) so newer agents can
 /// introduce step kinds without breaking older backends.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, ToSchema)]
 pub struct AgentStep {
     pub seq: i32,
     pub kind: String,
@@ -42,7 +43,7 @@ pub struct AgentStep {
 
 /// Per-run API spend (ADR-038). Accumulates across task attempts and HITL
 /// resumes — each attempt spends real provider credits.
-#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize, ToSchema)]
 pub struct JobUsage {
     pub llm_calls: i32,
     pub llm_input_tokens: i64,
