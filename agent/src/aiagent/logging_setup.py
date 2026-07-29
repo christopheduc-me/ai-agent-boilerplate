@@ -4,6 +4,9 @@
 object per line, carrying any `extra={...}` fields — notably `request_id` and
 `job_id`, the correlation keys propagated from the Rust backend. Anything else
 keeps the human-readable default.
+
+When OpenTelemetry is enabled (ADR-029), each line also carries the active
+`trace_id`/`span_id`, so a log line links to its Jaeger trace and back.
 """
 
 import json
@@ -12,12 +15,28 @@ import os
 from datetime import UTC, datetime
 from typing import Any
 
+from opentelemetry import trace
+
 # logging.LogRecord attributes that are not user-provided extras.
 _RESERVED = frozenset(logging.LogRecord("", 0, "", 0, "", None, None).__dict__) | {
     "message",
     "asctime",
     "taskName",
 }
+
+
+class TraceContextFilter(logging.Filter):
+    """Stamps each record with the active OpenTelemetry trace/span id (ADR-029
+    amendment) so logs and traces cross-reference. A no-op when tracing is off
+    (no active span) — the fields are simply absent, keeping the keyless output
+    unchanged."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        context = trace.get_current_span().get_span_context()
+        if context.is_valid:
+            record.trace_id = trace.format_trace_id(context.trace_id)
+            record.span_id = trace.format_span_id(context.span_id)
+        return True
 
 
 class JsonFormatter(logging.Formatter):
@@ -41,6 +60,7 @@ def configure_logging() -> None:
         handler.setFormatter(JsonFormatter())
     else:
         handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s %(name)s %(message)s"))
+    handler.addFilter(TraceContextFilter())
     root = logging.getLogger()
     root.handlers = [handler]
     root.setLevel(os.environ.get("LOG_LEVEL", "INFO").upper())

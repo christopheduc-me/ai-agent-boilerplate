@@ -11,10 +11,23 @@ use axum::extract::Request;
 use axum::http::HeaderValue;
 use axum::middleware::Next;
 use axum::response::Response;
+use opentelemetry::trace::{TraceContextExt, TraceId};
 use tracing::Instrument;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 use uuid::Uuid;
 
 const HEADER: &str = "x-request-id";
+
+/// Records the OpenTelemetry trace id assigned to `span` (ADR-029) as a field,
+/// so JSON logs cross-reference the trace. A no-op when tracing is off: the
+/// span then has no OTel context and the id stays `INVALID`, leaving the field
+/// empty (so the keyless output is unchanged).
+fn record_otel_trace_id(span: &tracing::Span) {
+    let trace_id = span.context().span().span_context().trace_id();
+    if trace_id != TraceId::INVALID {
+        span.record("trace_id", tracing::field::display(trace_id));
+    }
+}
 
 fn incoming_id(request: &Request) -> Option<String> {
     let value = request.headers().get(HEADER)?.to_str().ok()?.trim();
@@ -30,7 +43,11 @@ pub async fn request_id(request: Request, next: Next) -> Response {
         request_id = %id,
         method = %request.method(),
         path = %request.uri().path(),
+        // Populated below when OpenTelemetry is on (ADR-029), so every log line
+        // under this span carries the trace id and links back to Jaeger.
+        trace_id = tracing::field::Empty,
     );
+    record_otel_trace_id(&span);
     let mut response = next.run(request).instrument(span).await;
     if let Ok(value) = HeaderValue::from_str(&id) {
         response.headers_mut().insert(HEADER, value);

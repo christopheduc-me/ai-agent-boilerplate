@@ -274,7 +274,9 @@ docker compose --profile observability up -d jaeger
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run   # same var for the agent
 ```
 
-Unset (or empty), the variable disables telemetry entirely — the default.
+Unset (or empty), the variable disables telemetry entirely — the default. Logs
+carry the `trace_id` when tracing is on, so a log line links to its Jaeger
+trace. What to watch and where to find it: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ---
 

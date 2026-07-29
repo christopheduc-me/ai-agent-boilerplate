@@ -868,6 +868,18 @@ with an in-memory span exporter (`test_llm_spans.py`) — no provider, no paid
 call. Together with the cost meter (ADR-038) and the spend cap (ADR-048), this
 closes the cost/quality/observability loop for the agent.
 
+**Amendment — log ↔ trace correlation (added 2026-07-29)**: the two pillars now
+cross-reference. Each structured log line (ADR-018) also carries the active
+`trace_id` / `span_id` when tracing is on — the agent stamps them with a stdlib
+`logging.Filter` reading the current OTel span, the backend records the trace id
+as a field on the `http_request` span (so `with_current_span` emits it). A no-op
+when tracing is off (no active span → the fields are simply absent), so the
+keyless output is unchanged. You can now jump from a log line to its Jaeger trace
+and back; the `job_id` stays the cross-service key that works even with tracing
+off. What to watch and where to find it is written up in
+[OBSERVABILITY.md](OBSERVABILITY.md); metrics remain the deferred third pillar
+(§5).
+
 ### ADR-030 — Two research modes: the workflow and the agentic loop (decided 2026-07-12)
 
 > *Amended by ADR-046 (2026-07-25)*: the agent mode now has **two
