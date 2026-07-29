@@ -114,7 +114,29 @@ describe("streamSearch (ADR-026)", () => {
   };
 
   it("emits one update per SSE event and resolves when the server closes", async () => {
-    const job = { id: "j1", status: "completed" };
+    // A complete job detail: the stream is validated against the wire schema
+    // (ADR-049), so a partial payload would (correctly) throw.
+    const job = {
+      id: "j1",
+      keyword: "rust",
+      mode: "agent",
+      status: "completed",
+      error: null,
+      question: null,
+      answer: null,
+      recurring_search_id: null,
+      usage: {
+        llm_calls: 0,
+        llm_input_tokens: 0,
+        llm_output_tokens: 0,
+        search_calls: 0,
+        cost_usd: 0,
+      },
+      created_at: "2026-05-01T09:00:00Z",
+      completed_at: "2026-05-01T09:00:12Z",
+      results: [],
+      steps: [],
+    };
     fetchMock.mockResolvedValue(
       new Response(sseBody([`event: update\ndata: ${JSON.stringify(job)}\n\n`]), { status: 200 }),
     );

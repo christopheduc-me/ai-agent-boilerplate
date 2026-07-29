@@ -1449,6 +1449,48 @@ Deliberate choices:
   intentionally not idempotent": a Celery retry re-spends, and each attempt is
   capped independently.
 
+### ADR-049 — Public API contract fixtures + backward-compat rule (decided 2026-07-29, extends ADR-025)
+
+**Context**: ADR-025 pins the **internal** contract (Rust ↔ Python) with golden
+fixtures asserted on both sides. The **public** contract (Rust → Vue) had no
+such net: the same shapes (`SearchResult`, `JobUsage`, `AgentStep`, the job
+detail) were hand-typed a third time in `frontend/src/api.ts`, with nothing
+tying them to what the backend actually serves. A Rust field rename or an added
+enum variant compiled, passed every Rust and Python test, and reached the
+browser as a silent `undefined` — found by a user, not CI. The boilerplate's
+goal is scale-readiness (bricks deployable on separate machines, ADR-006) while
+staying a monorepo, so the boundary correctness must be machine-checked.
+
+**Decision**: extend the ADR-025 fixture pattern to the public contract, and add
+the missing third side.
+
+1. **Fixtures** `contracts/search-job-detail.json` and `recurring-search.json`
+   pin the exact wire shape of `GET /api/searches/{id}` and `/api/recurring`.
+2. **Producer (Rust)**: `job_detail_json` / `recurring_search_json` are the
+   single serialization path used by the handlers, made `pub` so
+   `backend/tests/contract.rs` asserts their output **equals** the fixtures.
+3. **Consumer (Vue)**: `api.ts` is rebuilt on **`zod`** schemas as the single
+   source of truth — the TS types are derived (`z.infer`, no more hand-written
+   duplicates) and every data response is **validated at runtime** (`.parse`),
+   so a drift throws a clear `ZodError` client-side instead of an `undefined`.
+   `frontend/src/__tests__/contract.spec.ts` validates the same fixtures.
+
+**Backward-compat rule (the scale-ready part)**: because the bricks deploy
+independently, a rolling deploy can briefly pair a new frontend with an old
+backend (or vice versa). So the contract is **additive by default**: the zod
+objects are **non-strict** (unknown fields are stripped, not rejected), an
+older frontend keeps working when a newer backend adds a field; and a removal
+or rename takes a **deprecation window across two releases**, never a hard flip.
+This is the discipline the monorepo's atomic-source guarantee does *not* give
+you at the deploy layer.
+
+**Cost**: one dependency (`zod`, ~18 kB gzip in the bundle) — the price of real
+runtime validation on the one side that had none. A generated OpenAPI client
+(utoipa → `openapi-typescript`) was considered and deferred: it earns its
+keep when the bricks split into **separate repos** (a published, versioned
+schema is then the decoupling artifact), which is out of scope while the
+boilerplate stays a monorepo. Noted in §5.
+
 ---
 
 ## 4. API contracts (summary)
@@ -1507,6 +1549,16 @@ also enforces the per-user daily quota — ADR-017).
 - Multiple search providers with aggregation/deduplication.
 - An e-mail `DigestSender` adapter (SMTP/SES) behind the ADR-036 port, for
   forks that prefer inboxes over webhooks.
+- **Generated API client from an OpenAPI schema (utoipa → `openapi-typescript`).**
+  Today the contract is pinned by fixtures asserted on all three sides (ADR-049)
+  — proportionate while the boilerplate is a **monorepo** (one CI validates
+  every side atomically). If a fork splits the bricks into **separate repos**,
+  promote the schema to the source of truth: annotate the axum handlers with
+  `utoipa`, publish a versioned `openapi.json` as the release artifact, and
+  generate the TS client (and Python models) from it — the published schema is
+  then the inter-repo decoupling mechanism the co-located fixtures can no longer
+  be. Independent *deployment* is already supported (ADR-006); this is only
+  needed for independent *repositories/teams*.
 - **Anthropic prompt caching — measured and deferred (2026-07-26).** The stable
   prefix of each live LLM call (the structured-output tool schema + the prompt
   instructions) is 733–928 tokens on `claude-opus-4-8` — below its 1024-token

@@ -1,0 +1,9 @@
+{
+  "created_at": "2026-05-01T09:00:00Z",
+  "id": "9a1f0c5e-2b7d-4c3a-8e6f-1d2a3b4c5d6e",
+  "interval_minutes": 1440,
+  "keyword": "rust releases",
+  "last_run_at": "2026-05-02T09:00:00Z",
+  "mode": "agent",
+  "webhook_url": "https://example.com/webhook"
+}

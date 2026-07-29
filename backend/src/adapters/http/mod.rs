@@ -482,7 +482,7 @@ async fn create_recurring(
         )
         .await
     {
-        Ok(search) => (StatusCode::CREATED, Json(RecurringView::from(&search))).into_response(),
+        Ok(search) => (StatusCode::CREATED, Json(recurring_search_json(&search))).into_response(),
         Err(e @ RecurringError::Invalid(_)) => {
             error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
         }
@@ -499,9 +499,13 @@ async fn create_recurring(
 
 async fn list_recurring(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
     match state.recurring.list(user_id).await {
-        Ok(searches) => {
-            Json(searches.iter().map(RecurringView::from).collect::<Vec<_>>()).into_response()
-        }
+        Ok(searches) => Json(
+            searches
+                .iter()
+                .map(recurring_search_json)
+                .collect::<Vec<_>>(),
+        )
+        .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "list recurring searches failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
@@ -553,8 +557,9 @@ async fn answer_search(
 }
 
 /// The job detail payload, shared by `GET /api/searches/{id}` and the SSE
-/// stream (ADR-026) so both surfaces always carry the same shape.
-pub(crate) fn job_detail_json(
+/// stream (ADR-026) so both surfaces always carry the same shape. Public so the
+/// cross-language contract test (ADR-049) can pin its exact wire shape.
+pub fn job_detail_json(
     job: &ResearchJob,
     results: &[SearchResult],
     steps: &[AgentStep],
@@ -564,6 +569,13 @@ pub(crate) fn job_detail_json(
     // The agent journal (ADR-030); always present, empty in workflow mode.
     body["steps"] = serde_json::to_value(steps).expect("serializable steps");
     body
+}
+
+/// The recurring-search payload served by `POST`/`GET /api/recurring`. Single
+/// serialization path (used by the handlers below) so its shape is pinned once
+/// by the contract test (ADR-049).
+pub fn recurring_search_json(search: &RecurringSearch) -> serde_json::Value {
+    serde_json::to_value(RecurringView::from(search)).expect("serializable recurring view")
 }
 
 async fn get_search(

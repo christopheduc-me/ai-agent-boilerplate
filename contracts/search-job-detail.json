@@ -1,0 +1,61 @@
+{
+  "answer": null,
+  "completed_at": "2026-05-01T09:00:12Z",
+  "created_at": "2026-05-01T09:00:00Z",
+  "error": null,
+  "id": "3fa85f64-5717-4562-b3fc-2c963f66afa6",
+  "keyword": "rust releases",
+  "mode": "agent",
+  "question": null,
+  "recurring_search_id": null,
+  "results": [
+    {
+      "date_confidence": "high",
+      "event_type": "release",
+      "is_new": true,
+      "published_at": "2026-05-01T00:00:00Z",
+      "raw": {
+        "provider": "fixture"
+      },
+      "snippet": "The Rust team announced 1.99.",
+      "summary": "Rust 1.99 ships faster incremental builds.",
+      "title": "Rust 1.99 released",
+      "url": "https://blog.rust-lang.org/rust-1-99"
+    },
+    {
+      "date_confidence": "unknown",
+      "event_type": "other",
+      "is_new": false,
+      "published_at": null,
+      "raw": {},
+      "snippet": "No date stated.",
+      "summary": null,
+      "title": "An opinion on boring tech",
+      "url": "https://example.com/boring"
+    }
+  ],
+  "status": "completed",
+  "steps": [
+    {
+      "detail": "rust 1.99 release",
+      "kind": "search",
+      "new_hits": 2,
+      "reason": "start with the goal",
+      "seq": 1
+    },
+    {
+      "detail": "",
+      "kind": "finish",
+      "new_hits": 0,
+      "reason": "coverage sufficient",
+      "seq": 2
+    }
+  ],
+  "usage": {
+    "cost_usd": 0.135,
+    "llm_calls": 7,
+    "llm_input_tokens": 12000,
+    "llm_output_tokens": 3000,
+    "search_calls": 2
+  }
+}

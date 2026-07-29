@@ -1,83 +1,113 @@
 // Thin typed client for the Rust backend (public API contracts, ARCHITECTURE.md §4).
+//
+// The zod schemas below are the single source of truth for the wire contract:
+// the TS types are derived (`z.infer`), and responses are validated at runtime
+// (`.parse`), so a backend drift surfaces as a clear client-side error instead
+// of a silent `undefined`. The same shapes are pinned by `contracts/*.json` and
+// asserted on the Rust side too (ADR-049). Objects are deliberately non-strict
+// (zod strips unknown keys): an additive backend field is ignored, not
+// rejected, so an older frontend keeps working during a rolling deploy.
 
-export type DateConfidence = "high" | "medium" | "unknown";
-export type JobStatus = "pending" | "running" | "awaiting_input" | "completed" | "failed";
+import { z } from "zod";
+
+export const dateConfidenceSchema = z.enum(["high", "medium", "unknown"]);
+export type DateConfidence = z.infer<typeof dateConfidenceSchema>;
+
+export const jobStatusSchema = z.enum([
+  "pending",
+  "running",
+  "awaiting_input",
+  "completed",
+  "failed",
+]);
+export type JobStatus = z.infer<typeof jobStatusSchema>;
+
 // Workflow = fixed pipeline; agent = LLM-driven decision loop (ADR-030).
-export type JobMode = "workflow" | "agent";
-export type EventType =
-  | "announcement"
-  | "release"
-  | "funding"
-  | "legal"
-  | "incident"
-  | "research"
-  | "opinion"
-  | "other";
+export const jobModeSchema = z.enum(["workflow", "agent"]);
+export type JobMode = z.infer<typeof jobModeSchema>;
 
-export interface SearchResult {
-  title: string;
-  url: string;
-  snippet: string;
-  published_at: string | null;
-  date_confidence: DateConfidence;
-  event_type: EventType;
-  summary: string | null;
+export const eventTypeSchema = z.enum([
+  "announcement",
+  "release",
+  "funding",
+  "legal",
+  "incident",
+  "research",
+  "opinion",
+  "other",
+]);
+export type EventType = z.infer<typeof eventTypeSchema>;
+
+export const searchResultSchema = z.object({
+  title: z.string(),
+  url: z.string(),
+  snippet: z.string(),
+  published_at: z.string().nullable(),
+  date_confidence: dateConfidenceSchema,
+  event_type: eventTypeSchema,
+  summary: z.string().nullable(),
   // False when a previous run of a recurring search already saw it (ADR-033).
-  is_new: boolean;
-}
+  is_new: z.boolean(),
+});
+export type SearchResult = z.infer<typeof searchResultSchema>;
 
 // Accumulated API spend of a run (ADR-038).
-export interface JobUsage {
-  llm_calls: number;
-  llm_input_tokens: number;
-  llm_output_tokens: number;
-  search_calls: number;
-  cost_usd: number;
-}
+export const jobUsageSchema = z.object({
+  llm_calls: z.number(),
+  llm_input_tokens: z.number(),
+  llm_output_tokens: z.number(),
+  search_calls: z.number(),
+  cost_usd: z.number(),
+});
+export type JobUsage = z.infer<typeof jobUsageSchema>;
 
-export interface SearchJob {
-  id: string;
-  keyword: string;
-  mode: JobMode;
-  status: JobStatus;
-  error: string | null;
+export const searchJobSchema = z.object({
+  id: z.string(),
+  keyword: z.string(),
+  mode: jobModeSchema,
+  status: jobStatusSchema,
+  error: z.string().nullable(),
   // Clarification dialog (ADR-032): the agent's question and the user's answer.
-  question: string | null;
-  answer: string | null;
+  question: z.string().nullable(),
+  answer: z.string().nullable(),
   // Set on scheduler-launched runs of a recurring search (ADR-033).
-  recurring_search_id: string | null;
+  recurring_search_id: z.string().nullable(),
   // Accumulated API spend (ADR-038).
-  usage: JobUsage;
-  created_at: string;
-  completed_at: string | null;
-}
+  usage: jobUsageSchema,
+  created_at: z.string(),
+  completed_at: z.string().nullable(),
+});
+export type SearchJob = z.infer<typeof searchJobSchema>;
 
 // A saved search re-run on an interval by the backend scheduler (ADR-033).
-export interface RecurringSearch {
-  id: string;
-  keyword: string;
-  mode: JobMode;
-  interval_minutes: number;
+export const recurringSearchSchema = z.object({
+  id: z.string(),
+  keyword: z.string(),
+  mode: jobModeSchema,
+  interval_minutes: z.number(),
   // Digest target (ADR-036): notified when a run finds new results.
-  webhook_url: string | null;
-  created_at: string;
-  last_run_at: string | null;
-}
+  webhook_url: z.string().nullable(),
+  created_at: z.string(),
+  last_run_at: z.string().nullable(),
+});
+export type RecurringSearch = z.infer<typeof recurringSearchSchema>;
 
 // One decision of the agentic loop (ADR-030/031), shown in the live journal.
-// The kind stays open: newer agents may add step kinds before the frontend.
-export interface AgentStep {
-  seq: number;
-  kind: "search" | "finish" | "critique" | string;
-  detail: string;
-  reason: string;
-  new_hits: number;
-}
+// `kind` stays an open string: newer agents may add step kinds before the frontend.
+export const agentStepSchema = z.object({
+  seq: z.number(),
+  kind: z.string(),
+  detail: z.string(),
+  reason: z.string(),
+  new_hits: z.number(),
+});
+export type AgentStep = z.infer<typeof agentStepSchema>;
 
-export interface SearchJobDetail extends SearchJob {
-  results: SearchResult[];
-  steps: AgentStep[];
-}
+export const searchJobDetailSchema = searchJobSchema.extend({
+  results: z.array(searchResultSchema),
+  steps: z.array(agentStepSchema),
+});
+export type SearchJobDetail = z.infer<typeof searchJobDetailSchema>;
 
 export class ApiError extends Error {
   constructor(
@@ -157,7 +187,9 @@ async function streamSearch(
     const { done, value } = await reader.read();
     if (done) return;
     for (const event of parse(decoder.decode(value, { stream: true }))) {
-      if (event.event === "update") onUpdate(JSON.parse(event.data) as SearchJobDetail);
+      // Validate the streamed shape too (ADR-026/049): the SSE payload is the
+      // same job detail as GET, so a drift is caught here as well.
+      if (event.event === "update") onUpdate(searchJobDetailSchema.parse(JSON.parse(event.data)));
     }
   }
 }
@@ -189,31 +221,37 @@ export const api = {
       token,
     ),
 
-  listSearches: (token: string) => request<SearchJob[]>("/api/searches", {}, token),
+  // Data responses are validated against the wire schema (ADR-049): a backend
+  // drift throws a ZodError here instead of surfacing as a silent `undefined`.
+  listSearches: async (token: string) =>
+    z.array(searchJobSchema).parse(await request<unknown>("/api/searches", {}, token)),
 
   // Recurring searches (ADR-033); the webhook receives digests (ADR-036).
-  createRecurring: (
+  createRecurring: async (
     keyword: string,
     mode: JobMode,
     intervalMinutes: number,
     token: string,
     webhookUrl?: string,
   ) =>
-    request<RecurringSearch>(
-      "/api/recurring",
-      {
-        method: "POST",
-        body: JSON.stringify({
-          keyword,
-          mode,
-          interval_minutes: intervalMinutes,
-          webhook_url: webhookUrl || null,
-        }),
-      },
-      token,
+    recurringSearchSchema.parse(
+      await request<unknown>(
+        "/api/recurring",
+        {
+          method: "POST",
+          body: JSON.stringify({
+            keyword,
+            mode,
+            interval_minutes: intervalMinutes,
+            webhook_url: webhookUrl || null,
+          }),
+        },
+        token,
+      ),
     ),
 
-  listRecurring: (token: string) => request<RecurringSearch[]>("/api/recurring", {}, token),
+  listRecurring: async (token: string) =>
+    z.array(recurringSearchSchema).parse(await request<unknown>("/api/recurring", {}, token)),
 
   deleteRecurring: (id: string, token: string) =>
     request<void>(`/api/recurring/${id}`, { method: "DELETE" }, token),
@@ -226,6 +264,6 @@ export const api = {
       token,
     ),
 
-  getSearch: (id: string, token: string) =>
-    request<SearchJobDetail>(`/api/searches/${id}`, {}, token),
+  getSearch: async (id: string, token: string) =>
+    searchJobDetailSchema.parse(await request<unknown>(`/api/searches/${id}`, {}, token)),
 };

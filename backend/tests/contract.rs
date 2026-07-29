@@ -343,3 +343,97 @@ async fn backend_consumes_the_usage_callback_fixture() {
     let cost = detail["usage"]["cost_usd"].as_f64().unwrap();
     assert!((cost - 0.177).abs() < 1e-9, "accumulated cost: {cost}");
 }
+
+/// The public API's exact wire shape (ADR-049): the backend PRODUCES the
+/// `GET /api/searches/{id}` detail and the `/api/recurring` payload; the
+/// fixtures pin them so a Rust rename/field change breaks this suite instead of
+/// silently reaching the frontend. The frontend side asserts the same fixtures.
+#[tokio::test]
+async fn backend_produces_the_public_contract_fixtures() {
+    use backend::adapters::http::{job_detail_json, recurring_search_json};
+    use backend::domain::{
+        AgentStep, DateConfidence, EventType, JobStatus, JobUsage, RecurringSearch, SearchResult,
+    };
+    use chrono::TimeZone;
+
+    let mut job = ResearchJob::new(Uuid::new_v4(), "rust releases")
+        .unwrap()
+        .with_mode(JobMode::Agent);
+    job.id = Uuid::parse_str("3fa85f64-5717-4562-b3fc-2c963f66afa6").unwrap();
+    job.status = JobStatus::Completed;
+    job.usage = JobUsage {
+        llm_calls: 7,
+        llm_input_tokens: 12000,
+        llm_output_tokens: 3000,
+        search_calls: 2,
+        cost_usd: 0.135,
+    };
+    job.created_at = chrono::Utc.with_ymd_and_hms(2026, 5, 1, 9, 0, 0).unwrap();
+    job.completed_at = Some(chrono::Utc.with_ymd_and_hms(2026, 5, 1, 9, 0, 12).unwrap());
+
+    let results = vec![
+        SearchResult {
+            title: "Rust 1.99 released".into(),
+            url: "https://blog.rust-lang.org/rust-1-99".into(),
+            snippet: "The Rust team announced 1.99.".into(),
+            published_at: Some(chrono::Utc.with_ymd_and_hms(2026, 5, 1, 0, 0, 0).unwrap()),
+            date_confidence: DateConfidence::High,
+            event_type: EventType::Release,
+            summary: Some("Rust 1.99 ships faster incremental builds.".into()),
+            is_new: true,
+            raw: serde_json::json!({"provider": "fixture"}),
+        },
+        SearchResult {
+            title: "An opinion on boring tech".into(),
+            url: "https://example.com/boring".into(),
+            snippet: "No date stated.".into(),
+            published_at: None,
+            date_confidence: DateConfidence::Unknown,
+            event_type: EventType::Other,
+            summary: None,
+            is_new: false,
+            raw: serde_json::json!({}),
+        },
+    ];
+    let steps = vec![
+        AgentStep {
+            seq: 1,
+            kind: "search".into(),
+            detail: "rust 1.99 release".into(),
+            reason: "start with the goal".into(),
+            new_hits: 2,
+        },
+        AgentStep {
+            seq: 2,
+            kind: "finish".into(),
+            detail: String::new(),
+            reason: "coverage sufficient".into(),
+            new_hits: 0,
+        },
+    ];
+
+    let detail = job_detail_json(&job, &results, &steps);
+    let expected: Value = serde_json::from_str(&fixture("search-job-detail.json")).unwrap();
+    assert_eq!(
+        detail, expected,
+        "job detail wire shape drifted from the fixture"
+    );
+
+    let recurring = RecurringSearch {
+        id: Uuid::parse_str("9a1f0c5e-2b7d-4c3a-8e6f-1d2a3b4c5d6e").unwrap(),
+        user_id: Uuid::new_v4(),
+        keyword: "rust releases".into(),
+        mode: JobMode::Agent,
+        interval_minutes: 1440,
+        webhook_url: Some("https://example.com/webhook".into()),
+        created_at: chrono::Utc.with_ymd_and_hms(2026, 5, 1, 9, 0, 0).unwrap(),
+        last_run_at: Some(chrono::Utc.with_ymd_and_hms(2026, 5, 2, 9, 0, 0).unwrap()),
+    };
+    let expected_recurring: Value =
+        serde_json::from_str(&fixture("recurring-search.json")).unwrap();
+    assert_eq!(
+        recurring_search_json(&recurring),
+        expected_recurring,
+        "recurring wire shape drifted from the fixture"
+    );
+}
