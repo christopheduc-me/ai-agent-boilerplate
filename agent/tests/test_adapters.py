@@ -2,6 +2,7 @@ import json
 from datetime import UTC, datetime
 
 import httpx
+import pytest
 import respx
 
 from aiagent.adapters.llm import (
@@ -20,7 +21,7 @@ from aiagent.adapters.llm import (
     parse_extracted_date,
 )
 from aiagent.adapters.sink import HttpResultSink, serialize_result
-from aiagent.adapters.tavily import hit_from_tavily
+from aiagent.adapters.tavily import hit_from_tavily, hits_from_tavily_response
 from aiagent.domain.models import (
     AgentStep,
     AgentStepKind,
@@ -55,6 +56,23 @@ def test_tavily_item_without_or_with_garbage_date() -> None:
     assert (
         hit_from_tavily({"title": "T", "url": "https://t", "published_date": "yesterday"})
     ).published_at is None
+
+
+def test_tavily_response_maps_results() -> None:
+    hits = hits_from_tavily_response({"results": [{"title": "T", "url": "https://t"}]})
+    assert [h.url for h in hits] == ["https://t"]
+
+
+def test_tavily_error_response_raises_instead_of_returning_empty() -> None:
+    # A quota/key error must fail the job, not masquerade as zero results — else
+    # the agent burns its step budget searching against a dead provider.
+    with pytest.raises(RuntimeError, match="Tavily search failed"):
+        hits_from_tavily_response({"error": "Error 432: usage limit exceeded"})
+
+
+def test_tavily_unexpected_shape_is_empty_not_a_crash() -> None:
+    assert hits_from_tavily_response("unexpected") == []
+    assert hits_from_tavily_response({}) == []
 
 
 # ---------------------------------------------------------------- llm reply parsing

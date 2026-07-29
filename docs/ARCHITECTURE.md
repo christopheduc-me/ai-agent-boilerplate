@@ -232,6 +232,13 @@ Brave, SerpAPI, or DuckDuckGo without touching the domain.
 
 **Config**: `TAVILY_API_KEY` (environment variable).
 
+**Error handling (added 2026-07-29)**: a Tavily error response (`{"error": …}`
+— e.g. an exhausted key quota) **raises**, so the job fails fast with the
+provider's message. It is deliberately *not* swallowed as "zero results": doing
+so let the agent keep searching against a dead provider, exhausting its step
+budget and LLM spend on a run that silently returned nothing. Found via the
+cost/decision visibility of ADR-038/029.
+
 ### ADR-010 — LLM: Claude (Anthropic) via langchain-anthropic
 
 **Decision**: default model **`claude-opus-4-8`** (Claude Opus 4.8), configurable
