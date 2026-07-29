@@ -14,6 +14,7 @@ crashes.
 """
 
 import json
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import datetime
@@ -23,6 +24,7 @@ from opentelemetry import trace
 from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 
+from aiagent import metrics
 from aiagent.domain.models import (
     AgentAction,
     AgentStep,
@@ -229,7 +231,9 @@ class LlmHitEnricher:
             # One langchain batch = the per-hit calls run concurrently under the
             # hood; replies come back in prompt order. Usage is recorded here, on
             # the caller's thread — the meter needs no thread-safety.
+            start = time.perf_counter()
             results = self._structured.batch(prompts, config={"max_concurrency": self._concurrency})
+            duration = time.perf_counter() - start
             enrichments = []
             input_tokens = output_tokens = 0
             for result in results:
@@ -243,6 +247,7 @@ class LlmHitEnricher:
                 else:
                     enrichments.append(parse_enrichment(raw_text(raw)))
             record_span_usage(span, input_tokens, output_tokens)
+            metrics.record_llm_call("enrich", self._system, duration, input_tokens, output_tokens)
             return enrichments
 
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
@@ -364,9 +369,13 @@ class LlmAgentPolicy:
             goal=goal, transcript=transcript, count=len(hits), titles=titles
         )
         with llm_span("decide", self._model, self._system) as span:
+            start = time.perf_counter()
             raw, parsed = split_structured(self._structured.invoke(prompt))
+            duration = time.perf_counter() - start
             record_llm_usage(self._meter, raw)
-            record_span_usage(span, *usage_tokens(raw))
+            input_tokens, output_tokens = usage_tokens(raw)
+            record_span_usage(span, input_tokens, output_tokens)
+            metrics.record_llm_call("decide", self._system, duration, input_tokens, output_tokens)
             action = (
                 action_from_reply(parsed)
                 if isinstance(parsed, ActionReply)
@@ -480,9 +489,13 @@ class LlmResultCritic:
             goal=goal, count=len(hits), listing=listing
         )
         with llm_span("critique", self._model, self._system) as span:
+            start = time.perf_counter()
             raw, parsed = split_structured(self._structured.invoke(prompt))
+            duration = time.perf_counter() - start
             record_llm_usage(self._meter, raw)
-            record_span_usage(span, *usage_tokens(raw))
+            input_tokens, output_tokens = usage_tokens(raw)
+            record_span_usage(span, input_tokens, output_tokens)
+            metrics.record_llm_call("critique", self._system, duration, input_tokens, output_tokens)
             critique = (
                 critique_from_reply(parsed)
                 if isinstance(parsed, CritiqueReply)

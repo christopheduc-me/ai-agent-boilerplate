@@ -1,0 +1,31 @@
+# OpenTelemetry Collector config (ADR-050), dev-only.
+# One OTLP endpoint fans the signals out: traces -> Jaeger, metrics -> a
+# Prometheus scrape endpoint. Production forks point OTEL_EXPORTER_OTLP_ENDPOINT
+# at their own collector/backend instead — the app code is unchanged.
+receivers:
+  otlp:
+    protocols:
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  batch: {}
+
+exporters:
+  # Traces to Jaeger's native OTLP/HTTP receiver.
+  otlphttp/jaeger:
+    endpoint: http://jaeger:4318
+  # Metrics exposed for Prometheus to scrape (on :8889/metrics).
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/jaeger]
+    metrics:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [prometheus]

@@ -48,6 +48,27 @@ where
     Some((provider, layer))
 }
 
+/// Installs the OTLP **metric** provider (ADR-050) behind the same gate, so the
+/// HTTP RED instruments (`adapters/http/request_id`) export via OTLP. Returns
+/// the provider for the caller to `shutdown()` on exit (flush). `None` — and no
+/// global provider — when telemetry is off, keeping the instruments no-ops.
+pub fn meter_provider() -> Option<opentelemetry_sdk::metrics::SdkMeterProvider> {
+    std::env::var("OTEL_EXPORTER_OTLP_ENDPOINT")
+        .ok()
+        .filter(|endpoint| !endpoint.trim().is_empty())?;
+
+    let exporter = opentelemetry_otlp::MetricExporter::builder()
+        .with_http()
+        .build()
+        .expect("failed to build the OTLP metric exporter");
+    let provider = opentelemetry_sdk::metrics::SdkMeterProvider::builder()
+        .with_periodic_exporter(exporter)
+        .with_resource(Resource::builder().with_service_name("backend").build())
+        .build();
+    global::set_meter_provider(provider.clone());
+    Some(provider)
+}
+
 struct HeaderInjector<'a>(&'a mut reqwest::header::HeaderMap);
 
 impl Injector for HeaderInjector<'_> {

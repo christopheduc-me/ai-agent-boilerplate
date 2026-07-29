@@ -76,10 +76,12 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Browser-level e2e tests (Playwright, ADR-028)** — done: real Chromium
       journeys (register → search → timeline, re-login → history) against the
       same fake-provider stack, run by both CIs' `e2e` jobs.
-- [x] **Opt-in OpenTelemetry traces (ADR-029)** — done: gated on
+- [x] **Opt-in OpenTelemetry observability (ADR-029/050)** — done: gated on
       `OTEL_EXPORTER_OTLP_ENDPOINT`, W3C context propagated backend → FastAPI
-      → Celery → callbacks, dev Jaeger behind `--profile observability`.
-      Metrics/logs export could follow the same pattern if a fork needs it.
+      → Celery → callbacks. All three pillars behind `--profile observability`:
+      traces (Jaeger) with per-call LLM spans, structured logs carrying the
+      `trace_id`, and metrics (OTel Collector → Prometheus → Grafana — LLM
+      latency/tokens/cost, HTTP RED).
 - [x] **Dependency freshness without a platform bot (ADR-022)** — done:
       `scripts/deps-report.sh` (native tools) run weekly by both CIs, plus an
       inert portable `renovate.json` for forks that want automated update PRs

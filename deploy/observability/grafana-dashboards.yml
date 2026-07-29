@@ -1,0 +1,12 @@
+# Grafana dashboard provisioning (ADR-050): loads every dashboard JSON under
+# the path below at startup, so the fork gets a working overview out of the box.
+apiVersion: 1
+
+providers:
+  - name: aiagent
+    type: file
+    disableDeletion: false
+    editable: true
+    options:
+      path: /var/lib/grafana/dashboards
+      foldersFromFilesStructure: false

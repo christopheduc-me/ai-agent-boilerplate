@@ -1,0 +1,13 @@
+# Grafana datasource provisioning (ADR-050), dev-only: wires Grafana to the
+# Prometheus that scrapes the collector. A starter "AI agent overview" dashboard
+# is provisioned alongside (grafana-dashboards.yml + grafana-dashboard.json);
+# extend it with the PromQL in docs/OBSERVABILITY.md.
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    uid: prometheus
+    type: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true

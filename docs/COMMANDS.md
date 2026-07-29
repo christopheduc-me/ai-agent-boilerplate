@@ -51,6 +51,8 @@ consoles" card, ADR-040):
 |---|---|
 | Flower (Celery workers & tasks) | http://localhost:5555 |
 | Jaeger (distributed traces) | http://localhost:16686 |
+| Prometheus (metrics — ADR-050) | http://localhost:9090 |
+| Grafana (dashboards — ADR-050) | http://localhost:3001 |
 
 ## 2. Docker — infra only (default profile)
 
@@ -261,22 +263,26 @@ docker compose --profile observability up -d flower
 open http://localhost:5555
 ```
 
-### Traces (OpenTelemetry + Jaeger — ADR-029, opt-in)
+### Traces + metrics (OpenTelemetry — ADR-029/050, opt-in)
+
+The observability profile runs an OTel Collector (the OTLP entry point) that
+fans traces to Jaeger and metrics to Prometheus, with Grafana for dashboards.
 
 ```sh
-# Full stack + local Jaeger; one search = one trace across all four processes
-OTEL_EXPORTER_OTLP_ENDPOINT=http://jaeger:4318 \
+# Full stack + the observability collector/Jaeger/Prometheus/Grafana
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
   docker compose --profile full --profile observability up -d --build --wait
-open http://localhost:16686                 # Jaeger UI
+open http://localhost:16686                 # Jaeger (traces)
+open http://localhost:3001                  # Grafana (metrics dashboards)
 
-# Hot-reload dev: run only Jaeger in Docker, point local bricks at it
-docker compose --profile observability up -d jaeger
+# Hot-reload dev: run the observability stack in Docker, point local bricks at it
+docker compose --profile observability up -d otel-collector jaeger prometheus grafana
 OTEL_EXPORTER_OTLP_ENDPOINT=http://localhost:4318 cargo run   # same var for the agent
 ```
 
 Unset (or empty), the variable disables telemetry entirely — the default. Logs
 carry the `trace_id` when tracing is on, so a log line links to its Jaeger
-trace. What to watch and where to find it: [OBSERVABILITY.md](OBSERVABILITY.md).
+trace. What to watch, the metrics and their PromQL: [OBSERVABILITY.md](OBSERVABILITY.md).
 
 ---
 

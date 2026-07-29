@@ -10,15 +10,25 @@ dev-time default (see [ARCHITECTURE.md](ARCHITECTURE.md) ADR-018/029/038/045/048
 | Pillar | Status | Where |
 |---|---|---|
 | **Traces** | ✅ opt-in (ADR-029) | Jaeger UI (`:16686`), per-search trace across all four processes, with a span per LLM call |
-| **Logs** | ✅ structured (ADR-018) | stdout, one JSON object per line when `LOG_FORMAT=json`, with correlation ids |
-| **Metrics** | ⬜ deferred | not shipped — the third pillar, a documented next step (ARCHITECTURE §5) |
+| **Logs** | ✅ structured (ADR-018) | stdout, one JSON object per line when `LOG_FORMAT=json`, with correlation ids + `trace_id` |
+| **Metrics** | ✅ opt-in (ADR-050) | Prometheus (`:9090`) + Grafana (`:3001`); LLM latency/tokens/cost and HTTP RED |
 
-## Turning tracing on
+## Turning observability on
 
 ```sh
-docker compose --profile observability up -d       # adds Jaeger (OTLP :4318, UI :16686)
-# the app services pass OTEL_EXPORTER_OTLP_ENDPOINT through from the environment
+OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
+  docker compose --profile full --profile observability up -d
 ```
+
+The **observability profile** adds an OpenTelemetry Collector (the OTLP entry
+point), Jaeger, Prometheus and Grafana. The collector fans the signals out —
+traces → Jaeger, metrics → Prometheus — so one endpoint feeds both pillars:
+
+| UI | URL |
+|---|---|
+| Jaeger (traces) | http://localhost:16686 |
+| Prometheus (metrics) | http://localhost:9090 |
+| Grafana (dashboards) | http://localhost:3001 |
 
 Unset the variable and nothing is installed — the processes behave exactly as
 before, at zero cost. A production fork points the variable at its own collector
@@ -55,6 +65,27 @@ pillar lands.
 | **Quota rejections** (ADR-017) | abuse or a too-tight limit | `429` responses / rate-limit log lines |
 | **Per-run quality score** (ADR-045) | prompt/model regressions | the evaluation harness — run on demand, see COMMANDS.md |
 
+## Metrics & starter PromQL (ADR-050)
+
+The agent and backend push OTel metrics through the collector to Prometheus.
+Grafana ships with the Prometheus datasource **and a starter "AI agent overview"
+dashboard** provisioned at startup (http://localhost:3001) — extend it with
+these queries:
+
+| Signal | PromQL |
+|---|---|
+| LLM call latency (p95, by op) | `histogram_quantile(0.95, sum by (le, operation) (rate(aiagent_llm_call_duration_seconds_bucket[5m])))` |
+| Token throughput (by type) | `sum by (type) (rate(aiagent_llm_tokens_total[5m]))` |
+| Spend rate ($/min, by outcome) | `sum by (outcome) (rate(aiagent_job_cost_USD_total[5m])) * 60` |
+| Job outcomes | `sum by (outcome) (increase(aiagent_jobs_total[1h]))` |
+| HTTP request rate (RED) | `sum by (route, status) (rate(http_server_requests_total[5m]))` |
+| HTTP p95 latency (RED) | `histogram_quantile(0.95, sum by (le, route) (rate(http_server_duration_seconds_bucket[5m])))` |
+| HTTP error ratio (RED) | `sum(rate(http_server_requests_total{status=~"5.."}[5m])) / sum(rate(http_server_requests_total[5m]))` |
+
+> Metric names are the OTLP → Prometheus translation (dots → underscores, unit
+> suffixes, `_total` on counters, `_bucket` on histograms). Confirm the exact
+> names in the Prometheus UI (`:9090`) if a query returns nothing.
+
 ## Reading a run in Jaeger
 
 One search = one trace. Under the request/worker spans you will see the agent's
@@ -71,9 +102,9 @@ a failed call is already a red span (the exception is recorded automatically).
   ratio-based sampling in production. The Python SDK honours
   `OTEL_TRACES_SAMPLER=parentbased_traceidratio` out of the box; the Rust
   provider's sampler is set in `backend/src/telemetry.rs` (default: always-on).
-- **Alert on the signals above, not on log volume.** Cost-per-day and
-  failure-rate are the two that catch real incidents first — those are the first
-  metrics to add when you stand up the third pillar.
+- **Alert on the signals above, not on log volume.** Spend rate and the HTTP
+  error ratio are the two that catch real incidents first — wire Prometheus
+  alerting rules on those before anything else.
 - **Never trace secrets.** Prompts and results can carry user data; the spans
   here record *metadata* (model, tokens, decision), never prompt/response text —
   keep it that way.

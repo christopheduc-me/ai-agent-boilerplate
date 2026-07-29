@@ -41,6 +41,8 @@ fn main() {
         Some((provider, layer)) => (Some(provider), Some(layer)),
         None => (None, None),
     };
+    // Metrics provider (ADR-050): same gate, global, flushed on exit.
+    let meter_provider = backend::telemetry::meter_provider();
     let registry = tracing_subscriber::registry()
         .with(env_filter)
         .with(otel_layer);
@@ -62,10 +64,15 @@ fn main() {
         .expect("failed to build the tokio runtime")
         .block_on(serve());
 
-    // Flush buffered spans before exiting (ADR-029).
+    // Flush buffered spans and metrics before exiting (ADR-029/050).
     if let Some(provider) = otel_provider {
         if let Err(e) = provider.shutdown() {
             eprintln!("failed to flush OpenTelemetry spans: {e}");
+        }
+    }
+    if let Some(provider) = meter_provider {
+        if let Err(e) = provider.shutdown() {
+            eprintln!("failed to flush OpenTelemetry metrics: {e}");
         }
     }
     tracing::info!("backend stopped gracefully");

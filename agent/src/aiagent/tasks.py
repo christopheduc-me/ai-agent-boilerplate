@@ -5,6 +5,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from typing import TYPE_CHECKING, Any
 
+from aiagent import metrics
 from aiagent.application import run_agent_research, run_research
 from aiagent.celery_app import app
 from aiagent.config import Settings
@@ -230,14 +231,19 @@ def run_research_task(
         sink.report_failure(job_id, f"agent misconfigured: {exc}")
         raise
 
+    # Outcome for the job metric (ADR-050); the exit paths below refine it.
+    job_outcome = "failed"
+
     def report_usage() -> None:
         """Spend tracking (ADR-038): sent at every task end (success, pause,
         failure) so retries and resumed runs accumulate their real cost.
-        Best-effort — losing the metric never fails the job."""
+        Also feeds the job/cost metrics (ADR-050). Best-effort — losing a
+        metric never fails the job."""
         usage = meter.snapshot()
+        pricing = _pricing_for(settings)
+        metrics.record_job(job_outcome, usage.cost_usd(pricing))
         if usage.llm_calls == 0 and usage.search_calls == 0:
             return
-        pricing = _pricing_for(settings)
         try:
             sink.report_usage(job_id, usage, pricing)
         except Exception:  # noqa: BLE001 - best effort by contract
@@ -268,6 +274,7 @@ def run_research_task(
             if outcome is None:
                 # Paused (ADR-032): the job awaits the user's answer; a fresh
                 # task will be dispatched when it arrives.
+                job_outcome = "paused"
                 logger.info("research task paused awaiting user input", extra=log_ctx)
                 return 0
             results = outcome
@@ -275,6 +282,7 @@ def run_research_task(
             results = run_research(
                 job_id, keyword, search, enricher, sink, seen_urls=memory, page_dates=page_dates
             )
+        job_outcome = "completed"
     except Exception:
         logger.error("research task failed", extra=log_ctx, exc_info=True)
         raise

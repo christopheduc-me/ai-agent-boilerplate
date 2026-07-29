@@ -844,9 +844,10 @@ is installed and both bricks behave exactly as before.
    the variable, no header leakage) and the propagation path with an
    exporter-less local provider — no collector, no network.
 
-Metrics and logs stay out of scope: traces are where the multi-process
-debugging pain is; the rest can follow the same opt-in pattern if a fork
-needs it.
+Metrics and logs stayed out of the original scope: traces are where the
+multi-process debugging pain is, and the rest could follow the same opt-in
+pattern later — which they since did (log↔trace correlation below, and metrics
+in ADR-050).
 
 **Amendment — per-call LLM spans (added 2026-07-29)**: the propagation above
 gives one trace per search, but the agent's LLM calls — the expensive,
@@ -1540,6 +1541,44 @@ A **generated TS/Python client** from that spec (via `openapi-typescript` /
 `datamodel-code-generator`) remains deferred (§5): it earns its keep only when
 the bricks split into **separate repos**, where a published, versioned schema
 becomes the decoupling artifact. Now that the spec exists, that step is cheap.
+
+### ADR-050 — Metrics: the third observability pillar (decided 2026-07-29, extends ADR-029)
+
+**Context**: ADR-029 shipped traces (and its amendments added per-call LLM spans
+and log↔trace correlation), explicitly deferring metrics. Traces answer *why
+was this run slow/expensive*; they cannot answer *is the fleet healthy, what is
+the trend, alert me* — that is the aggregate view, and it is exactly what an
+operator of a forked deployment needs.
+
+**Decision**: OpenTelemetry **metrics**, behind the same opt-in gate
+(`OTEL_EXPORTER_OTLP_ENDPOINT`) and the same OTLP push as traces.
+
+1. **Agent** emits, via a proxy-meter module (`aiagent/metrics.py`, no-op until
+   the provider is installed): `aiagent.llm.call.duration` (histogram),
+   `aiagent.llm.tokens` (counter, by operation/type/backend), `aiagent.job.cost`
+   and `aiagent.jobs` (counters, by outcome). Recording sits in the adapters and
+   the Celery task — the domain stays untouched — reusing the hooks the LLM
+   spans already added.
+2. **Backend** emits HTTP **RED** metrics from the ADR-018 middleware:
+   `http.server.requests` (counter) and `http.server.duration` (histogram), by
+   method / **matched route** (`/api/searches/{id}`, low cardinality) / status.
+3. **The collector is now the OTLP entry point** (dev-only, observability
+   profile): an **OpenTelemetry Collector** receives OTLP and fans it out —
+   traces → Jaeger, metrics → a Prometheus scrape endpoint — with **Grafana**
+   for dashboards. `OTEL_EXPORTER_OTLP_ENDPOINT` therefore points at
+   `otel-collector:4318` instead of Jaeger directly (Jaeger only ingests
+   traces); the collector forwards them, so tracing is unchanged. Production
+   forks point the variable at their own collector — no code change.
+
+Same discipline as ADR-029: **no-op instruments when telemetry is off** (zero
+cost in the keyless demo/CI), instrumentation in the adapters not the domain,
+and tested without a live backend — the agent metrics with an in-memory metric
+reader (`test_metrics.py`), the backend RED path by the existing middleware
+tests recording into a no-op meter, and the whole pipeline once end-to-end
+(apps → collector → Prometheus → a provisioned Grafana dashboard). What to watch
+and the PromQL for each signal is in [OBSERVABILITY.md](OBSERVABILITY.md); a
+starter "AI agent overview" dashboard ships provisioned. The three pillars are
+now in place: traces, logs, metrics.
 
 ---
 

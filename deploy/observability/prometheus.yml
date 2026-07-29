@@ -1,0 +1,9 @@
+# Prometheus scrape config (ADR-050), dev-only. Pulls the metrics the OTel
+# Collector re-exposes from the OTLP pushes of the backend and the agent.
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: otel-collector
+    static_configs:
+      - targets: ["otel-collector:8889"]
