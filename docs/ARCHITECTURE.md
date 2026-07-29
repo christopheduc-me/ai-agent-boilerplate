@@ -848,6 +848,26 @@ Metrics and logs stay out of scope: traces are where the multi-process
 debugging pain is; the rest can follow the same opt-in pattern if a fork
 needs it.
 
+**Amendment — per-call LLM spans (added 2026-07-29)**: the propagation above
+gives one trace per search, but the agent's LLM calls — the expensive,
+slow, non-deterministic part — were invisible inside it. The three adapters
+(`LlmHitEnricher`/`LlmAgentPolicy`/`LlmResultCritic`) now open **one span per
+call** via a shared `llm_span` helper, tagged with the OpenTelemetry **GenAI
+semantic conventions** (`gen_ai.operation.name`, `gen_ai.system`,
+`gen_ai.request.model`, `gen_ai.usage.input_tokens` / `output_tokens`) plus the
+domain outcome that makes a run readable at a glance — `aiagent.agent.action`
+(search/ask/finish), `aiagent.critic.dropped` / `has_gap`, the enrichment
+`batch_size` (ADR-042 runs the per-hit calls together, so it is one span with
+summed usage, not a false per-hit latency). Latency is the span duration; the
+`model`/`system` labels are threaded from `Settings` at the wiring point. It
+respects the opt-in gate for free: the module tracer is a **no-op proxy** until
+`OTEL_EXPORTER_OTLP_ENDPOINT` is set, so the spans cost nothing in the keyless
+demo/CI and appear in Jaeger as children of the job trace only when enabled.
+Instrumentation lives in the adapter; the domain ports are untouched. Tested
+with an in-memory span exporter (`test_llm_spans.py`) — no provider, no paid
+call. Together with the cost meter (ADR-038) and the spend cap (ADR-048), this
+closes the cost/quality/observability loop for the agent.
+
 ### ADR-030 — Two research modes: the workflow and the agentic loop (decided 2026-07-12)
 
 > *Amended by ADR-046 (2026-07-25)*: the agent mode now has **two

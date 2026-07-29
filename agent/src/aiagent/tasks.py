@@ -71,7 +71,12 @@ def build_providers(
 
     return (
         TavilySearchProvider(meter=meter),
-        LlmHitEnricher(make_chat_model(settings, max_tokens=256), meter=meter),
+        LlmHitEnricher(
+            make_chat_model(settings, max_tokens=256),
+            meter=meter,
+            model=settings.agent_model_id,
+            system=settings.llm_backend,
+        ),
         HttpPageDateFetcher(),
     )
 
@@ -86,7 +91,12 @@ def build_policy(settings: Settings, meter: UsageMeter | None = None) -> AgentPo
     from aiagent.adapters.chat_model import make_chat_model
     from aiagent.adapters.llm import LlmAgentPolicy
 
-    return LlmAgentPolicy(make_chat_model(settings, max_tokens=256), meter=meter)
+    return LlmAgentPolicy(
+        make_chat_model(settings, max_tokens=256),
+        meter=meter,
+        model=settings.agent_model_id,
+        system=settings.llm_backend,
+    )
 
 
 def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultCritic:
@@ -99,7 +109,12 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
     from aiagent.adapters.chat_model import make_chat_model
     from aiagent.adapters.llm import LlmResultCritic
 
-    return LlmResultCritic(make_chat_model(settings, max_tokens=512), meter=meter)
+    return LlmResultCritic(
+        make_chat_model(settings, max_tokens=512),
+        meter=meter,
+        model=settings.agent_model_id,
+        system=settings.llm_backend,
+    )
 
 
 def _run_agent(

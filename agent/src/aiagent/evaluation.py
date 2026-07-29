@@ -371,9 +371,16 @@ def evaluate_spec(spec: str, base: Settings) -> tuple[Report, float]:
 
     settings = _settings_for_spec(spec, base)
     meter = UsageMeter()
-    enricher = LlmHitEnricher(make_chat_model(settings, max_tokens=256), meter=meter)
-    policy = LlmAgentPolicy(make_chat_model(settings, max_tokens=256), meter=meter)
-    critic = LlmResultCritic(make_chat_model(settings, max_tokens=512), meter=meter)
+    model, system = settings.agent_model_id, settings.llm_backend
+    enricher = LlmHitEnricher(
+        make_chat_model(settings, max_tokens=256), meter=meter, model=model, system=system
+    )
+    policy = LlmAgentPolicy(
+        make_chat_model(settings, max_tokens=256), meter=meter, model=model, system=system
+    )
+    critic = LlmResultCritic(
+        make_chat_model(settings, max_tokens=512), meter=meter, model=model, system=system
+    )
     report = evaluate(enricher, policy, critic)
     cost = meter.snapshot().cost_usd(_pricing_for(settings))
     return report, cost

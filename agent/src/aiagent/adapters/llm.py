@@ -14,9 +14,13 @@ crashes.
 """
 
 import json
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from typing import TYPE_CHECKING, Any
 
+from opentelemetry import trace
+from opentelemetry.trace import Span
 from pydantic import BaseModel, Field
 
 from aiagent.domain.models import (
@@ -37,13 +41,47 @@ if TYPE_CHECKING:
     from langchain_core.language_models import BaseChatModel, LanguageModelInput
 
 
+def usage_tokens(response: object) -> tuple[int, int]:
+    """(input, output) token counts from langchain's usage_metadata; (0, 0)
+    when absent (fake replies, older providers)."""
+    usage = getattr(response, "usage_metadata", None) or {}
+    return int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0))
+
+
 def record_llm_usage(meter: "UsageMeter | None", response: object) -> None:
     """Reads langchain's usage_metadata (ADR-038); absent metadata still
     counts the call so fake replies and older providers stay visible."""
     if meter is None:
         return
-    usage = getattr(response, "usage_metadata", None) or {}
-    meter.record_llm(int(usage.get("input_tokens", 0)), int(usage.get("output_tokens", 0)))
+    input_tokens, output_tokens = usage_tokens(response)
+    meter.record_llm(input_tokens, output_tokens)
+
+
+# ---------------------------------------------------------------- tracing (ADR-029 amendment)
+
+# No-op when telemetry is off (the global provider is a proxy) — so the spans
+# add nothing to the keyless demo/CI, and appear in Jaeger only when
+# OTEL_EXPORTER_OTLP_ENDPOINT is set, as children of the worker's job span.
+_tracer = trace.get_tracer("aiagent.llm")
+
+
+@contextmanager
+def llm_span(operation: str, model: str, system: str) -> Iterator[Span]:
+    """One span per LLM call, tagged with the OpenTelemetry GenAI conventions
+    (`gen_ai.*`). Latency is the span duration; callers add usage and the
+    outcome. Model/system are best-effort labels; empty ones are skipped."""
+    with _tracer.start_as_current_span(f"llm {operation}") as span:
+        span.set_attribute("gen_ai.operation.name", operation)
+        if system:
+            span.set_attribute("gen_ai.system", system)
+        if model:
+            span.set_attribute("gen_ai.request.model", model)
+        yield span
+
+
+def record_span_usage(span: Span, input_tokens: int, output_tokens: int) -> None:
+    span.set_attribute("gen_ai.usage.input_tokens", input_tokens)
+    span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
 
 
 def split_structured(result: object) -> tuple[object, object]:
@@ -166,12 +204,16 @@ class LlmHitEnricher:
         llm: "BaseChatModel",
         meter: UsageMeter | None = None,
         concurrency: int = 5,
+        model: str = "",
+        system: str = "",
     ) -> None:
         self._meter = meter
         self._structured = llm.with_structured_output(EnrichmentReply, include_raw=True)
         # Bounds the parallel per-hit calls (ADR-042): fast, without letting a
         # burst of hits hammer the provider (or overload a local Ollama).
         self._concurrency = concurrency
+        self._model = model
+        self._system = system
 
     def enrich_many(self, hits: list[RawSearchHit]) -> list[HitEnrichment]:
         if not hits:
@@ -180,19 +222,28 @@ class LlmHitEnricher:
             ENRICHMENT_PROMPT.format(title=hit.title, url=hit.url, snippet=hit.snippet)
             for hit in hits
         ]
-        # One langchain batch = the per-hit calls run concurrently under the
-        # hood; replies come back in prompt order. Usage is recorded here, on
-        # the caller's thread — the meter needs no thread-safety.
-        results = self._structured.batch(prompts, config={"max_concurrency": self._concurrency})
-        enrichments = []
-        for result in results:
-            raw, parsed = split_structured(result)
-            record_llm_usage(self._meter, raw)
-            if isinstance(parsed, EnrichmentReply):
-                enrichments.append(enrichment_from_reply(parsed))
-            else:
-                enrichments.append(parse_enrichment(raw_text(raw)))
-        return enrichments
+        # One span for the whole batch (ADR-042 runs the per-hit calls together,
+        # so there is no honest per-hit latency to record).
+        with llm_span("enrich", self._model, self._system) as span:
+            span.set_attribute("aiagent.llm.batch_size", len(hits))
+            # One langchain batch = the per-hit calls run concurrently under the
+            # hood; replies come back in prompt order. Usage is recorded here, on
+            # the caller's thread — the meter needs no thread-safety.
+            results = self._structured.batch(prompts, config={"max_concurrency": self._concurrency})
+            enrichments = []
+            input_tokens = output_tokens = 0
+            for result in results:
+                raw, parsed = split_structured(result)
+                record_llm_usage(self._meter, raw)
+                got_in, got_out = usage_tokens(raw)
+                input_tokens += got_in
+                output_tokens += got_out
+                if isinstance(parsed, EnrichmentReply):
+                    enrichments.append(enrichment_from_reply(parsed))
+                else:
+                    enrichments.append(parse_enrichment(raw_text(raw)))
+            record_span_usage(span, input_tokens, output_tokens)
+            return enrichments
 
     def enrich(self, hit: RawSearchHit) -> HitEnrichment:
         """Single-hit convenience (live drift tests, ADR-012)."""
@@ -256,6 +307,14 @@ def action_from_reply(reply: ActionReply) -> AgentAction:
     return FinishAction(reason=reason)
 
 
+def _action_label(action: AgentAction) -> str:
+    if isinstance(action, SearchAction):
+        return "search"
+    if isinstance(action, AskAction):
+        return "ask"
+    return "finish"
+
+
 def parse_action(text: str) -> AgentAction:
     """Fallback parser (ADR-043): anything malformed means FINISH — a
     confused model must never burn the step budget."""
@@ -286,9 +345,17 @@ class LlmAgentPolicy:
     its own past decisions and the collected titles (token-frugal), and picks
     the next action. Same injectable-`llm` pattern as LlmHitEnricher."""
 
-    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
+    def __init__(
+        self,
+        llm: "BaseChatModel",
+        meter: UsageMeter | None = None,
+        model: str = "",
+        system: str = "",
+    ) -> None:
         self._meter = meter
         self._structured = llm.with_structured_output(ActionReply, include_raw=True)
+        self._model = model
+        self._system = system
 
     def decide(self, goal: str, steps: list[AgentStep], hits: list[RawSearchHit]) -> AgentAction:
         transcript = "\n".join(f'- "{s.detail}" -> {s.new_hits} new' for s in steps) or "- none yet"
@@ -296,11 +363,18 @@ class LlmAgentPolicy:
         prompt: LanguageModelInput = POLICY_PROMPT.format(
             goal=goal, transcript=transcript, count=len(hits), titles=titles
         )
-        raw, parsed = split_structured(self._structured.invoke(prompt))
-        record_llm_usage(self._meter, raw)
-        if isinstance(parsed, ActionReply):
-            return action_from_reply(parsed)
-        return parse_action(raw_text(raw))
+        with llm_span("decide", self._model, self._system) as span:
+            raw, parsed = split_structured(self._structured.invoke(prompt))
+            record_llm_usage(self._meter, raw)
+            record_span_usage(span, *usage_tokens(raw))
+            action = (
+                action_from_reply(parsed)
+                if isinstance(parsed, ActionReply)
+                else parse_action(raw_text(raw))
+            )
+            # The decision is the single most useful attribute for reading a run.
+            span.set_attribute("aiagent.agent.action", _action_label(action))
+            return action
 
 
 # ---------------------------------------------------------------- critique
@@ -388,17 +462,32 @@ class LlmResultCritic:
     """Live ResultCritic (ADR-031) — one call reviewing the whole result set;
     same injectable-`llm` pattern as the other adapters."""
 
-    def __init__(self, llm: "BaseChatModel", meter: UsageMeter | None = None) -> None:
+    def __init__(
+        self,
+        llm: "BaseChatModel",
+        meter: UsageMeter | None = None,
+        model: str = "",
+        system: str = "",
+    ) -> None:
         self._meter = meter
         self._structured = llm.with_structured_output(CritiqueReply, include_raw=True)
+        self._model = model
+        self._system = system
 
     def critique(self, goal: str, hits: list[RawSearchHit]) -> Critique:
         listing = "\n".join(f"- {h.title} — {h.url}\n  {h.snippet}" for h in hits[:30]) or "- none"
         prompt: LanguageModelInput = CRITIQUE_PROMPT.format(
             goal=goal, count=len(hits), listing=listing
         )
-        raw, parsed = split_structured(self._structured.invoke(prompt))
-        record_llm_usage(self._meter, raw)
-        if isinstance(parsed, CritiqueReply):
-            return critique_from_reply(parsed)
-        return parse_critique(raw_text(raw))
+        with llm_span("critique", self._model, self._system) as span:
+            raw, parsed = split_structured(self._structured.invoke(prompt))
+            record_llm_usage(self._meter, raw)
+            record_span_usage(span, *usage_tokens(raw))
+            critique = (
+                critique_from_reply(parsed)
+                if isinstance(parsed, CritiqueReply)
+                else parse_critique(raw_text(raw))
+            )
+            span.set_attribute("aiagent.critic.dropped", len(critique.irrelevant_urls))
+            span.set_attribute("aiagent.critic.has_gap", critique.gap_query is not None)
+            return critique
