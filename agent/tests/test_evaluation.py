@@ -183,6 +183,7 @@ def _base_settings() -> Settings:
         agent_model_id="claude-opus-4-8",
         providers="live",
         agent_max_steps=5,
+        agent_max_cost_usd=2.0,
         agent_orchestrator="langgraph",
         llm_cost_input_per_mtok=5.0,
         llm_cost_output_per_mtok=25.0,

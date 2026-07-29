@@ -18,7 +18,7 @@ state critique : critic.critique(goal, hits) — ADR-031\ndrop off-topic, one re
 
 decide --> search : action = search
 decide --> ask : action = ask\n(goal ambiguous, no clarification yet\nAND a clarifier is wired)
-decide --> finalize : action = finish\n**or** step budget spent (cost guard)
+decide --> finalize : action = finish\n**or** step budget spent\n**or** spend cap hit (ADR-048)
 
 search --> decide : back to the policy\nwith the growing transcript
 ask --> decide : on resume: answer folded into the goal,\nasked = true (one question per job)

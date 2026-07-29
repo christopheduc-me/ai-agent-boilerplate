@@ -19,6 +19,7 @@ from aiagent.domain.models import (
     RawSearchHit,
     SearchAction,
 )
+from aiagent.domain.usage import Pricing, SpendGuard, UsageMeter
 
 
 class ScriptedPolicy:
@@ -181,6 +182,66 @@ def test_critique_gap_triggers_one_repair_search() -> None:
         AgentStepKind.CRITIQUE,
         AgentStepKind.SEARCH,
     ]
+
+
+# ---------------------------------------------------------------- spend cap (ADR-048)
+
+
+class _BurningSearch:
+    """Burns a fixed LLM cost into the meter per call, so a cost cap can be
+    exercised with no paid provider — parity with the loop's BurningSearch."""
+
+    def __init__(self, hits: list[RawSearchHit], meter: UsageMeter, tokens: int) -> None:
+        self._hits = hits
+        self._meter = meter
+        self._tokens = tokens
+        self.queries: list[str] = []
+
+    def search(self, keyword: str) -> list[RawSearchHit]:
+        self.queries.append(keyword)
+        self._meter.record_llm(self._tokens, 0)
+        return list(self._hits)
+
+
+_BURN_PRICING = Pricing(llm_input_per_mtok=25.0, llm_output_per_mtok=0.0, search_per_call=0.0)
+
+
+def test_cost_cap_forces_a_finish_step() -> None:
+    meter = UsageMeter()
+    guard = SpendGuard(meter, _BURN_PRICING, cap_usd=0.03)  # trips after 2 searches
+    search = _BurningSearch([hit("https://a")], meter, tokens=1_000)  # $0.025 per search
+    policy = ScriptedPolicy([SearchAction(query="q", reason=str(i)) for i in range(5)])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    run("job-c1", "goal", search, policy, sink, reporter, budget=guard, max_steps=5)
+
+    assert search.queries == ["q", "q"]  # step budget 5 untouched; money stops it
+    assert [s.kind for s in reporter.steps] == [
+        AgentStepKind.SEARCH,
+        AgentStepKind.SEARCH,
+        AgentStepKind.FINISH,
+    ]
+    assert "cost" in reporter.steps[-1].reason
+    assert sink.delivered == [("job-c1", 1)]
+
+
+def test_cost_cap_skips_the_critique_when_over_budget() -> None:
+    meter = UsageMeter()
+    guard = SpendGuard(meter, _BURN_PRICING, cap_usd=0.02)  # trips after 1 search
+    search = _BurningSearch([hit("https://a"), hit("https://off-topic")], meter, tokens=1_000)
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason="1"), SearchAction(query="q", reason="2")]
+    )
+    critic = _ScriptedCritic(Critique(assessment="off", irrelevant_urls=("https://off-topic",)))
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run(
+        "job-c2", "goal", search, policy, sink, reporter, critic=critic, budget=guard, max_steps=5
+    )
+
+    # The critique node early-returns over budget: no CRITIQUE step, nothing dropped.
+    assert all(s.kind is not AgentStepKind.CRITIQUE for s in reporter.steps)
+    assert {r.url for r in results} == {"https://a", "https://off-topic"}
 
 
 def test_recurring_run_flags_the_delta_and_journals_a_report() -> None:

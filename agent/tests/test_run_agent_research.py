@@ -16,6 +16,7 @@ from aiagent.domain.models import (
     RawSearchHit,
     SearchAction,
 )
+from aiagent.domain.usage import Pricing, SpendGuard, UsageMeter
 
 
 class ScriptedPolicy:
@@ -130,6 +131,104 @@ def test_budget_exhaustion_forces_a_finish_step() -> None:
     assert kinds == [AgentStepKind.SEARCH, AgentStepKind.SEARCH, AgentStepKind.FINISH]
     assert "budget" in reporter.steps[-1].reason
     assert sink.delivered == [("job-2", 1)]
+
+
+# ---------------------------------------------------------------- spend cap (ADR-048)
+
+
+class BurningSearch:
+    """A search that also burns a fixed LLM cost into the meter on every call —
+    so a cost cap can be exercised without a real, paid provider."""
+
+    def __init__(self, hits: list[RawSearchHit], meter: UsageMeter, tokens: int) -> None:
+        self._hits = hits
+        self._meter = meter
+        self._tokens = tokens
+        self.queries: list[str] = []
+
+    def search(self, keyword: str) -> list[RawSearchHit]:
+        self.queries.append(keyword)
+        self._meter.record_llm(self._tokens, 0)
+        return list(self._hits)
+
+
+# $25/Mtok input, nothing else — 1_000 tokens per search = $0.025 per search.
+_BURN_PRICING = Pricing(llm_input_per_mtok=25.0, llm_output_per_mtok=0.0, search_per_call=0.0)
+
+
+def test_cost_cap_forces_a_finish_and_delivers_what_was_found() -> None:
+    meter = UsageMeter()
+    guard = SpendGuard(meter, _BURN_PRICING, cap_usd=0.03)  # trips after 2 searches ($0.05)
+    search = BurningSearch([hit("https://a")], meter, tokens=1_000)
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason=str(i)) for i in range(5)]  # would never stop on its own
+    )
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    run_agent_research(
+        "job-c1",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        budget=guard,
+        max_steps=5,
+    )
+
+    # The step budget (5) is untouched; money stops it first, after 2 searches.
+    assert search.queries == ["q", "q"]
+    assert [s.kind for s in reporter.steps] == [
+        AgentStepKind.SEARCH,
+        AgentStepKind.SEARCH,
+        AgentStepKind.FINISH,
+    ]
+    assert "cost" in reporter.steps[-1].reason
+    assert sink.delivered == [("job-c1", 1)]  # what was found is still delivered
+
+
+def test_cost_cap_skips_the_critique_when_already_over_budget() -> None:
+    meter = UsageMeter()
+    guard = SpendGuard(meter, _BURN_PRICING, cap_usd=0.02)  # trips after 1 search ($0.025)
+    search = BurningSearch([hit("https://a")], meter, tokens=1_000)
+    policy = ScriptedPolicy(
+        [SearchAction(query="q", reason="1"), SearchAction(query="q", reason="2")]
+    )
+    # A critic that would drop the only hit — proving it never ran.
+    critic = ScriptedCritic(Critique(assessment="off", irrelevant_urls=("https://a",)))
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-c2",
+        "goal",
+        search,
+        NeutralEnricher(),
+        policy,
+        sink,
+        reporter,
+        critic=critic,
+        budget=guard,
+        max_steps=5,
+    )
+
+    assert critic.seen == []  # the extra critique LLM call is skipped over budget
+    assert all(s.kind is not AgentStepKind.CRITIQUE for s in reporter.steps)
+    assert [r.url for r in results] == ["https://a"]  # nothing dropped: critic never ran
+
+
+def test_no_cap_when_the_budget_is_absent() -> None:
+    # The default (no SpendGuard) keeps the old behavior: the policy finishes.
+    search = MappedSearch({"q": [hit("https://a")]})
+    policy = ScriptedPolicy([SearchAction(query="q", reason="r"), FinishAction(reason="done")])
+    sink, reporter = RecordingSink(), RecordingReporter()
+
+    results = run_agent_research(
+        "job-c3", "goal", search, NeutralEnricher(), policy, sink, reporter, max_steps=5
+    )
+
+    assert len(results) == 1
+    assert reporter.steps[-1].kind is AgentStepKind.FINISH
 
 
 def test_a_failing_journal_never_fails_the_job() -> None:

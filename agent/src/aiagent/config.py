@@ -61,9 +61,15 @@ class Settings:
     # no built-in retry and relies on the Celery task retry).
     llm_timeout_seconds: float
     llm_max_retries: int
-    # Step budget of the agentic loop (ADR-030) — the cost guard: each step is
-    # at most one policy LLM call plus one provider search.
+    # Step budget of the agentic loop (ADR-030) — each step is at most one
+    # policy LLM call plus one provider search.
     agent_max_steps: int
+    # Spend cap per job (ADR-048), USD: the agent degrades to a clean finish
+    # once the run's indicative cost crosses this — the money analog of the
+    # step budget, independent of the model's per-token price. 0 disables it.
+    # Priced from the rates below; with the keyless fakes cost is $0, so it
+    # never trips in the demo/e2e.
+    agent_max_cost_usd: float
     # Orchestration of the agent mode (ADR-046): "langgraph" (default, a
     # StateGraph with durable Redis checkpointing and native interrupt-based
     # HITL) or "loop" (the framework-free hand-rolled loop of ADR-030). Both
@@ -88,6 +94,7 @@ class Settings:
             llm_timeout_seconds=float(os.environ.get("AGENT_LLM_TIMEOUT_SECONDS", "60")),
             llm_max_retries=int(os.environ.get("AGENT_LLM_MAX_RETRIES", "2")),
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
+            agent_max_cost_usd=float(os.environ.get("AGENT_MAX_COST_USD", "2.0")),
             agent_orchestrator=os.environ.get("AGENT_ORCHESTRATOR", "langgraph"),
             llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
             llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),

@@ -873,11 +873,12 @@ now ships both, side by side, on the same plumbing.
    sees the goal, the transcript of its own decisions and the collected
    titles, and returns the next action — `search(query, reason)` or
    `finish(reason)`. The loop enforces the mechanics: URL deduplication
-   across searches, a **step budget** (`AGENT_MAX_STEPS`, default 5 — the
-   cost guard in the spirit of ADR-017; exhaustion forces a reasoned finish),
-   and the shared enrich/sort/deliver tail (ADR-011/027). The policy reply is
-   parsed defensively: anything malformed means finish, never a crash or a
-   burned budget.
+   across searches, a **step budget** (`AGENT_MAX_STEPS`, default 5;
+   exhaustion forces a reasoned finish) and, alongside it, a **spend cap**
+   (`AGENT_MAX_COST_USD`, ADR-048 — money stops the run before the step budget
+   does), and the shared enrich/sort/deliver tail (ADR-011/027). The policy
+   reply is parsed defensively: anything malformed means finish, never a crash
+   or a burned budget.
 3. **The live decision journal**: every executed decision is reported through
    a new **`StepReporter` port** → `POST /internal/jobs/{id}/steps` →
    `agent_steps` table (idempotent on `(job_id, seq)`, ADR-016) → the job
@@ -1406,6 +1407,47 @@ def valid(secret: str, raw_body: bytes, header: str) -> bool:
     expected = "sha256=" + hmac.new(secret.encode(), raw_body, hashlib.sha256).hexdigest()
     return hmac.compare_digest(expected, header)  # constant-time
 ```
+
+---
+
+### ADR-048 — Per-job spend cap (cost circuit breaker) (decided 2026-07-29, hardens ADR-030)
+
+**Context**: the agent mode has two bounds — the **step budget**
+(`AGENT_MAX_STEPS`, ADR-030) caps the number of decision steps, and
+`DAILY_SEARCH_QUOTA` (ADR-017) caps a user's requests. Neither bounds the
+**money** a single run spends. The step budget is a coarse proxy: at equal step
+counts the cost varies by ~100× with the model and the per-step token size, and
+the `UsageMeter` (ADR-038) already computes `cost_usd` — but only *after* the
+run, for reporting. A pathological run (a long transcript, a verbose model, a
+mis-set expensive model) can burn an unbounded budget while staying under the
+step limit. For a fork that wires a real key, a surprise bill is the scariest
+failure mode.
+
+**Decision**: a pure-domain `SpendGuard` (`meter` + `pricing` + `cap_usd`) in
+`domain/usage.py`, checked by **both orchestrators** (the hand-rolled loop and
+the LangGraph `StateGraph`) at the **same seams as the step budget** — before
+each `decide`, and to skip the self-critique's extra LLM call / repair search.
+When the run's indicative cost crosses `AGENT_MAX_COST_USD`, the agent degrades
+to a **clean forced finish** and still delivers what it found — the same
+"degrade, never crash" contract as the step budget. It reads the *same live
+meter* the adapters feed, so nothing is double-counted, and it stays pure: the
+guard is domain, the wiring (meter + env-priced `Pricing` + the setting) is in
+the Celery task.
+
+Deliberate choices:
+
+- **Enabled by default at $2.00/job**, well above a normal run (cents). The
+  keyless fakes (ADR-021) price at **$0**, so the guard never trips in the
+  demo/e2e — it only bites live paid runs, exactly where it should. `0`
+  disables it.
+- **Model-independent**: a cheap and an expensive model get the same dollar
+  ceiling, unlike the step budget.
+- **Bounds the tail transitively**: capping the exploration loop caps the number
+  of searches, hence the collected hits, hence the batched enrichment cost
+  (ADR-042) that runs after the loop.
+- **Not deduped across retries** — consistent with ADR-038's "cost is
+  intentionally not idempotent": a Celery retry re-spends, and each attempt is
+  capped independently.
 
 ---
 

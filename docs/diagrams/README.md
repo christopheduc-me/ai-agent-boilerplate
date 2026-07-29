@@ -104,8 +104,8 @@ What actually happens inside the loop, the boilerplate's flagship
 feature, in one visual instead of three ADRs:
 
 - the **LLM policy drives the control flow** (search / ask / finish); the loop
-  only enforces the mechanics — URL deduplication, the `AGENT_MAX_STEPS`
-  budget, the live journal;
+  only enforces the mechanics — URL deduplication, the `AGENT_MAX_STEPS` step
+  budget and the `AGENT_MAX_COST_USD` spend cap (ADR-048), the live journal;
 - **defensive parsing** as a design rule: any malformed LLM reply means
   *finish*, never a crash or a burned budget;
 - the **ask** branch (ADR-032) ends the task — a worker never blocks on a

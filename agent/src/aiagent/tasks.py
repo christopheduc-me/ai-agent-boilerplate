@@ -16,12 +16,24 @@ from aiagent.domain.ports import (
     ResultCritic,
     SearchProvider,
 )
-from aiagent.domain.usage import Pricing, UsageMeter
+from aiagent.domain.usage import Pricing, SpendGuard, UsageMeter
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
 
 logger = logging.getLogger(__name__)
+
+
+def _pricing_for(settings: Settings) -> Pricing:
+    """Indicative USD rates (ADR-038). Fakes are free (ADR-021): $0, so the
+    spend cap (ADR-048) never trips in the keyless demo/e2e."""
+    if settings.providers == "fake":
+        return Pricing(llm_input_per_mtok=0.0, llm_output_per_mtok=0.0, search_per_call=0.0)
+    return Pricing(
+        llm_input_per_mtok=settings.llm_cost_input_per_mtok,
+        llm_output_per_mtok=settings.llm_cost_output_per_mtok,
+        search_per_call=settings.search_cost_per_call,
+    )
 
 
 @contextmanager
@@ -104,6 +116,7 @@ def _run_agent(
     sink: Any,
     memory: set[str] | None,
     page_dates: PageDateFetcher,
+    budget: SpendGuard,
 ) -> list[ResearchResult] | None:
     """Dispatches the agent mode to the configured orchestrator (ADR-046).
     Both drive the same ports; `sink` also acts as StepReporter and
@@ -126,6 +139,7 @@ def _run_agent(
             seen_urls=memory,
             page_dates=page_dates,
             max_steps=settings.agent_max_steps,
+            budget=budget,
         )
     from aiagent.adapters.orchestration.langgraph_agent import run_agent_graph
 
@@ -144,6 +158,7 @@ def _run_agent(
             seen_urls=memory,
             page_dates=page_dates,
             max_steps=settings.agent_max_steps,
+            budget=budget,
             # The re-dispatch after an answer carries it as `clarification`;
             # for the graph that means: resume from the checkpoint (ADR-046).
             resume_answer=clarification,
@@ -187,6 +202,9 @@ def run_research_task(
         request_id=request_id,
     )
     meter = UsageMeter()
+    # Spend cap (ADR-048): checked live against this same meter; 0 disables it,
+    # and the fakes price at $0 so it never trips in the keyless demo.
+    budget = SpendGuard(meter, _pricing_for(settings), settings.agent_max_cost_usd)
     try:
         search, enricher, page_dates = build_providers(settings, meter)
         policy = build_policy(settings, meter) if mode == "agent" else None
@@ -204,16 +222,7 @@ def run_research_task(
         usage = meter.snapshot()
         if usage.llm_calls == 0 and usage.search_calls == 0:
             return
-        pricing = (
-            # Fake providers are free (ADR-021): calls are counted, cost is $0.
-            Pricing(llm_input_per_mtok=0.0, llm_output_per_mtok=0.0, search_per_call=0.0)
-            if settings.providers == "fake"
-            else Pricing(
-                llm_input_per_mtok=settings.llm_cost_input_per_mtok,
-                llm_output_per_mtok=settings.llm_cost_output_per_mtok,
-                search_per_call=settings.search_cost_per_call,
-            )
-        )
+        pricing = _pricing_for(settings)
         try:
             sink.report_usage(job_id, usage, pricing)
         except Exception:  # noqa: BLE001 - best effort by contract
@@ -239,6 +248,7 @@ def run_research_task(
                 sink,
                 memory,
                 page_dates,
+                budget,
             )
             if outcome is None:
                 # Paused (ADR-032): the job awaits the user's answer; a fresh

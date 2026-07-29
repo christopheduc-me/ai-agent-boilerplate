@@ -16,6 +16,7 @@ def settings(**overrides) -> Settings:
         agent_model_id="claude-opus-4-8",
         providers="live",
         agent_max_steps=5,
+        agent_max_cost_usd=2.0,
         agent_orchestrator="langgraph",
         llm_cost_input_per_mtok=0.0,
         llm_cost_output_per_mtok=0.0,
@@ -111,3 +112,13 @@ def test_settings_read_the_timeout_and_retries_from_env(monkeypatch) -> None:
     s = Settings.from_env()
     assert s.llm_timeout_seconds == 120.5
     assert s.llm_max_retries == 0
+
+
+def test_settings_default_the_spend_cap(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_MAX_COST_USD", raising=False)
+    assert Settings.from_env().agent_max_cost_usd == 2.0
+
+
+def test_settings_read_the_spend_cap_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_MAX_COST_USD", "0")  # 0 disables the cap
+    assert Settings.from_env().agent_max_cost_usd == 0.0

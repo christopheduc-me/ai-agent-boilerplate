@@ -62,3 +62,24 @@ class UsageMeter:
 
     def snapshot(self) -> Usage:
         return self._usage
+
+
+@dataclass(frozen=True)
+class SpendGuard:
+    """A ceiling on a run's indicative spend (ADR-048) — the money analog of the
+    step budget (ADR-030). The orchestrators check it after each decision and
+    degrade to a clean finish once the meter's cost crosses `cap_usd`, so a
+    pathological or expensive-model run cannot burn an unbounded budget within
+    the step limit. Pure: it reads the same live `UsageMeter` the adapters feed,
+    so no cost is double-counted. A cap of 0 (or negative) disables it; with the
+    keyless fakes pricing is $0, so the guard never trips in the demo/e2e."""
+
+    meter: UsageMeter
+    pricing: Pricing
+    cap_usd: float
+
+    def spent_usd(self) -> float:
+        return self.meter.snapshot().cost_usd(self.pricing)
+
+    def exceeded(self) -> bool:
+        return self.cap_usd > 0 and self.spent_usd() >= self.cap_usd

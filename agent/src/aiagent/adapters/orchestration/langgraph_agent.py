@@ -50,6 +50,7 @@ from aiagent.domain.ports import (
     StepReporter,
 )
 from aiagent.domain.urls import normalize_url
+from aiagent.domain.usage import SpendGuard
 
 if TYPE_CHECKING:
     from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -128,6 +129,7 @@ def _build_graph(
     critic: ResultCritic | None,
     has_clarifier: bool,
     max_steps: int,
+    budget: SpendGuard | None,
 ) -> "StateGraph[GraphState]":
     """Builds the StateGraph; nodes close over the injected ports. The graph is
     rebuilt per task (fresh ports), while the checkpointer restores the state —
@@ -146,10 +148,18 @@ def _build_graph(
         return state["goal"]
 
     def decide(state: GraphState) -> dict[str, Any]:
-        # Budget guard (cost, ADR-030): once the search budget is spent, finish
+        # Step budget (ADR-030): once the search budget is spent, finish
         # without asking the policy again.
         if _searches_done(state["steps"]) >= max_steps:
             return {"next": {"kind": "finish", "reason": f"step budget of {max_steps} exhausted"}}
+        # Spend cap (ADR-048): money can stop the run before the step budget.
+        if budget is not None and budget.exceeded():
+            return {
+                "next": {
+                    "kind": "finish",
+                    "reason": f"cost budget of ${budget.cap_usd:.2f} exhausted",
+                }
+            }
         action = policy.decide(
             _goal_with_clarification(state),
             [_step_from_dict(s) for s in state["steps"]],
@@ -199,6 +209,9 @@ def _build_graph(
 
     def critique(state: GraphState) -> dict[str, Any]:
         assert critic is not None  # only wired when a critic exists
+        # Skip the review pass (an extra LLM call) once over budget (ADR-048).
+        if budget is not None and budget.exceeded():
+            return {}
         hits = [_hit_from_dict(h) for h in state["hits"]]
         verdict = critic.critique(_goal_with_clarification(state), hits)
         kept = [h for h in hits if h.url not in verdict.irrelevant_urls]
@@ -216,8 +229,10 @@ def _build_graph(
         _report(step)
         steps = state["steps"] + [_step_to_dict(step)]
 
-        # One budget-bounded repair search for the named gap (ADR-031).
-        if verdict.gap_query and _searches_done(steps) < max_steps:
+        # One budget-bounded repair search for the named gap (ADR-031) — bounded
+        # by both the step budget and the spend cap (ADR-048).
+        over_budget = budget is not None and budget.exceeded()
+        if verdict.gap_query and _searches_done(steps) < max_steps and not over_budget:
             found = search.search(verdict.gap_query)
             kept_keys = {normalize_url(h.url) for h in kept}
             new = [h for h in found if normalize_url(h.url) not in kept_keys]
@@ -295,6 +310,7 @@ def run_agent_graph(
     page_dates: PageDateFetcher | None = None,
     max_steps: int = 5,
     resume_answer: str | None = None,
+    budget: SpendGuard | None = None,
 ) -> list[ResearchResult] | None:
     """Runs the agent mode on a LangGraph StateGraph (ADR-046), then enriches,
     sorts and delivers like the workflow mode — same contract as
@@ -308,7 +324,7 @@ def run_agent_graph(
     # The compiled Pregel graph's invoke/get_state have intricate overloads;
     # typed Any here since this adapter drives it as plain glue.
     compiled: Any = _build_graph(
-        job_id, search, policy, reporter, critic, clarifier is not None, max_steps
+        job_id, search, policy, reporter, critic, clarifier is not None, max_steps, budget
     ).compile(checkpointer=checkpointer)
 
     try:

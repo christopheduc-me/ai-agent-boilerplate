@@ -6,21 +6,30 @@
 ' The agentic research loop (ADR-030) with self-critique (ADR-031) and
 ' human-in-the-loop clarification (ADR-032). The LLM policy drives the control
 ' flow; the loop only enforces the mechanics: URL deduplication, the step
-' budget (AGENT_MAX_STEPS, cost guard), the live journal, and the shared
-' enrich/sort/deliver tail. Contrast: the workflow mode is one fixed
-' search -> enrich -> sort pipeline with no decisions.
+' budget (AGENT_MAX_STEPS), the spend cap (AGENT_MAX_COST_USD, ADR-048), the
+' live journal, and the shared enrich/sort/deliver tail. Contrast: the workflow
+' mode is one fixed search -> enrich -> sort pipeline with no decisions.
 
 start
 :mark job started
 (POST /internal/jobs/{id}/started);
 
 repeat
+  if (cost so far >= AGENT_MAX_COST_USD?\n(ADR-048 spend cap)) then (yes)
+    :journal a forced «finish»
+    ("cost budget exhausted");
+    break
+  else (no)
+  endif
   :policy.decide(goal, journal, hits)
   <b>the LLM picks the next action</b>;
   note right
     Defensive parsing everywhere:
     a malformed reply means **finish**,
     never a crash or a burned budget.
+    The **spend cap** (ADR-048) stops the
+    run on money before the step budget;
+    with the keyless fakes cost is $0.
   end note
   switch (action?)
   case (search)

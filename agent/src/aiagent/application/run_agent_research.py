@@ -33,6 +33,7 @@ from aiagent.domain.ports import (
     StepReporter,
 )
 from aiagent.domain.urls import normalize_url
+from aiagent.domain.usage import SpendGuard
 
 logger = logging.getLogger(__name__)
 
@@ -54,6 +55,7 @@ def _self_critique(
     critic: ResultCritic,
     reporter: StepReporter,
     max_steps: int,
+    budget: SpendGuard | None,
 ) -> list[RawSearchHit]:
     """The review pass (ADR-031): drop what the critic judged off-topic,
     journal the verdict, and fill at most one named gap if budget remains."""
@@ -75,7 +77,8 @@ def _self_critique(
     _report(reporter, job_id, step)
 
     searches_done = sum(1 for s in steps if s.kind is AgentStepKind.SEARCH)
-    if critique.gap_query and searches_done < max_steps:
+    over_budget = budget is not None and budget.exceeded()
+    if critique.gap_query and searches_done < max_steps and not over_budget:
         found = search.search(critique.gap_query)
         kept_keys = {normalize_url(h.url) for h in kept}
         new = [h for h in found if normalize_url(h.url) not in kept_keys]
@@ -120,6 +123,7 @@ def run_agent_research(
     seen_urls: set[str] | None = None,
     page_dates: PageDateFetcher | None = None,
     max_steps: int = 5,
+    budget: SpendGuard | None = None,
 ) -> list[ResearchResult] | None:
     """Runs the decision loop, then enriches, sorts and delivers like the
     workflow mode. Failure semantics are identical to `run_research`.
@@ -139,6 +143,19 @@ def run_agent_research(
         steps: list[AgentStep] = []
 
         for seq in range(1, max_steps + 1):
+            # Spend cap (ADR-048): money stops the run before the step budget
+            # if the indicative cost crosses AGENT_MAX_COST_USD — a clean
+            # forced finish, never a crash, like the step budget below.
+            if budget is not None and budget.exceeded():
+                step = AgentStep(
+                    seq=seq,
+                    kind=AgentStepKind.FINISH,
+                    detail="",
+                    reason=f"cost budget of ${budget.cap_usd:.2f} exhausted",
+                )
+                steps.append(step)
+                _report(reporter, job_id, step)
+                break
             action = _ask_guard(policy.decide(goal, steps, hits), clarifier, clarification)
             if isinstance(action, AskAction):
                 # Pause (ADR-032): the backend flips the job to awaiting_input;
@@ -179,8 +196,11 @@ def run_agent_research(
             steps.append(step)
             _report(reporter, job_id, step)
 
-        if critic is not None:
-            hits = _self_critique(job_id, goal, hits, steps, search, critic, reporter, max_steps)
+        # Skip the review pass (an extra LLM call) once over budget (ADR-048).
+        if critic is not None and not (budget is not None and budget.exceeded()):
+            hits = _self_critique(
+                job_id, goal, hits, steps, search, critic, reporter, max_steps, budget
+            )
 
         results = sort_by_publication_date(resolve_hits(hits, enricher, page_dates))
         if seen_urls is not None:
