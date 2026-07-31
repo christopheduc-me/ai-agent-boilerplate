@@ -9,12 +9,13 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::digest::WebhookDigestSender;
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::{router_with_limits, AppState};
+use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
 use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
     InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresRecurringSearchRepository,
+    run_migrations, PostgresJobRepository, PostgresLeaderLock, PostgresRecurringSearchRepository,
     PostgresRefreshTokenRepository, PostgresUserRepository,
 };
 use backend::application::{FailStaleJobs, RunDueSearches};
@@ -109,8 +110,10 @@ async fn serve() {
         Arc<dyn JobRepository>,
         Arc<dyn RefreshTokenRepository>,
         Arc<dyn RecurringSearchRepository>,
+        // Single-leader gate for the background loop (ADR-053).
+        Arc<dyn LeaderLock>,
     );
-    let (users, jobs, refresh_tokens, recurring): Repos = match &config.database_url {
+    let (users, jobs, refresh_tokens, recurring, leader): Repos = match &config.database_url {
         Some(url) => {
             let pool = PgPoolOptions::new()
                 .max_connections(10)
@@ -125,7 +128,8 @@ async fn serve() {
                 Arc::new(PostgresUserRepository::new(pool.clone())),
                 Arc::new(PostgresJobRepository::new(pool.clone())),
                 Arc::new(PostgresRefreshTokenRepository::new(pool.clone())),
-                Arc::new(PostgresRecurringSearchRepository::new(pool)),
+                Arc::new(PostgresRecurringSearchRepository::new(pool.clone())),
+                Arc::new(PostgresLeaderLock::new(pool)),
             )
         }
         None => (
@@ -133,6 +137,8 @@ async fn serve() {
             Arc::new(InMemoryJobRepository::default()),
             Arc::new(InMemoryRefreshTokenRepository::default()),
             Arc::new(InMemoryRecurringSearchRepository::default()),
+            // A single in-memory instance always leads.
+            Arc::new(NoopLeaderLock),
         ),
     };
 
@@ -154,6 +160,11 @@ async fn serve() {
         let mut ticker = tokio::time::interval(tick);
         loop {
             ticker.tick().await;
+            // Only the leader runs the loop (ADR-053): with several replicas the
+            // scheduler would otherwise launch duplicate recurring jobs.
+            if !leader.acquire().await {
+                continue;
+            }
             match reaper.execute().await {
                 Ok(0) => {}
                 Ok(n) => tracing::warn!(reaped = n, "failed stale jobs (timeout)"),
@@ -170,6 +181,7 @@ async fn serve() {
             {
                 tracing::error!(error = %e, "refresh token purge failed");
             }
+            leader.release().await;
         }
     });
 

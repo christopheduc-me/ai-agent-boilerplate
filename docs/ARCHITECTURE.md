@@ -1000,6 +1000,9 @@ Full sequence diagram: `docs/diagrams/hitl-clarification-flow.puml`.
 
 ### ADR-033 — Recurring searches with memory (decided 2026-07-15)
 
+> *Hardened by ADR-053 (2026-07-29)*: the scheduler runs behind a single-leader
+> lock, so multiple backend replicas do not launch duplicate recurring jobs.
+
 **Context**: the monitoring use cases (tech watch, real-estate alerts…) need
 searches that re-run on their own and can tell what changed — the agent must
 live in time, not only answer one-shot requests.
@@ -1644,6 +1647,34 @@ The mechanism is unit-tested with fakes whose structured output is a real
 `RunnableLambda`, so LangChain's actual fallback path is exercised (a raising
 primary, a returning secondary) — no network. Usage metering (ADR-038) reads the
 survivor's `usage_metadata`, so cost is attributed to whichever model answered.
+
+### ADR-053 — Single-leader background loop (decided 2026-07-29, hardens ADR-016/033)
+
+**Context**: the backend runs the reaper (ADR-016), the recurring-search
+scheduler (ADR-033) and the refresh-token purge (ADR-008) on a shared in-process
+ticker (`main.rs`). The API layer is otherwise stateless and horizontally
+scalable (JWT sessions, DB-polling SSE ADR-026, the Redis-backed rate limiter
+ADR-037) — **except this loop**. With several replicas each would run it every
+tick, and the scheduler is **not idempotent**: it would launch *duplicate*
+recurring jobs. That is a correctness bug the moment the backend scales past one
+instance — exactly the multi-machine target of this boilerplate.
+
+**Decision**: gate the tick behind a `LeaderLock` so exactly one replica runs
+the loop. `PostgresLeaderLock` takes a **session advisory lock**
+(`pg_try_advisory_lock`) on a fixed key: the first replica to win runs the tick
+and releases after, so leadership rotates naturally tick-to-tick; the others
+skip. No new infrastructure — Postgres is already there — and no leader election
+protocol. The connection that took the lock is **held until release** (a session
+advisory lock must be unlocked on the same connection) and returned to the pool
+between ticks; if a leader crashes mid-tick its session ends and the lock frees
+automatically. The in-memory / single-instance path uses a `NoopLeaderLock` that
+always leads. The reaper and purge are idempotent, but gating the whole tick
+also spares every replica a redundant DB scan.
+
+Tested: the `NoopLeaderLock` in a unit test, and the Postgres mutual-exclusion
+(a second instance is locked out until the first releases) in a `DATABASE_URL`-
+gated integration test with a per-run key, so it never contends with a live
+instance. This closes the backend's horizontal-scaling story.
 
 ---
 

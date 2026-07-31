@@ -6,13 +6,83 @@
 
 use async_trait::async_trait;
 use chrono::{DateTime, Utc};
+use sqlx::pool::PoolConnection;
 use sqlx::postgres::PgRow;
-use sqlx::{PgPool, Row};
+use sqlx::{PgPool, Postgres, Row};
+use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use crate::adapters::leader_lock::LeaderLock;
 use crate::domain::ports::{
     JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
 };
+
+/// Advisory-lock key for the background loop (ADR-053): a fixed application id
+/// so every replica contends on the same lock.
+const SCHEDULER_LOCK_KEY: i64 = 918_273_645;
+
+/// A `LeaderLock` backed by a PostgreSQL **session advisory lock**
+/// (`pg_try_advisory_lock`). Only one replica can hold the key at a time, so
+/// only one runs the background loop per tick (ADR-053). The connection that
+/// took the lock is held until `release`, because a session advisory lock must
+/// be unlocked on the same connection — and it is returned to the pool between
+/// ticks, so the lock can rotate. If the process dies, the session ends and the
+/// lock frees automatically.
+pub struct PostgresLeaderLock {
+    pool: PgPool,
+    key: i64,
+    held: Mutex<Option<PoolConnection<Postgres>>>,
+}
+
+impl PostgresLeaderLock {
+    pub fn new(pool: PgPool) -> Self {
+        Self::with_key(pool, SCHEDULER_LOCK_KEY)
+    }
+
+    /// A leader lock on a specific advisory key — for independent background
+    /// loops, or an isolated key in tests.
+    pub fn with_key(pool: PgPool, key: i64) -> Self {
+        Self {
+            pool,
+            key,
+            held: Mutex::new(None),
+        }
+    }
+}
+
+#[async_trait]
+impl LeaderLock for PostgresLeaderLock {
+    async fn acquire(&self) -> bool {
+        let mut conn = match self.pool.acquire().await {
+            Ok(conn) => conn,
+            Err(e) => {
+                tracing::error!(error = %e, "leader lock: cannot acquire a connection");
+                return false;
+            }
+        };
+        let acquired = sqlx::query_scalar::<_, bool>("SELECT pg_try_advisory_lock($1)")
+            .bind(self.key)
+            .fetch_one(&mut *conn)
+            .await
+            .unwrap_or(false);
+        if acquired {
+            *self.held.lock().await = Some(conn);
+        }
+        acquired
+    }
+
+    async fn release(&self) {
+        if let Some(mut conn) = self.held.lock().await.take() {
+            if let Err(e) = sqlx::query("SELECT pg_advisory_unlock($1)")
+                .bind(self.key)
+                .execute(&mut *conn)
+                .await
+            {
+                tracing::error!(error = %e, "leader lock: advisory unlock failed");
+            }
+        }
+    }
+}
 use crate::domain::{
     AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
     RefreshToken, ResearchJob, SearchResult, User,
