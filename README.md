@@ -149,13 +149,17 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (39 ADRs), COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (50 ADRs), FORKING.md, COMMANDS.md, diagrams/
 ```
 
 ## Documentation
 
+- [docs/FORKING.md](docs/FORKING.md) — **make it yours**: swap the example
+  domain for your own agent task at the hexagonal seams, keep the infrastructure.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-039), kept in sync with the code at all times.
+  (ADR-001 → ADR-050), kept in sync with the code at all times.
+- [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — the three pillars (traces,
+  logs, metrics), what to measure and where to find it.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.
 - [docs/diagrams/](docs/diagrams/README.md) — PlantUML diagrams with an
   illustrated index: hexagonal architecture, job lifecycle state machine,
