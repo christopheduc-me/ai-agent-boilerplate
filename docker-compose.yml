@@ -53,6 +53,9 @@ services:
       RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-}
       # Digest webhook HMAC signing (ADR-047): empty = unsigned.
       DIGEST_SIGNING_SECRET: ${DIGEST_SIGNING_SECRET:-}
+      # Allow internal-network digest webhook targets (ADR-055): empty/false =
+      # SSRF-guarded (public only).
+      DIGEST_ALLOW_PRIVATE_WEBHOOKS: ${DIGEST_ALLOW_PRIVATE_WEBHOOKS:-}
       # Background loop cadence (reaper + recurring scheduler, ADR-033).
       SCHEDULER_TICK_SECONDS: ${SCHEDULER_TICK_SECONDS:-60}
       # Traces (ADR-029): empty = disabled.

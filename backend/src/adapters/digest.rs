@@ -89,18 +89,18 @@ async fn ensure_public_host(url: &str, allow_private: bool) -> Result<(), PortEr
 pub struct WebhookDigestSender {
     client: reqwest::Client,
     secret: Option<String>,
-    // Skip the SSRF host check — only tests hitting a local stub set this.
+    // Skip the SSRF host check (ADR-055): the DIGEST_ALLOW_PRIVATE_WEBHOOKS
+    // opt-in, and tests hitting a local stub.
     allow_private: bool,
 }
 
 impl WebhookDigestSender {
-    /// With a `secret`, every digest is signed with HMAC-SHA256 (ADR-047);
-    /// an empty secret is treated as no secret (unsigned).
-    pub fn new(secret: Option<String>) -> Self {
-        Self::with_allow_private(secret, false)
-    }
-
-    fn with_allow_private(secret: Option<String>, allow_private: bool) -> Self {
+    /// With a `secret`, every digest is signed with HMAC-SHA256 (ADR-047); an
+    /// empty secret is treated as no secret (unsigned). `allow_private` skips the
+    /// SSRF host check (ADR-055) — off in production unless a fork explicitly
+    /// opts in via `DIGEST_ALLOW_PRIVATE_WEBHOOKS` for an internal notification
+    /// target on a trusted network.
+    pub fn new(secret: Option<String>, allow_private: bool) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
@@ -117,7 +117,7 @@ impl WebhookDigestSender {
 
 impl Default for WebhookDigestSender {
     fn default() -> Self {
-        Self::new(None)
+        Self::new(None, false)
     }
 }
 
@@ -230,7 +230,7 @@ mod tests {
     async fn posts_the_digest_json_unsigned_by_default() {
         let (url, received) = spawn_stub(204).await;
 
-        WebhookDigestSender::with_allow_private(None, true)
+        WebhookDigestSender::new(None, true)
             .send(&url, &a_digest())
             .await
             .unwrap();
@@ -247,7 +247,7 @@ mod tests {
     async fn signs_the_body_with_hmac_sha256_when_a_secret_is_set() {
         let (url, received) = spawn_stub(204).await;
 
-        WebhookDigestSender::with_allow_private(Some("s3cret".into()), true)
+        WebhookDigestSender::new(Some("s3cret".into()), true)
             .send(&url, &a_digest())
             .await
             .unwrap();
@@ -272,7 +272,7 @@ mod tests {
     #[tokio::test]
     async fn non_success_statuses_surface_as_errors() {
         let (url, _) = spawn_stub(500).await;
-        let err = WebhookDigestSender::with_allow_private(None, true)
+        let err = WebhookDigestSender::new(None, true)
             .send(&url, &a_digest())
             .await
             .unwrap_err();
@@ -325,7 +325,7 @@ mod tests {
 
     #[tokio::test]
     async fn send_refuses_an_internal_webhook_before_any_request() {
-        let err = WebhookDigestSender::new(None)
+        let err = WebhookDigestSender::new(None, false)
             .send("http://169.254.169.254/latest/meta-data/", &a_digest())
             .await
             .unwrap_err();

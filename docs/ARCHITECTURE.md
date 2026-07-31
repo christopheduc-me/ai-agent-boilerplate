@@ -1736,6 +1736,18 @@ attacker could still slip through — mitigating that fully needs pinning the
 connection to the checked IP (a documented follow-up); the guards stop every
 realistic case (internal hostnames, literal internal IPs, `localhost`).
 
+**Scope note — inter-brick traffic is not affected.** The SSRF guards sit only
+on the two surfaces reaching the outside world: the *user-supplied* digest
+webhook and *arbitrary result-page* URLs. The trusted internal channels
+(backend → agent via `AGENT_API_URL`, agent → backend via `BACKEND_INTERNAL_URL`,
+Postgres/Redis) use configured endpoints and never pass through these guards, so
+a Docker-network or private-network deployment is unaffected. The one legitimate
+case the guard would otherwise block — a fork whose **notification** service
+(n8n, a relay) lives on the same private network — is covered by an opt-in,
+`DIGEST_ALLOW_PRIVATE_WEBHOOKS=true` (default off): it flips the digest sender's
+`allow_private`, allowing internal webhook targets on a trusted network. The
+page fetcher keeps no opt-in — result pages are public by nature.
+
 ---
 
 ## 4. API contracts (summary)

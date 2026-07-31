@@ -191,7 +191,10 @@ async fn serve() {
         refresh_tokens,
         recurring,
         dispatcher,
-        Arc::new(WebhookDigestSender::new(config.digest_signing_secret)),
+        Arc::new(WebhookDigestSender::new(
+            config.digest_signing_secret,
+            config.digest_allow_private_webhooks,
+        )),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),
         config.internal_token,

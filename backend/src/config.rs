@@ -51,6 +51,11 @@ pub struct AppConfig {
     /// Shared secret for signing outbound digest webhooks (ADR-047). None
     /// (unset/empty) leaves digests unsigned — opt-in, like the Redis limiter.
     pub digest_signing_secret: Option<String>,
+    /// Allow digest webhooks to target private/internal addresses (ADR-055):
+    /// off by default (SSRF guard on the user-supplied URL), opt-in for a fork
+    /// whose notification service (n8n, a relay…) lives on the same trusted
+    /// private network.
+    pub digest_allow_private_webhooks: bool,
     /// Degraded-mode notices to log once tracing is up (dev fallbacks, ADR-013).
     pub warnings: Vec<&'static str>,
 }
@@ -124,6 +129,8 @@ impl AppConfig {
             refresh_token_days: i64::from(get_u32("REFRESH_TOKEN_DAYS", 30)),
             bind_addr: get("BIND_ADDR").unwrap_or_else(|| "0.0.0.0:8000".into()),
             digest_signing_secret: get("DIGEST_SIGNING_SECRET"),
+            digest_allow_private_webhooks: get("DIGEST_ALLOW_PRIVATE_WEBHOOKS")
+                .is_some_and(|v| v == "true"),
             warnings,
         })
     }
@@ -161,6 +168,21 @@ mod tests {
         })
         .unwrap();
         assert!(!strong.warnings.iter().any(|w| w.contains("shorter than")));
+    }
+
+    #[test]
+    fn digest_private_webhooks_are_opt_in() {
+        // ADR-055: off by default (SSRF guard), on only when explicitly set.
+        assert!(
+            !AppConfig::from_lookup(lookup_from(&[]))
+                .unwrap()
+                .digest_allow_private_webhooks
+        );
+        assert!(
+            AppConfig::from_lookup(lookup_from(&[("DIGEST_ALLOW_PRIVATE_WEBHOOKS", "true")]))
+                .unwrap()
+                .digest_allow_private_webhooks
+        );
     }
 
     #[test]
