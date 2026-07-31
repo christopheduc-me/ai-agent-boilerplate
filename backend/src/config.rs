@@ -93,9 +93,23 @@ impl AppConfig {
                 .push("DATABASE_URL not set, using in-memory persistence (data lost on restart)");
         }
 
+        let internal_token = get("INTERNAL_API_TOKEN").unwrap_or_else(|| "change-me".into());
+        // Weak-secret warning (ADR-055): a short HMAC/JWT key is brute-forceable.
+        // A warning, not a hard fail, so it never breaks an existing deployment.
+        const MIN_SECRET_LEN: usize = 32;
+        let too_short = |v: &str| v.len() < MIN_SECRET_LEN && !PLACEHOLDERS.contains(&v);
+        if too_short(&jwt_secret) {
+            warnings.push("JWT_SECRET is shorter than 32 characters — use a long, random value");
+        }
+        if too_short(&internal_token) {
+            warnings.push(
+                "INTERNAL_API_TOKEN is shorter than 32 characters — use a long, random value",
+            );
+        }
+
         Ok(Self {
             jwt_secret,
-            internal_token: get("INTERNAL_API_TOKEN").unwrap_or_else(|| "change-me".into()),
+            internal_token,
             agent_api_url,
             database_url,
             job_timeout_minutes: u64::from(get_u32("JOB_TIMEOUT_MINUTES", 15)),
@@ -129,6 +143,24 @@ mod tests {
     fn all_present_and_real_means_nothing_missing() {
         let lookup = lookup_from(&[("JWT_SECRET", "s3cret"), ("DATABASE_URL", "postgres://x")]);
         assert!(missing_required(&["JWT_SECRET", "DATABASE_URL"], lookup).is_empty());
+    }
+
+    #[test]
+    fn short_secrets_warn_and_strong_ones_do_not() {
+        // ADR-055: a real-but-short secret is flagged (not failed).
+        let weak = AppConfig::from_lookup(lookup_from(&[("JWT_SECRET", "short")])).unwrap();
+        assert!(weak
+            .warnings
+            .iter()
+            .any(|w| w.contains("JWT_SECRET is shorter")));
+
+        let strong = AppConfig::from_lookup(|name| match name {
+            "JWT_SECRET" => Some("x".repeat(40)),
+            "INTERNAL_API_TOKEN" => Some("y".repeat(40)),
+            _ => None,
+        })
+        .unwrap();
+        assert!(!strong.warnings.iter().any(|w| w.contains("shorter than")));
     }
 
     #[test]
@@ -172,7 +204,7 @@ mod tests {
     #[test]
     fn app_config_parses_overrides_and_ignores_garbage_numbers() {
         let config = AppConfig::from_lookup(lookup_from(&[
-            ("JWT_SECRET", "real"),
+            ("JWT_SECRET", "the-quick-brown-fox-jumps-over-the-lazy-dog"),
             ("AGENT_API_URL", "http://agent:8001"),
             ("DATABASE_URL", "postgres://x"),
             ("DAILY_SEARCH_QUOTA", "5"),
@@ -206,8 +238,11 @@ mod tests {
     fn app_config_accepts_a_complete_production_env() {
         let config = AppConfig::from_lookup(lookup_from(&[
             ("APP_ENV", "production"),
-            ("JWT_SECRET", "s"),
-            ("INTERNAL_API_TOKEN", "t"),
+            ("JWT_SECRET", "the-quick-brown-fox-jumps-over-the-lazy-dog"),
+            (
+                "INTERNAL_API_TOKEN",
+                "pack-my-box-with-five-dozen-liquor-jugs-ok",
+            ),
             ("DATABASE_URL", "postgres://x"),
             ("AGENT_API_URL", "http://agent:8001"),
         ]))

@@ -6,11 +6,15 @@ parse. Everything here is defensive: a dead page, a parser error or garbage
 metadata just mean "no date", never a failed job.
 """
 
+import ipaddress
 import json
 import logging
+import socket
+from collections.abc import Callable
 from datetime import datetime
 from html.parser import HTMLParser
 from typing import Any
+from urllib.parse import urlsplit
 
 import httpx
 
@@ -20,6 +24,18 @@ logger = logging.getLogger(__name__)
 
 #: Pages are fetched to read <head> metadata: 512 KiB is plenty.
 MAX_BYTES = 512 * 1024
+
+
+def is_public_host(host: str) -> bool:
+    """True only when `host` resolves entirely to public (global) IPs (ADR-055).
+    A result URL is attacker-influenceable, so the fetch must not reach internal
+    services (`localhost`, `redis`, `169.254.169.254`…). Combined with redirects
+    disabled on the client, the request can only land on a public address."""
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except socket.gaierror:
+        return False
+    return bool(infos) and all(ipaddress.ip_address(info[4][0]).is_global for info in infos)
 
 
 class _MetadataCollector(HTMLParser):
@@ -89,14 +105,28 @@ class HttpPageDateFetcher:
     cap) and silent on failure — stage 2 is an opportunistic improvement, the
     cascade continues to the LLM without it."""
 
-    def __init__(self, client: httpx.Client | None = None) -> None:
+    def __init__(
+        self,
+        client: httpx.Client | None = None,
+        is_public: Callable[[str], bool] = is_public_host,
+    ) -> None:
         self._client = client or httpx.Client(
             timeout=10,
-            follow_redirects=True,
+            # No redirects (ADR-055): a public URL must not 3xx to an internal
+            # one after the host check below.
+            follow_redirects=False,
             headers={"User-Agent": "aiagent-boilerplate/1.0 (+date metadata)"},
         )
+        # Injectable so tests can bypass the real DNS resolution (ADR-055).
+        self._is_public = is_public
 
     def fetch_published_date(self, url: str) -> datetime | None:
+        # SSRF guard (ADR-055): result URLs are attacker-influenceable, so refuse
+        # a host that resolves to an internal address before fetching.
+        host = urlsplit(url).hostname
+        if not host or not self._is_public(host):
+            logger.info("page date fetch skipped: non-public host", extra={"url": url})
+            return None
         try:
             with self._client.stream("GET", url) as response:
                 response.raise_for_status()

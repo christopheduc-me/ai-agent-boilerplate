@@ -356,11 +356,27 @@ fn session_response(state: &AppState, tokens: SessionTokens) -> Response {
 }
 
 /// Returns a rejection response when the internal token is missing or wrong.
+/// Constant-time byte comparison (ADR-055): the loop runs over the whole input
+/// regardless of where a mismatch is, so the compare time does not leak how much
+/// of a guessed token was correct. The length is allowed to short-circuit (it is
+/// not the secret). Mirrors the constant-time check the HMAC path already uses.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
 fn check_internal_token(state: &AppState, headers: &HeaderMap) -> Option<Response> {
-    let provided = headers
+    let matches = headers
         .get("x-internal-token")
-        .and_then(|v| v.to_str().ok());
-    if provided != Some(state.internal_token.as_str()) {
+        .map(|v| constant_time_eq(v.as_bytes(), state.internal_token.as_bytes()))
+        .unwrap_or(false);
+    if !matches {
         return Some(error_body(
             StatusCode::UNAUTHORIZED,
             "invalid or missing internal token",
@@ -921,5 +937,19 @@ async fn internal_failure(
             tracing::error!(error = %e, "ingest failure failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::constant_time_eq;
+
+    #[test]
+    fn constant_time_eq_matches_only_identical_bytes() {
+        assert!(constant_time_eq(b"same-token", b"same-token"));
+        assert!(!constant_time_eq(b"same-token", b"diff-token"));
+        assert!(!constant_time_eq(b"short", b"longer-token")); // length differs
+        assert!(!constant_time_eq(b"", b"x"));
+        assert!(constant_time_eq(b"", b""));
     }
 }

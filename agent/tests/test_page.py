@@ -58,8 +58,26 @@ def test_fetcher_reads_the_page_and_degrades_silently() -> None:
     respx.get("https://ex.com/missing").mock(return_value=httpx.Response(404))
     respx.get("https://ex.com/down").mock(side_effect=httpx.ConnectError("refused"))
 
-    fetcher = HttpPageDateFetcher(client=httpx.Client())
+    # Bypass the SSRF host check (ADR-055) so the test needs no real DNS.
+    fetcher = HttpPageDateFetcher(client=httpx.Client(), is_public=lambda _host: True)
 
     assert fetcher.fetch_published_date("https://ex.com/dated") == datetime(2026, 2, 2, tzinfo=UTC)
     assert fetcher.fetch_published_date("https://ex.com/missing") is None
     assert fetcher.fetch_published_date("https://ex.com/down") is None
+
+
+def test_is_public_host_blocks_internal_and_allows_public() -> None:
+    from aiagent.adapters.page import is_public_host
+
+    for host in ("127.0.0.1", "10.0.0.1", "192.168.1.1", "169.254.169.254", "localhost", "::1"):
+        assert not is_public_host(host), f"{host} must be blocked"
+    for host in ("8.8.8.8", "1.1.1.1"):
+        assert is_public_host(host), f"{host} must be allowed"
+
+
+def test_fetcher_refuses_an_internal_url() -> None:
+    # Default guard (real resolution): loopback literals/localhost are refused
+    # offline, and the fetch degrades to None before any request is made.
+    fetcher = HttpPageDateFetcher(client=httpx.Client())
+    assert fetcher.fetch_published_date("http://127.0.0.1:6379/") is None
+    assert fetcher.fetch_published_date("http://localhost/admin") is None

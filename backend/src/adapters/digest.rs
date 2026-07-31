@@ -12,6 +12,8 @@
 //! `X-Signature-256` header, so the consumer can *authenticate* it — a public
 //! webhook URL is otherwise forgeable by anyone who learns it.
 
+use std::net::IpAddr;
+
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
@@ -23,21 +25,92 @@ type HmacSha256 = Hmac<Sha256>;
 /// Header carrying `sha256=<hex HMAC of the raw body>` (GitHub convention).
 const SIGNATURE_HEADER: &str = "X-Signature-256";
 
+/// True if `ip` is not a public/global address — loopback, private, link-local,
+/// CGNAT, etc. (ADR-055). Used to keep the user-supplied webhook URL from
+/// reaching internal services (SSRF).
+fn is_blocked_ip(ip: IpAddr) -> bool {
+    match ip {
+        IpAddr::V4(v4) => {
+            v4.is_private()
+                || v4.is_loopback()
+                || v4.is_link_local()
+                || v4.is_broadcast()
+                || v4.is_documentation()
+                || v4.is_unspecified()
+                || v4.is_multicast()
+                // 100.64.0.0/10 carrier-grade NAT.
+                || (v4.octets()[0] == 100 && (0x40..=0x7f).contains(&v4.octets()[1]))
+        }
+        IpAddr::V6(v6) => {
+            v6.is_loopback()
+                || v6.is_unspecified()
+                || v6.is_multicast()
+                || matches!(v6.to_ipv4_mapped(), Some(v4) if is_blocked_ip(IpAddr::V4(v4)))
+                // Unique local fc00::/7.
+                || (v6.segments()[0] & 0xfe00) == 0xfc00
+                // Link-local fe80::/10.
+                || (v6.segments()[0] & 0xffc0) == 0xfe80
+        }
+    }
+}
+
+/// Rejects a webhook URL whose host resolves to a non-public address (ADR-055),
+/// so an authenticated user cannot point the digest at `169.254.169.254`,
+/// `localhost`, `redis:6379`, the internal API… Combined with redirects being
+/// disabled on the client, the request can only reach a public host.
+async fn ensure_public_host(url: &str, allow_private: bool) -> Result<(), PortError> {
+    if allow_private {
+        return Ok(());
+    }
+    let parsed =
+        reqwest::Url::parse(url).map_err(|e| PortError(format!("invalid webhook url: {e}")))?;
+    let host = parsed
+        .host_str()
+        .ok_or_else(|| PortError("webhook url has no host".into()))?;
+    let port = parsed.port_or_known_default().unwrap_or(0);
+    let mut resolved = tokio::net::lookup_host((host, port))
+        .await
+        .map_err(|e| PortError(format!("cannot resolve webhook host: {e}")))?
+        .peekable();
+    if resolved.peek().is_none() {
+        return Err(PortError("webhook host did not resolve".into()));
+    }
+    for addr in resolved {
+        if is_blocked_ip(addr.ip()) {
+            return Err(PortError(format!(
+                "webhook host resolves to a non-public address ({})",
+                addr.ip()
+            )));
+        }
+    }
+    Ok(())
+}
+
 pub struct WebhookDigestSender {
     client: reqwest::Client,
     secret: Option<String>,
+    // Skip the SSRF host check — only tests hitting a local stub set this.
+    allow_private: bool,
 }
 
 impl WebhookDigestSender {
     /// With a `secret`, every digest is signed with HMAC-SHA256 (ADR-047);
     /// an empty secret is treated as no secret (unsigned).
     pub fn new(secret: Option<String>) -> Self {
+        Self::with_allow_private(secret, false)
+    }
+
+    fn with_allow_private(secret: Option<String>, allow_private: bool) -> Self {
         Self {
             client: reqwest::Client::builder()
                 .timeout(std::time::Duration::from_secs(5))
+                // No redirects (ADR-055): a public URL must not 3xx to an
+                // internal one after the host check.
+                .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .expect("reqwest client"),
             secret: secret.filter(|s| !s.is_empty()),
+            allow_private,
         }
     }
 }
@@ -66,6 +139,9 @@ fn sign(secret: &str, body: &[u8]) -> String {
 #[async_trait]
 impl DigestSender for WebhookDigestSender {
     async fn send(&self, webhook_url: &str, digest: &Digest) -> Result<(), PortError> {
+        // SSRF guard (ADR-055): the URL is user-supplied, so refuse a host that
+        // resolves to an internal address before making any request.
+        ensure_public_host(webhook_url, self.allow_private).await?;
         // Serialize once so the signature covers exactly the bytes we send.
         let body = serde_json::to_vec(digest)
             .map_err(|e| PortError(format!("digest serialization failed: {e}")))?;
@@ -154,7 +230,7 @@ mod tests {
     async fn posts_the_digest_json_unsigned_by_default() {
         let (url, received) = spawn_stub(204).await;
 
-        WebhookDigestSender::default()
+        WebhookDigestSender::with_allow_private(None, true)
             .send(&url, &a_digest())
             .await
             .unwrap();
@@ -171,7 +247,7 @@ mod tests {
     async fn signs_the_body_with_hmac_sha256_when_a_secret_is_set() {
         let (url, received) = spawn_stub(204).await;
 
-        WebhookDigestSender::new(Some("s3cret".into()))
+        WebhookDigestSender::with_allow_private(Some("s3cret".into()), true)
             .send(&url, &a_digest())
             .await
             .unwrap();
@@ -196,10 +272,63 @@ mod tests {
     #[tokio::test]
     async fn non_success_statuses_surface_as_errors() {
         let (url, _) = spawn_stub(500).await;
-        let err = WebhookDigestSender::default()
+        let err = WebhookDigestSender::with_allow_private(None, true)
             .send(&url, &a_digest())
             .await
             .unwrap_err();
         assert!(err.to_string().contains("500"));
+    }
+
+    // ---------------------------------------------------------------- SSRF guard (ADR-055)
+
+    #[test]
+    fn blocks_non_public_ips_and_allows_public_ones() {
+        for ip in [
+            "127.0.0.1",
+            "10.0.0.1",
+            "192.168.1.1",
+            "172.16.0.1",
+            "169.254.169.254", // cloud metadata
+            "100.64.0.1",      // CGNAT
+            "0.0.0.0",
+            "::1",
+            "fe80::1", // link-local
+            "fc00::1", // unique local
+        ] {
+            assert!(is_blocked_ip(ip.parse().unwrap()), "{ip} must be blocked");
+        }
+        for ip in ["8.8.8.8", "1.1.1.1", "2606:4700:4700::1111"] {
+            assert!(!is_blocked_ip(ip.parse().unwrap()), "{ip} must be allowed");
+        }
+    }
+
+    #[tokio::test]
+    async fn refuses_a_webhook_resolving_to_an_internal_host() {
+        // Literal internal addresses and `localhost` (via /etc/hosts) — offline.
+        for url in [
+            "http://127.0.0.1:6379/",
+            "http://10.0.0.5/",
+            "http://localhost/hook",
+        ] {
+            assert!(
+                ensure_public_host(url, false).await.is_err(),
+                "{url} must be refused"
+            );
+        }
+        // A public literal is allowed (no DNS needed).
+        assert!(ensure_public_host("http://8.8.8.8/hook", false)
+            .await
+            .is_ok());
+        // The escape hatch (tests) skips the check.
+        assert!(ensure_public_host("http://127.0.0.1/", true).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn send_refuses_an_internal_webhook_before_any_request() {
+        let err = WebhookDigestSender::new(None)
+            .send("http://169.254.169.254/latest/meta-data/", &a_digest())
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("non-public"));
     }
 }

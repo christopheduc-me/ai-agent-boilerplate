@@ -1704,6 +1704,38 @@ included); the SPA and edge headers were verified live against the running
 stack. Tune the SPA CSP if a fork adds an external font/CDN or images from third
 parties (`img-src`).
 
+### ADR-055 — Security hardening pass: SSRF, constant-time, weak secrets (decided 2026-07-29)
+
+**Context**: a review of every trust boundary (see the checklist below) found
+the auth, cookies (HttpOnly/Secure/SameSite=Strict), CORS (absent = same-origin
+only), JWT (HS256 pinned + exp), argon2id, parametrized SQL and the fail-fast
+secret gate (ADR-020) all sound — but four gaps worth closing.
+
+1. **SSRF on the digest webhook** (highest — user-controlled URL). `webhook_url`
+   was validated for scheme only, and `reqwest` followed redirects with no IP
+   filtering: an authenticated user could point a recurring digest at
+   `169.254.169.254`, `redis:6379`, the internal API… `WebhookDigestSender` now
+   resolves the host and **refuses any non-public address** (loopback, private,
+   link-local, CGNAT, ULA…) *before* sending, and the client **disables
+   redirects** so a public URL cannot 3xx to an internal one.
+2. **SSRF on the page fetcher** (agent, blind). The date-fetch stage pulls result
+   URLs — attacker-influenceable. It now applies the same public-host check
+   (`is_public_host`, injectable for tests) and **disables redirects**; a blocked
+   host degrades silently to "no date", like any other fetch failure.
+3. **Non-constant-time internal-token compare**. `check_internal_token` used
+   `!=`, a timing side-channel; replaced with a `constant_time_eq` byte compare,
+   matching the constant-time care the HMAC path (ADR-047) already takes.
+4. **Weak-secret warning**. A short (`< 32` char) `JWT_SECRET` / `INTERNAL_API_TOKEN`
+   is a brute-forceable key; the config now warns (not a hard fail, so it never
+   breaks an existing deployment).
+
+Each fix is unit-tested (the IP classifier and host guard with literals — no
+network; the token compare; the config warning). **Residual risk**: the SSRF
+guards resolve then let the client re-resolve, so a determined **DNS-rebinding**
+attacker could still slip through — mitigating that fully needs pinning the
+connection to the checked IP (a documented follow-up); the guards stop every
+realistic case (internal hostnames, literal internal IPs, `localhost`).
+
 ---
 
 ## 4. API contracts (summary)
