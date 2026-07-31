@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-53-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-54-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
@@ -76,7 +76,7 @@ the patterns you would otherwise rebuild from scratch on every agent project.
 - **Per-run cost tracking** — every run reports its real API spend (Claude
   tokens + search calls, env-configurable rates); the UI shows the cost per
   search and the total, so "LLM calls cost money" stops being abstract.
-- **Every decision written down** — 53 Architecture Decision Records in
+- **Every decision written down** — 54 Architecture Decision Records in
   [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), including the rejected
   alternatives and the trade-offs.
 
@@ -149,7 +149,7 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (53 ADRs), FORKING.md, COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (54 ADRs), FORKING.md, COMMANDS.md, diagrams/
 ```
 
 ## Documentation
@@ -157,7 +157,7 @@ docs/                           # ARCHITECTURE.md (53 ADRs), FORKING.md, COMMAND
 - [docs/FORKING.md](docs/FORKING.md) — **make it yours**: swap the example
   domain for your own agent task at the hexagonal seams, keep the infrastructure.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-053), kept in sync with the code at all times.
+  (ADR-001 → ADR-054), kept in sync with the code at all times.
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — the three pillars (traces,
   logs, metrics), what to measure and where to find it.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.

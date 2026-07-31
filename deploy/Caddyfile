@@ -1,5 +1,10 @@
 # Production reverse proxy (ADR-015). Replace example.com with the real domain.
 example.com {
+	# HSTS belongs at the TLS edge (ADR-054): Caddy terminates HTTPS, so it is
+	# the right place to tell browsers to stick to it. The app-level headers
+	# (CSP, X-Frame-Options…) are set by the backend and nginx and pass through.
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
 	handle /api/* {
 		reverse_proxy backend:8000
 	}

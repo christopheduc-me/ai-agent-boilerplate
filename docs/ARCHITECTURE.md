@@ -1676,6 +1676,34 @@ Tested: the `NoopLeaderLock` in a unit test, and the Postgres mutual-exclusion
 gated integration test with a per-run key, so it never contends with a live
 instance. This closes the backend's horizontal-scaling story.
 
+### ADR-054 — HTTP security headers (decided 2026-07-29)
+
+**Context**: neither the API, the SPA nor the TLS edge set any security headers
+— a standard hardening gap (clickjacking, MIME sniffing, referrer leakage, no
+declared content policy).
+
+**Decision**: set them at the layer that owns each response, so there is exactly
+one source per header (no duplicates).
+
+- **Backend API** (`security_headers` middleware, outermost so it covers error
+  responses too): `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`,
+  `Referrer-Policy: no-referrer`, and a **maximally strict CSP**
+  `default-src 'none'; frame-ancestors 'none'` — a browser should never load
+  anything from, or frame, a JSON endpoint.
+- **Frontend SPA** (nginx, on the HTML `location /` only — the `/api` proxy keeps
+  the backend's headers): the same three headers plus the app's real
+  **`Content-Security-Policy`** — `default-src 'self'`, `connect-src 'self'`
+  (same-origin API + SSE), `script-src 'self'`, `style-src 'self' 'unsafe-inline'`
+  (Vue SFC styles), `object-src 'none'`, `frame-ancestors 'none'`. The Vite build
+  ships external JS/CSS with no inline scripts, so `script-src 'self'` holds.
+- **TLS edge** (Caddy): `Strict-Transport-Security` — HSTS belongs where HTTPS is
+  terminated, not on the app behind the proxy over plain HTTP.
+
+The API middleware is unit-tested (headers present on every response, errors
+included); the SPA and edge headers were verified live against the running
+stack. Tune the SPA CSP if a fork adds an external font/CDN or images from third
+parties (`img-src`).
+
 ---
 
 ## 4. API contracts (summary)

@@ -3,6 +3,7 @@
 
 pub mod rate_limit;
 pub mod request_id;
+pub mod security_headers;
 pub mod sse;
 
 use std::sync::Arc;
@@ -280,8 +281,12 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .route("/internal/jobs/{id}/question", post(internal_question))
         .route("/internal/jobs/{id}/usage", post(internal_usage))
         .route("/internal/jobs/{id}/failure", post(internal_failure))
-        // Outermost layer: every request gets a correlation span (ADR-018).
+        // Correlation span (ADR-018) around every request.
         .layer(axum::middleware::from_fn(request_id::request_id))
+        // Outermost: security headers on every response, errors included (ADR-054).
+        .layer(axum::middleware::from_fn(
+            security_headers::security_headers,
+        ))
         .with_state(state)
 }
 

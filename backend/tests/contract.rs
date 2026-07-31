@@ -453,3 +453,28 @@ async fn backend_produces_the_public_contract_fixtures() {
         "recurring wire shape drifted from the fixture"
     );
 }
+
+#[tokio::test]
+async fn security_headers_are_set_on_every_response() {
+    // ADR-054: hardening headers on all responses, errors included.
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let headers = response.headers();
+    assert_eq!(headers.get("x-content-type-options").unwrap(), "nosniff");
+    assert_eq!(headers.get("x-frame-options").unwrap(), "DENY");
+    assert_eq!(headers.get("referrer-policy").unwrap(), "no-referrer");
+    assert!(headers
+        .get("content-security-policy")
+        .unwrap()
+        .to_str()
+        .unwrap()
+        .contains("default-src 'none'"));
+}
