@@ -1621,6 +1621,30 @@ N engines = N credits per aggregated query. The fusion and the aggregator's
 concurrency/tolerance are unit-tested with fake providers (no network); the
 concrete DuckDuckGo adapter, like Tavily, is not exercised in CI (ADR-012).
 
+### ADR-052 — LLM fallback chain (decided 2026-07-29, extends ADR-041/044)
+
+**Context**: with search aggregated (ADR-051), the **LLM provider is the biggest
+remaining external single point of failure** — if Anthropic is down or the key
+is quota'd, *every* agent call fails and the job dies. Per-call retries (ADR-044)
+absorb a transient blip; they do nothing for a provider *outage*.
+
+**Decision**: a fallback chain via LangChain's `.with_fallbacks()`, at the same
+construction seam as the model factory (ADR-041) — no new port. Each adapter
+binds structured output on the primary and each fallback, then chains them:
+`structured_with_fallbacks([primary, *fallbacks], schema)`. The primary runs
+first; on error the next model is tried, in order. Fallbacks are configured with
+`AGENT_MODEL_FALLBACKS` — `backend:model_id` specs (the eval harness grammar,
+ADR-045), e.g. `anthropic:claude-haiku-4-5,ollama:qwen3:14b` — so the chain can
+cross providers, ending on a **keyless local Ollama** for a last-resort survival
+with zero external dependency. Empty by default: a single model means no wrapper,
+i.e. the exact previous behavior (backward compatible, so the `fallbacks=[]`
+default leaves every existing call site untouched).
+
+The mechanism is unit-tested with fakes whose structured output is a real
+`RunnableLambda`, so LangChain's actual fallback path is exercised (a raising
+primary, a returning secondary) — no network. Usage metering (ADR-038) reads the
+survivor's `usage_metadata`, so cost is attributed to whichever model answered.
+
 ---
 
 ## 4. API contracts (summary)

@@ -65,6 +65,10 @@ class Settings:
     # no built-in retry and relies on the Celery task retry).
     llm_timeout_seconds: float
     llm_max_retries: int
+    # LLM fallback chain (ADR-052): `backend:model_id` specs tried in order when
+    # the primary model errors (provider down/quota) — retries handle blips, this
+    # handles an outage. Empty by default. E.g. "anthropic:claude-haiku-4-5,ollama:qwen3:14b".
+    model_fallbacks: list[str]
     # Step budget of the agentic loop (ADR-030) — each step is at most one
     # policy LLM call plus one provider search.
     agent_max_steps: int
@@ -102,6 +106,11 @@ class Settings:
             llm_base_url=os.environ.get("AGENT_LLM_BASE_URL", "http://localhost:11434"),
             llm_timeout_seconds=float(os.environ.get("AGENT_LLM_TIMEOUT_SECONDS", "60")),
             llm_max_retries=int(os.environ.get("AGENT_LLM_MAX_RETRIES", "2")),
+            model_fallbacks=[
+                spec.strip()
+                for spec in os.environ.get("AGENT_MODEL_FALLBACKS", "").split(",")
+                if spec.strip()
+            ],
             agent_max_steps=int(os.environ.get("AGENT_MAX_STEPS", "5")),
             agent_max_cost_usd=float(os.environ.get("AGENT_MAX_COST_USD", "2.0")),
             agent_orchestrator=os.environ.get("AGENT_ORCHESTRATOR", "langgraph"),

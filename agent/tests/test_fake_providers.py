@@ -42,6 +42,7 @@ def settings_with(providers: str) -> Settings:
         llm_base_url="http://localhost:11434",
         llm_timeout_seconds=60.0,
         llm_max_retries=2,
+        model_fallbacks=[],
     )
 
 

@@ -7,6 +7,7 @@ or a local Ollama server — is therefore a construction detail selected here,
 not a new port: adding a backend is one `elif`, never a new adapter class.
 """
 
+import dataclasses
 from typing import TYPE_CHECKING
 
 from aiagent.config import Settings
@@ -49,3 +50,20 @@ def make_chat_model(settings: Settings, max_tokens: int) -> "BaseChatModel":
     raise ValueError(
         f"unknown AGENT_LLM_BACKEND {settings.llm_backend!r} — expected one of {BACKENDS}"
     )
+
+
+def make_fallback_chat_models(settings: Settings, max_tokens: int) -> list["BaseChatModel"]:
+    """Builds the fallback models from `AGENT_MODEL_FALLBACKS` (ADR-052): each
+    `backend:model_id` spec is a model to try, in order, when the primary
+    errors. Empty by default. Splits on the first colon so Ollama tags
+    (`qwen3:14b`) survive — the same spec grammar as the eval harness (ADR-045)."""
+    models: list[BaseChatModel] = []
+    for spec in settings.model_fallbacks:
+        backend, _, model_id = spec.partition(":")
+        if not model_id:
+            raise ValueError(
+                f"bad AGENT_MODEL_FALLBACKS spec {spec!r} — expected 'backend:model_id'"
+            )
+        replaced = dataclasses.replace(settings, llm_backend=backend, agent_model_id=model_id)
+        models.append(make_chat_model(replaced, max_tokens))
+    return models

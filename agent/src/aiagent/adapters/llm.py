@@ -86,6 +86,17 @@ def record_span_usage(span: Span, input_tokens: int, output_tokens: int) -> None
     span.set_attribute("gen_ai.usage.output_tokens", output_tokens)
 
 
+def structured_with_fallbacks(models: list["BaseChatModel"], schema: type[BaseModel]) -> Any:
+    """Binds structured output (ADR-043) on each model and chains them with
+    LangChain fallbacks (ADR-052): the primary runs first; if it errors (provider
+    down/quota, not a transient blip — those are the ADR-044 retries), the next
+    model is tried, in order. A single model means no fallback wrapper, i.e. the
+    exact previous behavior."""
+    runnables = [model.with_structured_output(schema, include_raw=True) for model in models]
+    head, *tail = runnables
+    return head.with_fallbacks(tail) if tail else head
+
+
 def split_structured(result: object) -> tuple[object, object]:
     """Splits an `include_raw=True` structured result into (raw message,
     parsed schema or None). Anything unexpected counts as unparsed."""
@@ -208,9 +219,10 @@ class LlmHitEnricher:
         concurrency: int = 5,
         model: str = "",
         system: str = "",
+        fallbacks: "list[BaseChatModel] | None" = None,
     ) -> None:
         self._meter = meter
-        self._structured = llm.with_structured_output(EnrichmentReply, include_raw=True)
+        self._structured = structured_with_fallbacks([llm, *(fallbacks or [])], EnrichmentReply)
         # Bounds the parallel per-hit calls (ADR-042): fast, without letting a
         # burst of hits hammer the provider (or overload a local Ollama).
         self._concurrency = concurrency
@@ -356,9 +368,10 @@ class LlmAgentPolicy:
         meter: UsageMeter | None = None,
         model: str = "",
         system: str = "",
+        fallbacks: "list[BaseChatModel] | None" = None,
     ) -> None:
         self._meter = meter
-        self._structured = llm.with_structured_output(ActionReply, include_raw=True)
+        self._structured = structured_with_fallbacks([llm, *(fallbacks or [])], ActionReply)
         self._model = model
         self._system = system
 
@@ -477,9 +490,10 @@ class LlmResultCritic:
         meter: UsageMeter | None = None,
         model: str = "",
         system: str = "",
+        fallbacks: "list[BaseChatModel] | None" = None,
     ) -> None:
         self._meter = meter
-        self._structured = llm.with_structured_output(CritiqueReply, include_raw=True)
+        self._structured = structured_with_fallbacks([llm, *(fallbacks or [])], CritiqueReply)
         self._model = model
         self._system = system
 

@@ -65,7 +65,7 @@ def build_providers(
 
         return FakeSearchProvider(meter), FakeHitEnricher(meter), FakePageDateFetcher()
 
-    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.chat_model import make_chat_model, make_fallback_chat_models
     from aiagent.adapters.llm import LlmHitEnricher
     from aiagent.adapters.page import HttpPageDateFetcher
 
@@ -76,6 +76,7 @@ def build_providers(
             meter=meter,
             model=settings.agent_model_id,
             system=settings.llm_backend,
+            fallbacks=make_fallback_chat_models(settings, max_tokens=256),
         ),
         HttpPageDateFetcher(),
     )
@@ -115,7 +116,7 @@ def build_policy(settings: Settings, meter: UsageMeter | None = None) -> AgentPo
 
         return FakeAgentPolicy(meter)
 
-    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.chat_model import make_chat_model, make_fallback_chat_models
     from aiagent.adapters.llm import LlmAgentPolicy
 
     return LlmAgentPolicy(
@@ -123,6 +124,7 @@ def build_policy(settings: Settings, meter: UsageMeter | None = None) -> AgentPo
         meter=meter,
         model=settings.agent_model_id,
         system=settings.llm_backend,
+        fallbacks=make_fallback_chat_models(settings, max_tokens=256),
     )
 
 
@@ -133,7 +135,7 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
 
         return FakeResultCritic(meter)
 
-    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.chat_model import make_chat_model, make_fallback_chat_models
     from aiagent.adapters.llm import LlmResultCritic
 
     return LlmResultCritic(
@@ -141,6 +143,7 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
         meter=meter,
         model=settings.agent_model_id,
         system=settings.llm_backend,
+        fallbacks=make_fallback_chat_models(settings, max_tokens=512),
     )
 
 

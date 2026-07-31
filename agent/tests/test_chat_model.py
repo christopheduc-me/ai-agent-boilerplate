@@ -26,6 +26,7 @@ def settings(**overrides) -> Settings:
         llm_base_url="http://localhost:11434",
         llm_timeout_seconds=60.0,
         llm_max_retries=2,
+        model_fallbacks=[],
     )
     base.update(overrides)
     return Settings(**base)
@@ -81,6 +82,42 @@ def test_ollama_gets_the_timeout_through_client_kwargs() -> None:
 def test_unknown_backend_fails_with_an_actionable_message() -> None:
     with pytest.raises(ValueError, match="AGENT_LLM_BACKEND"):
         make_chat_model(settings(llm_backend="mystery"), max_tokens=64)
+
+
+def test_fallback_models_are_built_from_the_specs() -> None:
+    # ADR-052: `backend:model_id`, split on the first colon (Ollama tags keep it).
+    from langchain_ollama import ChatOllama
+
+    from aiagent.adapters.chat_model import make_fallback_chat_models
+
+    models = make_fallback_chat_models(
+        settings(model_fallbacks=["ollama:qwen3:14b", "ollama:gemma:2b"]), max_tokens=64
+    )
+    assert [type(m).__name__ for m in models] == ["ChatOllama", "ChatOllama"]
+    assert isinstance(models[0], ChatOllama) and models[0].model == "qwen3:14b"
+
+
+def test_no_fallbacks_by_default() -> None:
+    from aiagent.adapters.chat_model import make_fallback_chat_models
+
+    assert make_fallback_chat_models(settings(), max_tokens=64) == []
+
+
+def test_fallback_spec_without_a_model_is_rejected() -> None:
+    from aiagent.adapters.chat_model import make_fallback_chat_models
+
+    with pytest.raises(ValueError, match="AGENT_MODEL_FALLBACKS"):
+        make_fallback_chat_models(settings(model_fallbacks=["ollama"]), max_tokens=64)
+
+
+def test_settings_read_the_model_fallbacks(monkeypatch) -> None:
+    monkeypatch.setenv("AGENT_MODEL_FALLBACKS", "anthropic:claude-haiku-4-5, ollama:qwen3:14b")
+    assert Settings.from_env().model_fallbacks == ["anthropic:claude-haiku-4-5", "ollama:qwen3:14b"]
+
+
+def test_settings_default_model_fallbacks_empty(monkeypatch) -> None:
+    monkeypatch.delenv("AGENT_MODEL_FALLBACKS", raising=False)
+    assert Settings.from_env().model_fallbacks == []
 
 
 def test_settings_default_to_anthropic(monkeypatch) -> None:

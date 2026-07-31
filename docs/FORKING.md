@@ -60,7 +60,8 @@ No code change, just env (`.env`, see `.env.example`):
 
 - **LLM** (ADR-041): `AGENT_LLM_BACKEND=anthropic|ollama`, `AGENT_MODEL_ID=…`.
   Anthropic-hosted or a local Ollama model — the factory `make_chat_model`
-  handles both.
+  handles both. Add `AGENT_MODEL_FALLBACKS` (ADR-052) to survive a provider
+  outage — e.g. end on a keyless local Ollama.
 - **Search / other keys**: your adapter reads its own env var (mirror how
   `TAVILY_API_KEY` is used).
 - **Pricing** for the spend cap (ADR-038/048): set `LLM_COST_*` to your model's
