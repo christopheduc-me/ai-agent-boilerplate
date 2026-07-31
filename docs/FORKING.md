@@ -46,7 +46,7 @@ the production one; keep a fake so CI and the demo stay keyless.
 
 | Port | Production adapter | Swap it for |
 |---|---|---|
-| `SearchProvider` | `adapters/tavily.py` | your tool/API/DB — implement `search()` |
+| `SearchProvider` | `adapters/tavily.py` (or keyless `duckduckgo.py`) | your tool/API/DB — implement `search()`. Providers *compose*: `AggregatingSearchProvider` (ADR-051) fans a query across several and fuses the results — a worked example of the port paying off |
 | `HitEnricher` / `AgentPolicy` / `ResultCritic` | `adapters/llm.py` | usually kept (they're LLM-generic); just change prompts/schemas |
 | `ResultSink` / `StepReporter` | `adapters/sink.py` | kept — it POSTs to the Rust backend (ADR-006). If your result shape changes, update `serialize_result` **and its contract fixture** (below) |
 

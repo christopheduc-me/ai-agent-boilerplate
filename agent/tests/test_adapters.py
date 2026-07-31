@@ -75,6 +75,14 @@ def test_tavily_unexpected_shape_is_empty_not_a_crash() -> None:
     assert hits_from_tavily_response({}) == []
 
 
+def test_ddg_item_maps_to_a_hit_without_a_date() -> None:
+    from aiagent.adapters.duckduckgo import hit_from_ddg
+
+    hit = hit_from_ddg({"title": "T", "href": "https://d", "body": "excerpt"})
+    assert (hit.title, hit.url, hit.snippet) == ("T", "https://d", "excerpt")
+    assert hit.published_at is None
+
+
 # ---------------------------------------------------------------- llm reply parsing
 
 

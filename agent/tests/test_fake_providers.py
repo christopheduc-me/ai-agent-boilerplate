@@ -31,6 +31,7 @@ def settings_with(providers: str) -> Settings:
         internal_api_token="t",
         agent_model_id="claude-opus-4-8",
         providers=providers,
+        search_providers=["tavily"],
         agent_max_steps=5,
         agent_max_cost_usd=2.0,
         agent_orchestrator="langgraph",
@@ -55,6 +56,25 @@ def test_build_providers_selects_fakes() -> None:
     assert isinstance(search, FakeSearchProvider)
     assert isinstance(enricher, FakeHitEnricher)
     assert isinstance(page_dates, FakePageDateFetcher)
+
+
+def test_build_search_provider_single_and_aggregated() -> None:
+    from aiagent.adapters.aggregating_search import AggregatingSearchProvider
+    from aiagent.adapters.duckduckgo import DuckDuckGoSearchProvider
+    from aiagent.tasks import build_search_provider
+
+    # One engine -> the bare adapter; several -> the aggregator (ADR-051).
+    assert isinstance(build_search_provider(["duckduckgo"]), DuckDuckGoSearchProvider)
+    assert isinstance(
+        build_search_provider(["duckduckgo", "duckduckgo"]), AggregatingSearchProvider
+    )
+
+
+def test_build_search_provider_rejects_an_unknown_engine() -> None:
+    from aiagent.tasks import build_search_provider
+
+    with pytest.raises(ValueError, match="unknown search provider"):
+        build_search_provider(["bing"])
 
 
 def test_build_providers_live_requires_credentials(monkeypatch) -> None:

@@ -68,10 +68,9 @@ def build_providers(
     from aiagent.adapters.chat_model import make_chat_model
     from aiagent.adapters.llm import LlmHitEnricher
     from aiagent.adapters.page import HttpPageDateFetcher
-    from aiagent.adapters.tavily import TavilySearchProvider
 
     return (
-        TavilySearchProvider(meter=meter),
+        build_search_provider(settings.search_providers, meter),
         LlmHitEnricher(
             make_chat_model(settings, max_tokens=256),
             meter=meter,
@@ -80,6 +79,33 @@ def build_providers(
         ),
         HttpPageDateFetcher(),
     )
+
+
+def _search_provider(name: str, meter: UsageMeter | None) -> SearchProvider:
+    """One live search adapter by name (ADR-051)."""
+    if name == "tavily":
+        from aiagent.adapters.tavily import TavilySearchProvider
+
+        return TavilySearchProvider(meter=meter)
+    if name == "duckduckgo":
+        from aiagent.adapters.duckduckgo import DuckDuckGoSearchProvider
+
+        return DuckDuckGoSearchProvider(meter=meter)
+    raise ValueError(f"unknown search provider {name!r} (expected: tavily, duckduckgo)")
+
+
+def build_search_provider(names: list[str], meter: UsageMeter | None = None) -> SearchProvider:
+    """Builds the live `SearchProvider` from the configured engine names (ADR-051):
+    a single adapter for one name, or an `AggregatingSearchProvider` fusing
+    several (concurrent, deduplicated, rank-fused, partial-failure tolerant)."""
+    providers = [_search_provider(name, meter) for name in names]
+    if not providers:
+        raise ValueError("no search provider configured (AGENT_SEARCH_PROVIDERS is empty)")
+    if len(providers) == 1:
+        return providers[0]
+    from aiagent.adapters.aggregating_search import AggregatingSearchProvider
+
+    return AggregatingSearchProvider(providers)
 
 
 def build_policy(settings: Settings, meter: UsageMeter | None = None) -> AgentPolicy:

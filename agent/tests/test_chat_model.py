@@ -15,6 +15,7 @@ def settings(**overrides) -> Settings:
         internal_api_token="t",
         agent_model_id="claude-opus-4-8",
         providers="live",
+        search_providers=["tavily"],
         agent_max_steps=5,
         agent_max_cost_usd=2.0,
         agent_orchestrator="langgraph",

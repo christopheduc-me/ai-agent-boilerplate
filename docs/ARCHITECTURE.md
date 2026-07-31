@@ -1587,6 +1587,40 @@ and the PromQL for each signal is in [OBSERVABILITY.md](OBSERVABILITY.md); a
 starter "AI agent overview" dashboard ships provisioned. The three pillars are
 now in place: traces, logs, metrics.
 
+### ADR-051 — Multi-provider search aggregation (decided 2026-07-29, extends ADR-009)
+
+**Context**: a single search engine (ADR-009, Tavily) is a single point of
+failure and of recall — different engines index different things, and one
+provider's quota/outage (the `Error 432` that motivated the ADR-009 fail-fast
+fix) takes the whole run down. A boilerplate for agents should show how to fan a
+query across sources.
+
+**Decision**: an `AggregatingSearchProvider` — itself a `SearchProvider`
+(the port) — wraps several inner providers, queries them **concurrently**, and
+**fuses** their results. Pure adapter-layer composition: the agent loop, the
+domain and the ports are untouched (the hexagonal payoff). Selected by
+`AGENT_SEARCH_PROVIDERS` (comma-separated: `tavily`, `duckduckgo`); one name
+builds the bare adapter, several build the aggregator. A **keyless DuckDuckGo**
+adapter ships as the second source, so a fork can run live search with zero
+credentials.
+
+Two design choices:
+
+- **Reciprocal Rank Fusion** (`fuse_by_rrf`): a URL's score is `Σ 1/(k+rank)`
+  over the engines that returned it (`k=60`), so a result several engines agree
+  on outranks a single-engine one, with no weights to tune. Deduplication is by
+  canonical URL (ADR-034); the richer hit (one carrying a date) wins a tie.
+- **Partial-failure tolerance** — a deliberate departure from ADR-009's
+  fail-fast. A single provider must fail the job (silence hides a dead search);
+  but with several, a failing or slow engine is logged and the run continues
+  with the survivors, each bounded by a per-provider timeout. The aggregator
+  raises only when **every** provider fails.
+
+Metering is unchanged (ADR-038): each inner provider records its own credit, so
+N engines = N credits per aggregated query. The fusion and the aggregator's
+concurrency/tolerance are unit-tested with fake providers (no network); the
+concrete DuckDuckGo adapter, like Tavily, is not exercised in CI (ADR-012).
+
 ---
 
 ## 4. API contracts (summary)
@@ -1642,7 +1676,8 @@ also enforces the per-user daily quota — ADR-017).
   needs arise — the images being identical, only the orchestrator changes.
 - Upgrade the SSE change-detection (ADR-026) from per-connection DB polling to
   Postgres LISTEN/NOTIFY or Redis pub/sub if connection counts grow.
-- Multiple search providers with aggregation/deduplication.
+- ~~Multiple search providers with aggregation/deduplication.~~ Done — ADR-051
+  (`AggregatingSearchProvider`, RRF fusion, Tavily + keyless DuckDuckGo).
 - An e-mail `DigestSender` adapter (SMTP/SES) behind the ADR-036 port, for
   forks that prefer inboxes over webhooks.
 - **Generated API client from the OpenAPI schema.** The `openapi.json` already
