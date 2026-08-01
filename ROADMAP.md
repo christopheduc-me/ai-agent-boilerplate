@@ -18,8 +18,10 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Refresh tokens (ADR-008)** — done: single-use rotation on `/refresh`,
       SHA-256-hashed storage (migration 0002), HttpOnly cookie scoped to
       `/api/auth`, revocation on `/logout`, expired-token purge by the reaper.
-      Frontend: silent session restore on reload + refresh-and-retry on 401
-      (`withAuth`), redirect to login when the session is gone.
+      Reuse detection + family revocation (ADR-056, migration 0009): replaying a
+      consumed token revokes the whole login lineage. Frontend: silent session
+      restore on reload + refresh-and-retry on 401 (`withAuth`), redirect to
+      login when the session is gone.
 
 ## P2 — Operability
 

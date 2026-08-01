@@ -141,13 +141,50 @@ async fn refresh_token_roundtrip_delete_and_purge() {
         .unwrap()
         .is_some());
 
-    // Explicit delete (rotation/logout).
+    // Reuse detection (ADR-056): mark_consumed keeps the row but flags it.
+    let at = Utc::now();
+    repo.mark_consumed(valid.id, at).await.unwrap();
+    let consumed = repo.find_by_hash(&valid.token_hash).await.unwrap().unwrap();
+    assert!(consumed.is_consumed());
+    assert_eq!(consumed.consumed_at.unwrap().timestamp(), at.timestamp());
+
+    // Explicit delete (logout of a single row).
     repo.delete(valid.id).await.unwrap();
     assert!(repo
         .find_by_hash(&valid.token_hash)
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn delete_family_revokes_a_whole_rotation_lineage() {
+    // ADR-056: reuse detection revokes every token sharing a family_id.
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let repo = PostgresRefreshTokenRepository::new(pool);
+
+    let (root, _) = RefreshToken::issue(user.id, 30);
+    let (child, _) = RefreshToken::issue_in_family(user.id, root.family_id, 30);
+    let (other, _) = RefreshToken::issue(user.id, 30); // a different family
+    repo.insert(&root).await.unwrap();
+    repo.insert(&child).await.unwrap();
+    repo.insert(&other).await.unwrap();
+
+    repo.delete_family(root.family_id).await.unwrap();
+
+    assert!(repo.find_by_hash(&root.token_hash).await.unwrap().is_none());
+    assert!(repo
+        .find_by_hash(&child.token_hash)
+        .await
+        .unwrap()
+        .is_none());
+    // The unrelated family is untouched.
+    assert!(repo
+        .find_by_hash(&other.token_hash)
+        .await
+        .unwrap()
+        .is_some());
 }
 
 #[tokio::test]

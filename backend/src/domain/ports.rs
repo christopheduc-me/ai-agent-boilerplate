@@ -75,7 +75,13 @@ pub trait RecurringSearchRepository: Send + Sync {
 pub trait RefreshTokenRepository: Send + Sync {
     async fn insert(&self, token: &RefreshToken) -> Result<(), PortError>;
     async fn find_by_hash(&self, hash: &str) -> Result<Option<RefreshToken>, PortError>;
+    /// Marks a rotated-away token consumed (ADR-056): it is kept, not deleted,
+    /// so a later replay is caught as reuse instead of looking unknown.
+    async fn mark_consumed(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError>;
     async fn delete(&self, id: Uuid) -> Result<(), PortError>;
+    /// Revokes an entire rotation lineage (ADR-056): called on reuse detection
+    /// to kill the stolen token's whole family in one shot.
+    async fn delete_family(&self, family_id: Uuid) -> Result<(), PortError>;
     /// Purges expired tokens (called by the background reaper).
     async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, PortError>;
 }

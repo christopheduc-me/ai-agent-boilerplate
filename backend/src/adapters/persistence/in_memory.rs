@@ -57,8 +57,23 @@ impl RefreshTokenRepository for InMemoryRefreshTokenRepository {
             .cloned())
     }
 
+    async fn mark_consumed(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError> {
+        if let Some(token) = self.tokens.lock().unwrap().get_mut(&id) {
+            token.consumed_at = Some(at);
+        }
+        Ok(())
+    }
+
     async fn delete(&self, id: Uuid) -> Result<(), PortError> {
         self.tokens.lock().unwrap().remove(&id);
+        Ok(())
+    }
+
+    async fn delete_family(&self, family_id: Uuid) -> Result<(), PortError> {
+        self.tokens
+            .lock()
+            .unwrap()
+            .retain(|_, t| t.family_id != family_id);
         Ok(())
     }
 

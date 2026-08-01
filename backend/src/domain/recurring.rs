@@ -6,12 +6,16 @@
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::job::{JobError, JobMode};
+use super::job::{JobError, JobMode, MAX_KEYWORD_LEN};
 
 /// Interval bounds: floor guards against tick-speed abuse (every run costs
 /// provider/LLM calls, ADR-017); ceiling is one week.
 pub const MIN_INTERVAL_MINUTES: u32 = 1;
 pub const MAX_INTERVAL_MINUTES: u32 = 7 * 24 * 60;
+
+/// Webhook URL cap (ADR-056): a saved digest target is user-supplied free text
+/// stored and later fetched, so bound it like the other inputs.
+pub const MAX_WEBHOOK_URL_LEN: usize = 2_048;
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct RecurringSearch {
@@ -39,11 +43,17 @@ impl RecurringSearch {
         if keyword.is_empty() {
             return Err(JobError::EmptyKeyword);
         }
+        if keyword.chars().count() > MAX_KEYWORD_LEN {
+            return Err(JobError::KeywordTooLong);
+        }
         if !(MIN_INTERVAL_MINUTES..=MAX_INTERVAL_MINUTES).contains(&interval_minutes) {
             return Err(JobError::InvalidInterval);
         }
         let webhook_url = match webhook_url.map(str::trim).filter(|u| !u.is_empty()) {
             None => None,
+            Some(url) if url.chars().count() > MAX_WEBHOOK_URL_LEN => {
+                return Err(JobError::WebhookUrlTooLong)
+            }
             Some(url) if url.starts_with("https://") || url.starts_with("http://") => {
                 Some(url.to_string())
             }
@@ -132,6 +142,28 @@ mod tests {
         assert_eq!(
             RecurringSearch::new(user, "k", JobMode::Agent, 60, Some("ftp://x")).unwrap_err(),
             JobError::InvalidWebhookUrl
+        );
+    }
+
+    #[test]
+    fn overlong_keyword_and_webhook_url_are_rejected() {
+        // ADR-056: input caps at the domain boundary.
+        let user = Uuid::new_v4();
+        assert_eq!(
+            RecurringSearch::new(
+                user,
+                &"k".repeat(MAX_KEYWORD_LEN + 1),
+                JobMode::Agent,
+                60,
+                None
+            )
+            .unwrap_err(),
+            JobError::KeywordTooLong
+        );
+        let long_url = format!("https://ex.com/{}", "a".repeat(MAX_WEBHOOK_URL_LEN));
+        assert_eq!(
+            RecurringSearch::new(user, "k", JobMode::Agent, 60, Some(&long_url)).unwrap_err(),
+            JobError::WebhookUrlTooLong
         );
     }
 }

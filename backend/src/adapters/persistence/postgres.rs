@@ -286,14 +286,17 @@ impl PostgresRefreshTokenRepository {
 impl RefreshTokenRepository for PostgresRefreshTokenRepository {
     async fn insert(&self, token: &RefreshToken) -> Result<(), PortError> {
         sqlx::query(
-            "INSERT INTO refresh_tokens (id, user_id, token_hash, expires_at, created_at)
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO refresh_tokens
+                 (id, user_id, family_id, token_hash, expires_at, created_at, consumed_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(token.id)
         .bind(token.user_id)
+        .bind(token.family_id)
         .bind(&token.token_hash)
         .bind(token.expires_at)
         .bind(token.created_at)
+        .bind(token.consumed_at)
         .execute(&self.pool)
         .await
         .map_err(db_err)?;
@@ -302,7 +305,7 @@ impl RefreshTokenRepository for PostgresRefreshTokenRepository {
 
     async fn find_by_hash(&self, hash: &str) -> Result<Option<RefreshToken>, PortError> {
         let row = sqlx::query(
-            "SELECT id, user_id, token_hash, expires_at, created_at
+            "SELECT id, user_id, family_id, token_hash, expires_at, created_at, consumed_at
              FROM refresh_tokens WHERE token_hash = $1",
         )
         .bind(hash)
@@ -312,15 +315,36 @@ impl RefreshTokenRepository for PostgresRefreshTokenRepository {
         Ok(row.map(|row| RefreshToken {
             id: row.get("id"),
             user_id: row.get("user_id"),
+            family_id: row.get("family_id"),
             token_hash: row.get("token_hash"),
             expires_at: row.get("expires_at"),
             created_at: row.get("created_at"),
+            consumed_at: row.get("consumed_at"),
         }))
+    }
+
+    async fn mark_consumed(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError> {
+        sqlx::query("UPDATE refresh_tokens SET consumed_at = $2 WHERE id = $1")
+            .bind(id)
+            .bind(at)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
     }
 
     async fn delete(&self, id: Uuid) -> Result<(), PortError> {
         sqlx::query("DELETE FROM refresh_tokens WHERE id = $1")
             .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn delete_family(&self, family_id: Uuid) -> Result<(), PortError> {
+        sqlx::query("DELETE FROM refresh_tokens WHERE family_id = $1")
+            .bind(family_id)
             .execute(&self.pool)
             .await
             .map_err(db_err)?;

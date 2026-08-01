@@ -202,10 +202,10 @@ stored hashed in the database to allow revocation). Passwords hashed with **argo
   (~244 bits of entropy), stored **SHA-256-hashed** in `refresh_tokens`
   (migration 0002) so a leaked table cannot be replayed.
 - **Rotation**: refresh tokens are single use — `/refresh` consumes the
-  presented token and issues a new pair; a replayed token gets a 401 (the
-  session was either legitimately rotated or stolen; both warrant
-  re-authentication). Expired tokens are purged by the background reaper
-  (ADR-016) and garbage-collected on use.
+  presented token and issues a new pair; a replayed token gets a 401. Expired
+  tokens are purged by the background reaper (ADR-016) and garbage-collected on
+  use. *Hardened by ADR-056*: rotation is a **family lineage** with **reuse
+  detection** — replaying an already-consumed token revokes the whole family.
 - Cookie: `HttpOnly; Secure; SameSite=Strict; Path=/api/auth`, TTL
   `REFRESH_TOKEN_DAYS` (default 30). Scoped to the auth endpoints only.
 - Vue side: access token in memory (Pinia store) — never in localStorage; the
@@ -1735,6 +1735,8 @@ guards resolve then let the client re-resolve, so a determined **DNS-rebinding**
 attacker could still slip through — mitigating that fully needs pinning the
 connection to the checked IP (a documented follow-up); the guards stop every
 realistic case (internal hostnames, literal internal IPs, `localhost`).
+*Hardened by ADR-056 (2026-08-01)*: the digest sender now filters addresses in a
+custom connect-time DNS resolver, closing that rebinding window.
 
 **Scope note — inter-brick traffic is not affected.** The SSRF guards sit only
 on the two surfaces reaching the outside world: the *user-supplied* digest
@@ -1747,6 +1749,48 @@ case the guard would otherwise block — a fork whose **notification** service
 `DIGEST_ALLOW_PRIVATE_WEBHOOKS=true` (default off): it flips the digest sender's
 `allow_private`, allowing internal webhook targets on a trusted network. The
 page fetcher keeps no opt-in — result pages are public by nature.
+
+---
+
+### ADR-056 — Security hardening pass 2: token-reuse detection, input caps, DNS-rebinding (decided 2026-08-01)
+
+**Context**: a follow-up to ADR-055 closing three remaining gaps — one it
+explicitly deferred (DNS-rebinding) and two on inputs.
+
+1. **Refresh-token reuse detection + family revocation** (ADR-008 hardened).
+   Rotation used to *delete* the presented token, so replaying a stolen cookie
+   was indistinguishable from an unknown token — the theft went unnoticed while
+   both parties kept refreshing. Rotation is now a **lineage**: every token
+   carries a `family_id` (one per login, inherited on each rotation), and a
+   rotated-away token is **marked `consumed_at`, not deleted**. Replaying a
+   consumed token is therefore detectable and treated as a compromise — the
+   **whole family is revoked** (`delete_family`), killing the thief's rotated
+   token too and forcing re-authentication. Other logins (their own families)
+   are untouched. Consumed tokens are kept only until they expire; the existing
+   reaper purge (`delete_expired`) cleans them, and logout revokes the family.
+   Trade-off: a genuine double-submit of the *same* token (two tabs racing)
+   trips the detector and logs that lineage out — the accepted, standard cost of
+   reuse detection. Migration `0009` adds `family_id`/`consumed_at` (existing
+   rows each get their own family via `gen_random_uuid()`, so they stay usable).
+2. **Input length caps** (ADR-017 abuse-protection family). `keyword` (≤ 200),
+   the clarification `answer` (≤ 2000) and `webhook_url` (≤ 2048) were bounded
+   for emptiness/scheme only — an authenticated user could store multi-KB
+   free-text. The **domain** now caps each (measured in `chars`), returning the
+   new `JobError::{KeywordTooLong, AnswerTooLong, WebhookUrlTooLong}` → `422`.
+   Domain-level so every caller (one-shot, recurring, clarification) inherits it.
+3. **DNS-rebinding on the digest webhook** (the ADR-055 follow-up). The
+   resolve-then-check pre-flight left a TOCTOU: an attacker's DNS could answer a
+   public IP to the check and `127.0.0.1` to the connect. `WebhookDigestSender`
+   now installs a custom **`reqwest` DNS resolver** (`PublicOnlyResolver`) that
+   filters non-public addresses at connect-time resolution, so the validated and
+   the connected addresses are the *same* resolution. `ensure_public_host` stays
+   as a fast pre-flight for a clear error; the resolver is the race-free backstop.
+   The `DIGEST_ALLOW_PRIVATE_WEBHOOKS` opt-in keeps the default resolver, so
+   internal notification targets on a trusted network are unaffected (ADR-055).
+
+Each fix is unit-tested with fakes/literals — no network, no paid service: the
+reuse-detection lineage and family-scoped revocation (in-memory + Postgres), the
+domain caps, and the resolver (via `localhost`/literal, offline).
 
 ---
 

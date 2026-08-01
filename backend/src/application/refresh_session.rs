@@ -35,9 +35,14 @@ impl RefreshSession {
         }
     }
 
-    /// Rotation: the presented token is consumed (single use) and a fresh pair
-    /// is issued. A replayed token therefore fails — the session was either
-    /// legitimately rotated or stolen; both warrant re-authentication.
+    /// Rotation with reuse detection (ADR-056). The presented token is marked
+    /// consumed (single use) and the next token of its family is issued.
+    ///
+    /// Replaying an already-consumed token means the cookie was captured: the
+    /// legitimate client and the thief now both hold copies, and whichever
+    /// rotates second replays a consumed token. That is treated as a compromise
+    /// — the whole family is revoked, killing the thief's rotated token too, and
+    /// the user must re-authenticate. Other logins (their own families) survive.
     pub async fn rotate(&self, presented: &str) -> Result<SessionTokens, RefreshError> {
         let stored = self
             .refresh_tokens
@@ -45,13 +50,24 @@ impl RefreshSession {
             .await?
             .ok_or(RefreshError::InvalidToken)?;
 
-        // Consume it no matter what: expired tokens are garbage-collected on use.
-        self.refresh_tokens.delete(stored.id).await?;
-        if stored.is_expired(Utc::now()) {
+        // Reuse: a consumed token is being replayed -> revoke the whole lineage.
+        if stored.is_consumed() {
+            self.refresh_tokens.delete_family(stored.family_id).await?;
             return Err(RefreshError::InvalidToken);
         }
 
-        let (record, plaintext) = RefreshToken::issue(stored.user_id, self.refresh_ttl_days);
+        if stored.is_expired(Utc::now()) {
+            // Expired but never used: just garbage-collect it, no family kill.
+            self.refresh_tokens.delete(stored.id).await?;
+            return Err(RefreshError::InvalidToken);
+        }
+
+        // Keep the old token (marked) so a later replay is caught as reuse.
+        self.refresh_tokens
+            .mark_consumed(stored.id, Utc::now())
+            .await?;
+        let (record, plaintext) =
+            RefreshToken::issue_in_family(stored.user_id, stored.family_id, self.refresh_ttl_days);
         self.refresh_tokens.insert(&record).await?;
         Ok(SessionTokens {
             access_token: self.tokens.issue(stored.user_id)?,
@@ -59,15 +75,16 @@ impl RefreshSession {
         })
     }
 
-    /// Logout: revokes the presented token. Idempotent — an unknown token is
-    /// already logged out.
+    /// Logout: revokes the presented token's whole family (ADR-056), so its
+    /// consumed ancestors are cleaned up too and the session is fully closed.
+    /// Idempotent — an unknown token is already logged out.
     pub async fn revoke(&self, presented: &str) -> Result<(), PortError> {
         if let Some(stored) = self
             .refresh_tokens
             .find_by_hash(&RefreshToken::hash(presented))
             .await?
         {
-            self.refresh_tokens.delete(stored.id).await?;
+            self.refresh_tokens.delete_family(stored.family_id).await?;
         }
         Ok(())
     }
@@ -106,20 +123,66 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn rotation_issues_a_new_pair_and_consumes_the_old_token() {
+    async fn rotation_issues_a_new_pair_and_the_chain_continues() {
         let (service, repo) = service();
         let (user_id, plaintext) = seeded_token(&repo, 30).await;
 
-        let tokens = service.rotate(&plaintext).await.unwrap();
-        assert_eq!(tokens.access_token, format!("token-for:{user_id}"));
-        assert_ne!(tokens.refresh_token, plaintext);
+        let first = service.rotate(&plaintext).await.unwrap();
+        assert_eq!(first.access_token, format!("token-for:{user_id}"));
+        assert_ne!(first.refresh_token, plaintext);
 
-        // Replaying the consumed token fails (single use).
-        let err = service.rotate(&plaintext).await.unwrap_err();
-        assert!(matches!(err, RefreshError::InvalidToken));
+        // The freshly issued token rotates again — the lineage continues.
+        let second = service.rotate(&first.refresh_token).await.unwrap();
+        assert_ne!(second.refresh_token, first.refresh_token);
+    }
 
-        // The freshly issued token works.
-        service.rotate(&tokens.refresh_token).await.unwrap();
+    #[tokio::test]
+    async fn replaying_a_consumed_token_revokes_the_whole_family() {
+        // ADR-056: a stolen cookie means the old (consumed) token is replayed.
+        // That revokes the entire rotation lineage, current token included.
+        let (service, repo) = service();
+        let (_, original) = seeded_token(&repo, 30).await;
+
+        let first = service.rotate(&original).await.unwrap(); // original now consumed
+        let second = service.rotate(&first.refresh_token).await.unwrap(); // current, live
+
+        // Replaying the consumed original is detected as reuse.
+        assert!(matches!(
+            service.rotate(&original).await.unwrap_err(),
+            RefreshError::InvalidToken
+        ));
+
+        // ...and the whole family is gone: even the current token no longer works.
+        assert!(matches!(
+            service.rotate(&second.refresh_token).await.unwrap_err(),
+            RefreshError::InvalidToken
+        ));
+        assert!(matches!(
+            service.rotate(&first.refresh_token).await.unwrap_err(),
+            RefreshError::InvalidToken
+        ));
+    }
+
+    #[tokio::test]
+    async fn reuse_detection_only_revokes_the_offending_family() {
+        // A compromise on one login must not log other logins out.
+        let (service, repo) = service();
+        let (_, device_a) = seeded_token(&repo, 30).await; // login A (its own family)
+        let (_, device_b) = seeded_token(&repo, 30).await; // login B (a different family)
+
+        // Rotate A once, then replay its consumed token -> family A revoked.
+        let a1 = service.rotate(&device_a).await.unwrap();
+        assert!(matches!(
+            service.rotate(&device_a).await.unwrap_err(),
+            RefreshError::InvalidToken
+        ));
+        assert!(matches!(
+            service.rotate(&a1.refresh_token).await.unwrap_err(),
+            RefreshError::InvalidToken
+        ));
+
+        // Login B is a different family: still perfectly usable.
+        service.rotate(&device_b).await.unwrap();
     }
 
     #[tokio::test]

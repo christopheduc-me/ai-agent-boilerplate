@@ -12,10 +12,12 @@
 //! `X-Signature-256` header, so the consumer can *authenticate* it — a public
 //! webhook URL is otherwise forgeable by anyone who learns it.
 
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::sync::Arc;
 
 use async_trait::async_trait;
 use hmac::{Hmac, KeyInit, Mac};
+use reqwest::dns::{Addrs, Name, Resolve, Resolving};
 use sha2::Sha256;
 
 use crate::domain::ports::{Digest, DigestSender, PortError};
@@ -86,6 +88,35 @@ async fn ensure_public_host(url: &str, allow_private: bool) -> Result<(), PortEr
     Ok(())
 }
 
+/// SSRF-safe DNS resolver (ADR-056). It resolves the host and refuses the
+/// connection if *any* resolved address is non-public. Because reqwest connects
+/// to exactly the addresses this returns, the validation and the connect share
+/// one resolution — closing the DNS-rebinding (TOCTOU) window that a plain
+/// resolve-then-check pre-flight leaves open (an attacker's DNS answering a
+/// public IP to the check, then `127.0.0.1` to the connect). `ensure_public_host`
+/// still runs first for a fast, clear rejection; this is the race-free backstop.
+struct PublicOnlyResolver;
+
+impl Resolve for PublicOnlyResolver {
+    fn resolve(&self, name: Name) -> Resolving {
+        Box::pin(async move {
+            let host = name.as_str().to_owned();
+            // Port 0: we only care about the addresses, reqwest applies the real
+            // port. Same GAI path hyper-util's default resolver would take.
+            let addrs: Vec<SocketAddr> =
+                tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
+            if let Some(addr) = addrs.iter().find(|a| is_blocked_ip(a.ip())) {
+                return Err(format!(
+                    "webhook host resolves to a non-public address ({})",
+                    addr.ip()
+                )
+                .into());
+            }
+            Ok(Box::new(addrs.into_iter()) as Addrs)
+        })
+    }
+}
+
 pub struct WebhookDigestSender {
     client: reqwest::Client,
     secret: Option<String>,
@@ -101,14 +132,20 @@ impl WebhookDigestSender {
     /// opts in via `DIGEST_ALLOW_PRIVATE_WEBHOOKS` for an internal notification
     /// target on a trusted network.
     pub fn new(secret: Option<String>, allow_private: bool) -> Self {
+        let mut builder = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(5))
+            // No redirects (ADR-055): a public URL must not 3xx to an internal
+            // one after the host check.
+            .redirect(reqwest::redirect::Policy::none());
+        // Race-free SSRF guard (ADR-056): filter at connect-time DNS resolution
+        // so rebinding cannot slip an internal IP past the pre-flight check.
+        // The opt-in (allow_private) keeps the default resolver for internal
+        // targets on a trusted network — and for tests hitting a local stub.
+        if !allow_private {
+            builder = builder.dns_resolver(Arc::new(PublicOnlyResolver));
+        }
         Self {
-            client: reqwest::Client::builder()
-                .timeout(std::time::Duration::from_secs(5))
-                // No redirects (ADR-055): a public URL must not 3xx to an
-                // internal one after the host check.
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("reqwest client"),
+            client: builder.build().expect("reqwest client"),
             secret: secret.filter(|s| !s.is_empty()),
             allow_private,
         }
@@ -330,5 +367,27 @@ mod tests {
             .await
             .unwrap_err();
         assert!(err.to_string().contains("non-public"));
+    }
+
+    // ---------------------------------------------------------------- DNS-rebinding backstop (ADR-056)
+
+    #[tokio::test]
+    async fn resolver_blocks_hosts_resolving_to_a_non_public_address() {
+        use std::str::FromStr;
+        // `localhost` resolves to a loopback address (offline, via /etc/hosts):
+        // the connect-time resolver refuses it even if a pre-flight was fooled.
+        // (`Addrs` is not Debug, so assert on the Result rather than unwrap_err.)
+        let refused = PublicOnlyResolver
+            .resolve(Name::from_str("localhost").unwrap())
+            .await;
+        let err = refused.err().expect("localhost must be refused");
+        assert!(err.to_string().contains("non-public"));
+
+        // A public literal passes (no DNS lookup needed).
+        let mut addrs = PublicOnlyResolver
+            .resolve(Name::from_str("8.8.8.8").unwrap())
+            .await
+            .expect("a public literal resolves");
+        assert!(addrs.all(|a| !is_blocked_ip(a.ip())));
     }
 }

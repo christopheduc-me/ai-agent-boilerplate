@@ -62,18 +62,31 @@ impl JobUsage {
     }
 }
 
+/// Input caps (ADR-056): reject oversized free-text at the domain boundary,
+/// before it reaches storage, the agent or an outbound webhook. Measured in
+/// Unicode scalar values (`chars`), generous enough that no legitimate value
+/// hits them — they only stop abusive/accidental multi-KB payloads.
+pub const MAX_KEYWORD_LEN: usize = 200;
+pub const MAX_ANSWER_LEN: usize = 2_000;
+
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum JobError {
     #[error("keyword must not be empty")]
     EmptyKeyword,
+    #[error("keyword must be at most 200 characters")]
+    KeywordTooLong,
     #[error("interval must be between 1 minute and 7 days")]
     InvalidInterval,
     #[error("webhook url must start with http:// or https://")]
     InvalidWebhookUrl,
+    #[error("webhook url must be at most 2048 characters")]
+    WebhookUrlTooLong,
     #[error("question must not be empty")]
     EmptyQuestion,
     #[error("answer must not be empty")]
     EmptyAnswer,
+    #[error("answer must be at most 2000 characters")]
+    AnswerTooLong,
     #[error("job is not awaiting input")]
     NotAwaitingInput,
 }
@@ -105,6 +118,9 @@ impl ResearchJob {
         let keyword = keyword.trim();
         if keyword.is_empty() {
             return Err(JobError::EmptyKeyword);
+        }
+        if keyword.chars().count() > MAX_KEYWORD_LEN {
+            return Err(JobError::KeywordTooLong);
         }
         Ok(Self {
             id: Uuid::new_v4(),
@@ -181,6 +197,9 @@ impl ResearchJob {
         if answer.is_empty() {
             return Err(JobError::EmptyAnswer);
         }
+        if answer.chars().count() > MAX_ANSWER_LEN {
+            return Err(JobError::AnswerTooLong);
+        }
         if self.status != JobStatus::AwaitingInput {
             return Err(JobError::NotAwaitingInput);
         }
@@ -211,6 +230,29 @@ mod tests {
     fn empty_keyword_is_rejected() {
         let err = ResearchJob::new(Uuid::new_v4(), "   ").unwrap_err();
         assert_eq!(err, JobError::EmptyKeyword);
+    }
+
+    #[test]
+    fn overlong_keyword_is_rejected() {
+        // ADR-056: the cap is on the trimmed value, in characters.
+        let at_limit = "x".repeat(MAX_KEYWORD_LEN);
+        assert!(ResearchJob::new(Uuid::new_v4(), &at_limit).is_ok());
+        let too_long = "x".repeat(MAX_KEYWORD_LEN + 1);
+        assert_eq!(
+            ResearchJob::new(Uuid::new_v4(), &too_long).unwrap_err(),
+            JobError::KeywordTooLong
+        );
+    }
+
+    #[test]
+    fn overlong_answer_is_rejected() {
+        let mut job = ResearchJob::new(Uuid::new_v4(), "k").unwrap();
+        job.request_input("which one?").unwrap();
+        assert_eq!(
+            job.provide_answer(&"x".repeat(MAX_ANSWER_LEN + 1))
+                .unwrap_err(),
+            JobError::AnswerTooLong
+        );
     }
 
     #[test]
