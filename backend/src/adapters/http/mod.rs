@@ -34,11 +34,11 @@ use crate::application::{
 };
 use crate::domain::ports::{
     DigestSender, JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
-    RefreshTokenRepository, TokenService, UserRepository,
+    RefreshTokenRepository, SecurityAudit, TokenService, UserRepository,
 };
 use crate::domain::{
     AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
-    ResearchJob, SearchResult,
+    ResearchJob, SearchResult, SecurityEvent, SecurityEventKind,
 };
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
@@ -55,6 +55,11 @@ pub struct AppState {
     ingest: Arc<IngestResults>,
     queries: Arc<SearchQueries>,
     tokens: Arc<dyn TokenService>,
+    /// Security audit log (ADR-057): failed/throttled logins, quota hits.
+    audit: Arc<dyn SecurityAudit>,
+    /// Per-account login throttle (ADR-057), keyed by email — independent of
+    /// the per-IP limiter, so credential-stuffing across many IPs is capped too.
+    login_throttle: rate_limit::Limiter,
     internal_token: String,
     refresh_ttl_days: i64,
 }
@@ -66,6 +71,9 @@ pub struct RateLimitConfig {
     pub auth_per_minute: u32,
     /// Per-IP limit on the rest of `/api/*`.
     pub api_per_minute: u32,
+    /// Per-**account** limit on login attempts (ADR-057): email-keyed, so a
+    /// credential-stuffing run spread over many IPs is throttled per target.
+    pub login_per_minute: u32,
     /// Redis-backed distributed limiting (ADR-037): set when the backend
     /// scales horizontally; None keeps the in-memory limiter.
     pub redis_url: Option<String>,
@@ -76,6 +84,7 @@ impl Default for RateLimitConfig {
         Self {
             auth_per_minute: 10,
             api_per_minute: 120,
+            login_per_minute: 10,
             redis_url: None,
         }
     }
@@ -92,6 +101,8 @@ impl AppState {
         digests: Arc<dyn DigestSender>,
         hasher: Arc<dyn PasswordHasher>,
         tokens: Arc<dyn TokenService>,
+        audit: Arc<dyn SecurityAudit>,
+        login_throttle: rate_limit::Limiter,
         internal_token: String,
         daily_search_quota: u32,
         refresh_ttl_days: i64,
@@ -108,6 +119,7 @@ impl AppState {
             refresh: Arc::new(RefreshSession::new(
                 refresh_tokens,
                 tokens.clone(),
+                audit.clone(),
                 refresh_ttl_days,
             )),
             launch: Arc::new(LaunchSearch::new(
@@ -120,6 +132,8 @@ impl AppState {
             ingest: Arc::new(IngestResults::new(jobs.clone(), recurring, digests)),
             queries: Arc::new(SearchQueries::new(jobs)),
             tokens,
+            audit,
+            login_throttle,
             internal_token,
             refresh_ttl_days,
         }
@@ -292,6 +306,34 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
 
 fn error_body(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// Best-effort client IP for the audit log (ADR-057): the first
+/// `X-Forwarded-For` entry set by the trusted proxy (ADR-014/015), like the
+/// rate limiter keys on. `None` when the header is absent (e.g. tests).
+fn client_ip(headers: &HeaderMap) -> Option<String> {
+    headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .map(|ip| ip.trim().to_string())
+        .filter(|ip| !ip.is_empty())
+}
+
+/// Records a security event (ADR-057). Always logs a structured line so it
+/// surfaces in the observability pillars (ADR-018/050) even if the DB write
+/// fails; the persistence itself is best-effort and never breaks the request.
+async fn record_security_event(state: &AppState, event: SecurityEvent) {
+    tracing::warn!(
+        security_event = %event.kind,
+        user_id = ?event.user_id,
+        client_ip = ?event.client_ip,
+        detail = %event.detail,
+        "security event"
+    );
+    if let Err(e) = state.audit.record(&event).await {
+        tracing::error!(error = %e, "failed to record security event");
+    }
 }
 
 // ---------------------------------------------------------------- auth extractor
@@ -527,10 +569,36 @@ async fn register(State(state): State<AppState>, Json(body): Json<CredentialsReq
     responses(
         (status = 200, description = "Access token in body; refresh token set as an HttpOnly cookie (ADR-008)", body = AccessTokenResponse),
         (status = 401, description = "Invalid email or password", body = ErrorResponse)))]
-async fn login(State(state): State<AppState>, Json(body): Json<CredentialsRequest>) -> Response {
+async fn login(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<CredentialsRequest>,
+) -> Response {
+    // Per-account throttle (ADR-057): keyed by the normalized email so an
+    // attacker cannot dodge it with IP rotation or case tricks. Checked before
+    // the (deliberately costly) argon2 verify, so it also sheds that load.
+    let email_key = body.email.trim().to_lowercase();
+    let ip = client_ip(&headers);
+    if !state.login_throttle.allow(&email_key).await {
+        record_security_event(
+            &state,
+            SecurityEvent::new(SecurityEventKind::LoginThrottled, None, ip, email_key),
+        )
+        .await;
+        return error_body(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many login attempts, slow down",
+        );
+    }
+
     match state.login.execute(&body.email, &body.password).await {
         Ok(tokens) => session_response(&state, tokens),
         Err(LoginError::InvalidCredentials) => {
+            record_security_event(
+                &state,
+                SecurityEvent::new(SecurityEventKind::LoginFailed, None, ip, email_key),
+            )
+            .await;
             error_body(StatusCode::UNAUTHORIZED, "invalid credentials")
         }
         Err(LoginError::Infrastructure(e)) => {
@@ -589,6 +657,7 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
 async fn create_search(
     State(state): State<AppState>,
     AuthUser(user_id): AuthUser,
+    headers: HeaderMap,
     Json(body): Json<CreateSearchRequest>,
 ) -> Response {
     match state
@@ -601,6 +670,16 @@ async fn create_search(
             error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
         }
         Err(e @ LaunchError::QuotaExceeded(_)) => {
+            record_security_event(
+                &state,
+                SecurityEvent::new(
+                    SecurityEventKind::QuotaExceeded,
+                    Some(user_id),
+                    client_ip(&headers),
+                    "daily search quota",
+                ),
+            )
+            .await;
             error_body(StatusCode::TOO_MANY_REQUESTS, &e.to_string())
         }
         Err(LaunchError::DispatchFailed) => {

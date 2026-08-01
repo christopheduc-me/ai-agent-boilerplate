@@ -14,8 +14,10 @@ use uuid::Uuid;
 
 use crate::adapters::leader_lock::LeaderLock;
 use crate::domain::ports::{
-    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
+    UserRepository,
 };
+use crate::domain::SecurityEvent;
 
 /// Advisory-lock key for the background loop (ADR-053): a fixed application id
 /// so every replica contends on the same lock.
@@ -718,5 +720,69 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
             .await
             .map_err(db_err)?;
         Ok(())
+    }
+}
+
+// ---------------------------------------------------------------- security audit
+
+pub struct PostgresSecurityAudit {
+    pool: PgPool,
+}
+
+impl PostgresSecurityAudit {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn security_event_from_row(row: &PgRow) -> SecurityEvent {
+    SecurityEvent {
+        id: row.get("id"),
+        kind: row.get("kind"),
+        user_id: row.get("user_id"),
+        client_ip: row.get("client_ip"),
+        detail: row.get("detail"),
+        created_at: row.get("created_at"),
+    }
+}
+
+#[async_trait]
+impl SecurityAudit for PostgresSecurityAudit {
+    async fn record(&self, event: &SecurityEvent) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO security_events (id, kind, user_id, client_ip, detail, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(event.id)
+        .bind(&event.kind)
+        .bind(event.user_id)
+        .bind(&event.client_ip)
+        .bind(&event.detail)
+        .bind(event.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_recent(&self, limit: i64) -> Result<Vec<SecurityEvent>, PortError> {
+        let rows = sqlx::query(
+            "SELECT id, kind, user_id, client_ip, detail, created_at
+             FROM security_events ORDER BY created_at DESC LIMIT $1",
+        )
+        .bind(limit.max(0))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(security_event_from_row).collect())
+    }
+
+    async fn delete_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError> {
+        let result = sqlx::query("DELETE FROM security_events WHERE created_at < $1")
+            .bind(cutoff)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
     }
 }

@@ -5,8 +5,8 @@ use std::sync::Arc;
 use chrono::Utc;
 
 use crate::application::login_user::SessionTokens;
-use crate::domain::ports::{PortError, RefreshTokenRepository, TokenService};
-use crate::domain::RefreshToken;
+use crate::domain::ports::{PortError, RefreshTokenRepository, SecurityAudit, TokenService};
+use crate::domain::{RefreshToken, SecurityEvent, SecurityEventKind};
 
 #[derive(Debug, thiserror::Error)]
 pub enum RefreshError {
@@ -19,6 +19,7 @@ pub enum RefreshError {
 pub struct RefreshSession {
     refresh_tokens: Arc<dyn RefreshTokenRepository>,
     tokens: Arc<dyn TokenService>,
+    audit: Arc<dyn SecurityAudit>,
     refresh_ttl_days: i64,
 }
 
@@ -26,11 +27,13 @@ impl RefreshSession {
     pub fn new(
         refresh_tokens: Arc<dyn RefreshTokenRepository>,
         tokens: Arc<dyn TokenService>,
+        audit: Arc<dyn SecurityAudit>,
         refresh_ttl_days: i64,
     ) -> Self {
         Self {
             refresh_tokens,
             tokens,
+            audit,
             refresh_ttl_days,
         }
     }
@@ -53,6 +56,22 @@ impl RefreshSession {
         // Reuse: a consumed token is being replayed -> revoke the whole lineage.
         if stored.is_consumed() {
             self.refresh_tokens.delete_family(stored.family_id).await?;
+            // Audit the compromise (ADR-057), best-effort: never let a logging
+            // failure change the security outcome (still a 401, family revoked).
+            let event = SecurityEvent::new(
+                SecurityEventKind::RefreshReuseDetected,
+                Some(stored.user_id),
+                None,
+                format!("family {}", stored.family_id),
+            );
+            tracing::warn!(
+                user_id = %stored.user_id,
+                family_id = %stored.family_id,
+                "refresh-token reuse detected, revoking the family"
+            );
+            if let Err(e) = self.audit.record(&event).await {
+                tracing::error!(error = %e, "failed to record refresh-reuse event");
+            }
             return Err(RefreshError::InvalidToken);
         }
 
@@ -93,7 +112,9 @@ impl RefreshSession {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::adapters::persistence::in_memory::InMemoryRefreshTokenRepository;
+    use crate::adapters::persistence::in_memory::{
+        InMemoryRefreshTokenRepository, InMemorySecurityAudit,
+    };
     use crate::domain::ports::TokenService;
     use uuid::Uuid;
 
@@ -108,10 +129,22 @@ mod tests {
     }
 
     fn service() -> (RefreshSession, Arc<InMemoryRefreshTokenRepository>) {
+        let (svc, repo, _audit) = service_with_audit();
+        (svc, repo)
+    }
+
+    #[allow(clippy::type_complexity)]
+    fn service_with_audit() -> (
+        RefreshSession,
+        Arc<InMemoryRefreshTokenRepository>,
+        Arc<InMemorySecurityAudit>,
+    ) {
         let repo = Arc::new(InMemoryRefreshTokenRepository::default());
+        let audit = Arc::new(InMemorySecurityAudit::default());
         (
-            RefreshSession::new(repo.clone(), Arc::new(FakeTokens), 30),
+            RefreshSession::new(repo.clone(), Arc::new(FakeTokens), audit.clone(), 30),
             repo,
+            audit,
         )
     }
 
@@ -140,7 +173,7 @@ mod tests {
     async fn replaying_a_consumed_token_revokes_the_whole_family() {
         // ADR-056: a stolen cookie means the old (consumed) token is replayed.
         // That revokes the entire rotation lineage, current token included.
-        let (service, repo) = service();
+        let (service, repo, audit) = service_with_audit();
         let (_, original) = seeded_token(&repo, 30).await;
 
         let first = service.rotate(&original).await.unwrap(); // original now consumed
@@ -151,6 +184,12 @@ mod tests {
             service.rotate(&original).await.unwrap_err(),
             RefreshError::InvalidToken
         ));
+
+        // ...and the compromise is audited (ADR-057).
+        let events = audit.list_recent(10).await.unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, "refresh_reuse_detected");
+        assert!(events[0].user_id.is_some());
 
         // ...and the whole family is gone: even the current token no longer works.
         assert!(matches!(

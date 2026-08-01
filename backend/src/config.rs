@@ -56,6 +56,10 @@ pub struct AppConfig {
     /// whose notification service (n8n, a relay…) lives on the same trusted
     /// private network.
     pub digest_allow_private_webhooks: bool,
+    /// Retention for the security audit log (ADR-057): events older than this
+    /// are purged by the background loop. Kept generous so an incident stays
+    /// investigable; 0 disables the purge (keep forever).
+    pub security_event_retention_days: i64,
     /// Degraded-mode notices to log once tracing is up (dev fallbacks, ADR-013).
     pub warnings: Vec<&'static str>,
 }
@@ -123,6 +127,8 @@ impl AppConfig {
             rate_limits: RateLimitConfig {
                 auth_per_minute: get_u32("RATE_LIMIT_AUTH_PER_MINUTE", 10),
                 api_per_minute: get_u32("RATE_LIMIT_API_PER_MINUTE", 120),
+                // Per-account login throttle (ADR-057), email-keyed.
+                login_per_minute: get_u32("LOGIN_MAX_ATTEMPTS_PER_MINUTE", 10),
                 // Distributed limiting (ADR-037): only when scaling out.
                 redis_url: get("RATE_LIMIT_REDIS_URL"),
             },
@@ -131,6 +137,7 @@ impl AppConfig {
             digest_signing_secret: get("DIGEST_SIGNING_SECRET"),
             digest_allow_private_webhooks: get("DIGEST_ALLOW_PRIVATE_WEBHOOKS")
                 .is_some_and(|v| v == "true"),
+            security_event_retention_days: i64::from(get_u32("SECURITY_EVENT_RETENTION_DAYS", 90)),
             warnings,
         })
     }

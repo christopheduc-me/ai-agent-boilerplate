@@ -5,7 +5,10 @@ use async_trait::async_trait;
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
-use super::{AgentStep, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User};
+use super::{
+    AgentStep, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, SecurityEvent,
+    User,
+};
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
 #[derive(Debug, thiserror::Error)]
@@ -84,6 +87,19 @@ pub trait RefreshTokenRepository: Send + Sync {
     async fn delete_family(&self, family_id: Uuid) -> Result<(), PortError>;
     /// Purges expired tokens (called by the background reaper).
     async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, PortError>;
+}
+
+/// Append-only security audit log (ADR-057): failed/throttled logins, refresh
+/// reuse, quota hits. Writes are best-effort — a recording failure must never
+/// break the request that triggered it (the caller logs and continues).
+#[async_trait]
+pub trait SecurityAudit: Send + Sync {
+    async fn record(&self, event: &SecurityEvent) -> Result<(), PortError>;
+    /// Most recent events first, capped at `limit` — for an operator view.
+    async fn list_recent(&self, limit: i64) -> Result<Vec<SecurityEvent>, PortError>;
+    /// Retention purge (ADR-057): drops events older than `cutoff`. Called by
+    /// the background loop, like the refresh-token purge.
+    async fn delete_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError>;
 }
 
 /// Sends a research job to the agent (via the FastAPI micro-API, see ADR-005).

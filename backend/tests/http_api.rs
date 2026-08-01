@@ -8,11 +8,13 @@ use axum::http::{Request, StatusCode};
 use axum::Router;
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::NoopJobDispatcher;
+use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemoryUserRepository,
+    InMemorySecurityAudit, InMemoryUserRepository,
 };
+use backend::domain::ports::SecurityAudit;
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -24,6 +26,18 @@ fn app() -> Router {
 }
 
 fn app_with(limits: RateLimitConfig, daily_quota: u32) -> Router {
+    app_with_audit(limits, daily_quota).0
+}
+
+/// Same wiring as `app_with`, but also hands back the in-memory audit log so a
+/// test can assert what was recorded (ADR-057). The per-account login throttle
+/// is built from `limits.login_per_minute`.
+fn app_with_audit(
+    limits: RateLimitConfig,
+    daily_quota: u32,
+) -> (Router, Arc<InMemorySecurityAudit>) {
+    let audit = Arc::new(InMemorySecurityAudit::default());
+    let login_throttle = Limiter::per_minute(limits.login_per_minute, "login", None);
     let state = AppState::new(
         Arc::new(InMemoryUserRepository::default()),
         Arc::new(InMemoryJobRepository::default()),
@@ -33,11 +47,13 @@ fn app_with(limits: RateLimitConfig, daily_quota: u32) -> Router {
         Arc::new(backend::adapters::digest::NoopDigestSender),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
+        audit.clone(),
+        login_throttle,
         INTERNAL_TOKEN.into(),
         daily_quota,
         30,
     );
-    router_with_limits(state, limits)
+    (router_with_limits(state, limits), audit)
 }
 
 /// Extracts the `refresh_token` cookie value from a `set-cookie` response header.
@@ -297,6 +313,7 @@ async fn auth_endpoints_are_rate_limited_per_ip() {
         RateLimitConfig {
             auth_per_minute: 2,
             api_per_minute: 100,
+            login_per_minute: 1000,
             redis_url: None,
         },
         100,
@@ -732,4 +749,97 @@ async fn recurring_search_crud() {
     assert_eq!(status, StatusCode::NOT_FOUND);
     let (_, listed) = send(&app, get("/api/recurring", &auth)).await;
     assert!(listed.as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------- security audit + per-account throttle (ADR-057)
+
+#[tokio::test]
+async fn login_is_throttled_per_account_and_audited() {
+    // Cap login at 2 attempts/account/window; keep the per-IP limiter generous
+    // so we exercise the per-account throttle, not the IP one.
+    let (app, audit) = app_with_audit(
+        RateLimitConfig {
+            auth_per_minute: 100,
+            api_per_minute: 100,
+            login_per_minute: 2,
+            redis_url: None,
+        },
+        100,
+    );
+    send(
+        &app,
+        post_json(
+            "/api/auth/register",
+            json!({"email": "victim@b.com", "password": "correct-horse"}),
+            &[],
+        ),
+    )
+    .await;
+
+    let bad = json!({"email": "victim@b.com", "password": "wrong"});
+    let ip = &[("x-forwarded-for", "9.9.9.9")];
+    // Two failed attempts stay under the cap: 401 each.
+    for _ in 0..2 {
+        let (status, _) = send(&app, post_json("/api/auth/login", bad.clone(), ip)).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    // Third attempt is throttled regardless of the password.
+    let (status, body) = send(&app, post_json("/api/auth/login", bad.clone(), ip)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS, "{body}");
+    // Even the correct password is refused while the account is throttled.
+    let good = json!({"email": "victim@b.com", "password": "correct-horse"});
+    let (status, _) = send(&app, post_json("/api/auth/login", good, ip)).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+
+    // The audit log recorded the failures and the throttling, with the IP.
+    let events = audit.list_recent(10).await.unwrap();
+    let kinds: Vec<&str> = events.iter().map(|e| e.kind.as_str()).collect();
+    assert!(kinds.contains(&"login_failed"), "kinds: {kinds:?}");
+    assert!(kinds.contains(&"login_throttled"), "kinds: {kinds:?}");
+    assert!(events
+        .iter()
+        .any(|e| e.client_ip.as_deref() == Some("9.9.9.9")));
+}
+
+#[tokio::test]
+async fn exceeding_the_daily_quota_is_audited() {
+    let (app, audit) = app_with_audit(RateLimitConfig::default(), 0); // quota 0: first search denied
+    send(
+        &app,
+        post_json(
+            "/api/auth/register",
+            json!({"email": "q@b.com", "password": "s3cret-password"}),
+            &[],
+        ),
+    )
+    .await;
+    let (_, login) = send(
+        &app,
+        post_json(
+            "/api/auth/login",
+            json!({"email": "q@b.com", "password": "s3cret-password"}),
+            &[],
+        ),
+    )
+    .await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "rust"}),
+            &[
+                ("authorization", auth.as_str()),
+                ("x-forwarded-for", "7.7.7.7"),
+            ],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+
+    let events = audit.list_recent(10).await.unwrap();
+    assert!(events
+        .iter()
+        .any(|e| e.kind == "quota_exceeded" && e.user_id.is_some()));
 }

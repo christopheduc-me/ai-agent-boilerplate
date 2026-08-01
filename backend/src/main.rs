@@ -8,20 +8,22 @@ use std::sync::Arc;
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::digest::WebhookDigestSender;
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
+use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
 use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemoryUserRepository,
+    InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
     run_migrations, PostgresJobRepository, PostgresLeaderLock, PostgresRecurringSearchRepository,
-    PostgresRefreshTokenRepository, PostgresUserRepository,
+    PostgresRefreshTokenRepository, PostgresSecurityAudit, PostgresUserRepository,
 };
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    JobDispatcher, JobRepository, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+    JobDispatcher, JobRepository, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
+    UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -110,10 +112,13 @@ async fn serve() {
         Arc<dyn JobRepository>,
         Arc<dyn RefreshTokenRepository>,
         Arc<dyn RecurringSearchRepository>,
+        // Security audit log (ADR-057).
+        Arc<dyn SecurityAudit>,
         // Single-leader gate for the background loop (ADR-053).
         Arc<dyn LeaderLock>,
     );
-    let (users, jobs, refresh_tokens, recurring, leader): Repos = match &config.database_url {
+    let (users, jobs, refresh_tokens, recurring, audit, leader): Repos = match &config.database_url
+    {
         Some(url) => {
             let pool = PgPoolOptions::new()
                 .max_connections(10)
@@ -129,6 +134,7 @@ async fn serve() {
                 Arc::new(PostgresJobRepository::new(pool.clone())),
                 Arc::new(PostgresRefreshTokenRepository::new(pool.clone())),
                 Arc::new(PostgresRecurringSearchRepository::new(pool.clone())),
+                Arc::new(PostgresSecurityAudit::new(pool.clone())),
                 Arc::new(PostgresLeaderLock::new(pool)),
             )
         }
@@ -137,6 +143,7 @@ async fn serve() {
             Arc::new(InMemoryJobRepository::default()),
             Arc::new(InMemoryRefreshTokenRepository::default()),
             Arc::new(InMemoryRecurringSearchRepository::default()),
+            Arc::new(InMemorySecurityAudit::default()),
             // A single in-memory instance always leads.
             Arc::new(NoopLeaderLock),
         ),
@@ -155,6 +162,9 @@ async fn serve() {
         config.daily_search_quota,
     );
     let refresh_tokens_for_reaper = refresh_tokens.clone();
+    let audit_for_purge = audit.clone();
+    // Security-event retention (ADR-057): 0 keeps events forever (no purge).
+    let security_retention_days = config.security_event_retention_days;
     let tick = std::time::Duration::from_secs(config.scheduler_tick_seconds);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tick);
@@ -181,9 +191,23 @@ async fn serve() {
             {
                 tracing::error!(error = %e, "refresh token purge failed");
             }
+            if security_retention_days > 0 {
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(security_retention_days);
+                if let Err(e) = audit_for_purge.delete_before(cutoff).await {
+                    tracing::error!(error = %e, "security event purge failed");
+                }
+            }
             leader.release().await;
         }
     });
+
+    // Per-account login throttle (ADR-057): shares RATE_LIMIT_REDIS_URL so it is
+    // distributed when the backend scales out (ADR-037), in-memory otherwise.
+    let login_throttle = Limiter::per_minute(
+        config.rate_limits.login_per_minute,
+        "login",
+        config.rate_limits.redis_url.as_deref(),
+    );
 
     let state = AppState::new(
         users,
@@ -197,6 +221,8 @@ async fn serve() {
         )),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),
+        audit,
+        login_throttle,
         config.internal_token,
         config.daily_search_quota,
         config.refresh_token_days,

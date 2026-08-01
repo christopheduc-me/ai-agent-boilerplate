@@ -49,8 +49,12 @@ services:
       DAILY_SEARCH_QUOTA: ${DAILY_SEARCH_QUOTA:-20}
       RATE_LIMIT_AUTH_PER_MINUTE: ${RATE_LIMIT_AUTH_PER_MINUTE:-10}
       RATE_LIMIT_API_PER_MINUTE: ${RATE_LIMIT_API_PER_MINUTE:-120}
+      # Per-account login throttle (ADR-057), email-keyed.
+      LOGIN_MAX_ATTEMPTS_PER_MINUTE: ${LOGIN_MAX_ATTEMPTS_PER_MINUTE:-10}
       # Distributed rate limiting (ADR-037): empty = in-memory limiter.
       RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-}
+      # Security audit log retention in days (ADR-057); 0 = keep forever.
+      SECURITY_EVENT_RETENTION_DAYS: ${SECURITY_EVENT_RETENTION_DAYS:-90}
       # Digest webhook HMAC signing (ADR-047): empty = unsigned.
       DIGEST_SIGNING_SECRET: ${DIGEST_SIGNING_SECRET:-}
       # Allow internal-network digest webhook targets (ADR-055): empty/false =

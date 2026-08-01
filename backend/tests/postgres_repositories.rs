@@ -8,14 +8,14 @@
 
 use backend::adapters::persistence::postgres::{
     run_migrations, PostgresJobRepository, PostgresRecurringSearchRepository,
-    PostgresRefreshTokenRepository, PostgresUserRepository,
+    PostgresRefreshTokenRepository, PostgresSecurityAudit, PostgresUserRepository,
 };
 use backend::domain::ports::{
-    JobRepository, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+    JobRepository, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use backend::domain::{
     AgentStep, DateConfidence, JobMode, JobStatus, RecurringSearch, RefreshToken, ResearchJob,
-    SearchResult, User,
+    SearchResult, SecurityEvent, SecurityEventKind, User,
 };
 use chrono::{TimeZone, Utc};
 use sqlx::PgPool;
@@ -155,6 +155,52 @@ async fn refresh_token_roundtrip_delete_and_purge() {
         .await
         .unwrap()
         .is_none());
+}
+
+#[tokio::test]
+async fn security_events_record_list_newest_first_and_purge() {
+    // ADR-057: append, read back newest-first, and retention purge.
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let audit = PostgresSecurityAudit::new(pool);
+
+    // Clean slate: this is the only test writing security_events, and
+    // list_recent is a global operator view, so wipe first for a deterministic
+    // count (the shared DB persists rows between runs).
+    audit
+        .delete_before(Utc::now() + chrono::Duration::days(1))
+        .await
+        .unwrap();
+
+    let mut old = SecurityEvent::new(
+        SecurityEventKind::LoginFailed,
+        None,
+        Some("1.2.3.4".into()),
+        "old",
+    );
+    old.created_at = Utc::now() - chrono::Duration::days(120);
+    let recent = SecurityEvent::new(
+        SecurityEventKind::RefreshReuseDetected,
+        Some(user.id),
+        None,
+        "recent",
+    );
+    audit.record(&old).await.unwrap();
+    audit.record(&recent).await.unwrap();
+
+    // Newest first.
+    let listed = audit.list_recent(10).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    assert_eq!(listed[0].detail, "recent");
+    assert_eq!(listed[0].user_id, Some(user.id));
+    assert_eq!(listed[1].client_ip.as_deref(), Some("1.2.3.4"));
+
+    // Retention purge drops only the old one.
+    let cutoff = Utc::now() - chrono::Duration::days(90);
+    assert_eq!(audit.delete_before(cutoff).await.unwrap(), 1);
+    let remaining = audit.list_recent(10).await.unwrap();
+    assert_eq!(remaining.len(), 1);
+    assert_eq!(remaining[0].detail, "recent");
 }
 
 #[tokio::test]

@@ -465,6 +465,9 @@ burn the API budget or hammer login.
    Two knobs: `RATE_LIMIT_AUTH_PER_MINUTE` on `/api/auth/*` (default 10,
    brute-force protection) and `RATE_LIMIT_API_PER_MINUTE` on the rest of
    `/api/*` (default 120). Internal routes (worker traffic) are never limited.
+   *Extended by ADR-057*: a third, **per-account** login throttle
+   (`LOGIN_MAX_ATTEMPTS_PER_MINUTE`) closes IP-rotating credential-stuffing that
+   per-IP limits miss, and a `security_events` audit log records the hits.
 
 **Why in-memory fixed-window**: single-instance deployment (ADR-015) — no shared
 store needed, ~80 lines, fully unit-testable. **Trade-offs accepted**: limits
@@ -1794,6 +1797,45 @@ domain caps, and the resolver (via `localhost`/literal, offline).
 
 ---
 
+### ADR-057 — Security audit log + per-account login throttle (decided 2026-08-01)
+
+**Context**: the hardening passes (ADR-055/056) closed attack surfaces but left
+abuse **unobservable** and one brute-force vector open. Two additions, both in
+the abuse-protection family (ADR-017).
+
+1. **Security audit log.** An append-only `security_events` table (migration
+   `0010`) records abuse-relevant moments — `login_failed`, `login_throttled`,
+   `refresh_reuse_detected` (ADR-056), `quota_exceeded` (ADR-017) — behind a
+   `SecurityAudit` port (in-memory + Postgres). Recording is **best-effort**: it
+   never fails the request that triggered it, and every event is *also* emitted
+   as a structured log line (ADR-018), so it surfaces in the observability
+   pillars (ADR-050) even without a database query. `kind` is free text so a
+   fork adds its own kinds without a schema change (like `AgentStep.kind`). The
+   `RefreshReuseDetected` event is raised inside `RefreshSession` — the only
+   layer that can tell a replay from an unknown token — carrying the `user_id`;
+   the edge events (`login_*`, `quota_*`) are raised in the HTTP handlers, where
+   the client IP (first `X-Forwarded-For`, trusted proxy — ADR-014/015) is
+   known. The background loop purges events older than
+   `SECURITY_EVENT_RETENTION_DAYS` (default 90; 0 = keep forever), alongside the
+   refresh-token purge. No read endpoint ships — the operator reads it via SQL
+   or the logs; a guarded admin route is a documented extension.
+2. **Per-account login throttle.** The per-IP limiter (ADR-017/037) does not
+   stop credential-stuffing that rotates IPs against **one** account. Login now
+   also passes a throttle **keyed by the normalized email**, capped at
+   `LOGIN_MAX_ATTEMPTS_PER_MINUTE` (default 10), reusing the exact fixed-window
+   `Limiter` (in-memory, or Redis-shared via `RATE_LIMIT_REDIS_URL` when scaled
+   out — ADR-037). It is checked **before** the deliberately-costly argon2
+   verify, so a throttled account also sheds that CPU load, and it refuses even
+   a correct password during the cooldown. Trade-off: an attacker can thus
+   briefly lock a victim out (the accepted cost of account throttling); the
+   window is short (per-minute) and IP-rotation no longer helps them.
+
+Tested end-to-end with fakes: the audit roundtrip + retention purge (in-memory +
+Postgres), the reuse event (`RefreshSession`), and the HTTP throttle + audit
+(three logins against a cap-of-2, asserting the `429` and the recorded events).
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
@@ -1814,7 +1856,8 @@ domain caps, and the resolver (via `localhost`/literal, offline).
 | DELETE | `/api/recurring/{id}` | Deletes a recurring search (run history is kept) |
 
 All `/api/*` routes can answer `429` (per-IP rate limit; `POST /api/searches`
-also enforces the per-user daily quota — ADR-017).
+also enforces the per-user daily quota — ADR-017; `POST /api/auth/login` also
+enforces a per-account throttle — ADR-057).
 
 ### Internal (Rust → FastAPI, shared token)
 

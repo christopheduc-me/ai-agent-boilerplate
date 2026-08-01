@@ -11,10 +11,11 @@ use axum::http::Request;
 use axum::Router;
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
+use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
     InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemoryUserRepository,
+    InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
 use backend::domain::{JobMode, ResearchJob};
@@ -40,6 +41,8 @@ fn app() -> Router {
         Arc::new(backend::adapters::digest::NoopDigestSender),
         Arc::new(Argon2PasswordHasher),
         Arc::new(JwtTokenService::new("test-secret", 15)),
+        Arc::new(InMemorySecurityAudit::default()),
+        Limiter::per_minute(1000, "login", None),
         INTERNAL_TOKEN.into(),
         100,
         30,

@@ -3,12 +3,14 @@ pub mod ports;
 pub mod recurring;
 pub mod refresh_token;
 pub mod search_result;
+pub mod security_event;
 pub mod user;
 
 pub use job::{AgentStep, JobMode, JobStatus, JobUsage, ResearchJob};
 pub use recurring::RecurringSearch;
 pub use refresh_token::RefreshToken;
 pub use search_result::{sort_by_publication_date, DateConfidence, EventType, SearchResult};
+pub use security_event::{SecurityEvent, SecurityEventKind};
 pub use user::User;
 
 use chrono::{DateTime, SubsecRound, Utc};

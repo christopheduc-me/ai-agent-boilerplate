@@ -6,10 +6,12 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
+    UserRepository,
 };
 use crate::domain::{
-    AgentStep, JobStatus, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, User,
+    AgentStep, JobStatus, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult,
+    SecurityEvent, User,
 };
 
 #[derive(Default)]
@@ -298,5 +300,35 @@ impl RecurringSearchRepository for InMemoryRecurringSearchRepository {
             s.mark_ran(at);
         }
         Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct InMemorySecurityAudit {
+    events: Mutex<Vec<SecurityEvent>>,
+}
+
+#[async_trait]
+impl SecurityAudit for InMemorySecurityAudit {
+    async fn record(&self, event: &SecurityEvent) -> Result<(), PortError> {
+        self.events.lock().unwrap().push(event.clone());
+        Ok(())
+    }
+
+    async fn list_recent(&self, limit: i64) -> Result<Vec<SecurityEvent>, PortError> {
+        let events = self.events.lock().unwrap();
+        Ok(events
+            .iter()
+            .rev()
+            .take(limit.max(0) as usize)
+            .cloned()
+            .collect())
+    }
+
+    async fn delete_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError> {
+        let mut events = self.events.lock().unwrap();
+        let before = events.len();
+        events.retain(|e| e.created_at >= cutoff);
+        Ok((before - events.len()) as u64)
     }
 }

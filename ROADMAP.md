@@ -14,7 +14,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       idempotent end to end.
 - [x] **Rate limiting + quotas (ADR-017)** — done: per-user daily search quota
       (`DAILY_SEARCH_QUOTA`), per-IP fixed-window limits on auth and API routes
-      (`RATE_LIMIT_AUTH_PER_MINUTE`, `RATE_LIMIT_API_PER_MINUTE`).
+      (`RATE_LIMIT_AUTH_PER_MINUTE`, `RATE_LIMIT_API_PER_MINUTE`). Per-account
+      login throttle (ADR-057, `LOGIN_MAX_ATTEMPTS_PER_MINUTE`) caps IP-rotating
+      credential-stuffing, plus an append-only security audit log
+      (`security_events`, migration 0010; failed/throttled logins, refresh reuse,
+      quota hits) purged after `SECURITY_EVENT_RETENTION_DAYS`.
 - [x] **Refresh tokens (ADR-008)** — done: single-use rotation on `/refresh`,
       SHA-256-hashed storage (migration 0002), HttpOnly cookie scoped to
       `/api/auth`, revocation on `/logout`, expired-token purge by the reaper.
