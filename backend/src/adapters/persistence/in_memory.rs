@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
-    UserRepository,
+    JobRepository, PortError, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
+    SecurityAudit, UserRepository,
 };
 use crate::domain::{
     AgentStep, JobStatus, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult,
@@ -387,5 +387,16 @@ impl SecurityAudit for InMemorySecurityAudit {
         let before = events.len();
         events.retain(|e| e.created_at >= cutoff);
         Ok((before - events.len()) as u64)
+    }
+}
+
+/// Readiness for the in-memory stack (ADR-059): no external dependency, so it is
+/// always ready.
+pub struct AlwaysReady;
+
+#[async_trait]
+impl ReadinessProbe for AlwaysReady {
+    async fn ready(&self) -> bool {
+        true
     }
 }

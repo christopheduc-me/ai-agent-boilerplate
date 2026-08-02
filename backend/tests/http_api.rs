@@ -11,10 +11,10 @@ use backend::adapters::dispatch::NoopJobDispatcher;
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
-use backend::domain::ports::SecurityAudit;
+use backend::domain::ports::{ReadinessProbe, SecurityAudit};
 use http_body_util::BodyExt;
 use serde_json::{json, Value};
 use tower::ServiceExt;
@@ -49,6 +49,7 @@ fn app_with_audit(
         Arc::new(JwtTokenService::new("test-secret", 15)),
         audit.clone(),
         login_throttle,
+        Arc::new(AlwaysReady),
         INTERNAL_TOKEN.into(),
         daily_quota,
         30,
@@ -906,4 +907,50 @@ async fn account_deletion_requires_authentication() {
         .await
         .unwrap();
     assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------- readiness (ADR-059)
+
+#[tokio::test]
+async fn readyz_reports_200_when_dependencies_are_up() {
+    let app = app(); // in-memory stack: AlwaysReady
+    let response = app.oneshot(get("/readyz", &[])).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn readyz_reports_503_when_a_dependency_is_down() {
+    struct NotReady;
+    #[async_trait::async_trait]
+    impl ReadinessProbe for NotReady {
+        async fn ready(&self) -> bool {
+            false
+        }
+    }
+
+    let state = AppState::new(
+        Arc::new(InMemoryUserRepository::default()),
+        Arc::new(InMemoryJobRepository::default()),
+        Arc::new(InMemoryRefreshTokenRepository::default()),
+        Arc::new(InMemoryRecurringSearchRepository::default()),
+        Arc::new(NoopJobDispatcher),
+        Arc::new(backend::adapters::digest::NoopDigestSender),
+        Arc::new(Argon2PasswordHasher),
+        Arc::new(JwtTokenService::new("test-secret", 15)),
+        Arc::new(InMemorySecurityAudit::default()),
+        Limiter::per_minute(1000, "login", None),
+        Arc::new(NotReady),
+        INTERNAL_TOKEN.into(),
+        100,
+        30,
+    );
+    let app = router_with_limits(state, RateLimitConfig::default());
+
+    let response = app.oneshot(get("/readyz", &[])).await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    // Liveness stays green regardless — the process is up (ADR-059).
+    let app2 = app_with(RateLimitConfig::default(), 100);
+    let live = app2.oneshot(get("/healthz", &[])).await.unwrap();
+    assert_eq!(live.status(), StatusCode::OK);
 }

@@ -38,7 +38,7 @@ Entry points once up:
 | Service | URL |
 |---|---|
 | Frontend (nginx) | http://localhost:8080 |
-| Rust backend API | http://localhost:8000 (healthz: `/healthz`) |
+| Rust backend API | http://localhost:8000 (liveness: `/healthz`, readiness: `/readyz` — ADR-059) |
 | API docs (Swagger UI) | http://localhost:8000/api/docs (raw spec: `/api/openapi.json`) — ADR-049 |
 | Agent FastAPI | http://localhost:8001 (healthz: `/healthz`) |
 | PostgreSQL | localhost:5433 (`app`/`app`, db `aiagent`) |

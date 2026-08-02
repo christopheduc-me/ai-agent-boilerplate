@@ -108,6 +108,10 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       format/lint per brick + gitleaks staged scan; `lefthook install` to opt in.
 - [x] **Graceful shutdown of the backend (ADR-024)** — done: SIGTERM/SIGINT
       drain via `with_graceful_shutdown`.
+- [x] **Readiness probe (ADR-059)** — done: `GET /readyz` (DB `SELECT 1` behind
+      a `ReadinessProbe` port) returns 503 while the database is unreachable, so
+      a load balancer / orchestrator drains the instance without tripping the
+      `/healthz` liveness probe.
 - [x] **Cross-language contract fixtures (ADR-025)** — done: `contracts/`
       golden files asserted by both the Rust and Python suites.
 - [x] **Trivy image scanning (ADR-015 amendment)** — done: weekly HIGH/CRITICAL

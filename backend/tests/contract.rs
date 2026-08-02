@@ -14,8 +14,8 @@ use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
 use backend::domain::{JobMode, ResearchJob};
@@ -43,6 +43,7 @@ fn app() -> Router {
         Arc::new(JwtTokenService::new("test-secret", 15)),
         Arc::new(InMemorySecurityAudit::default()),
         Limiter::per_minute(1000, "login", None),
+        Arc::new(AlwaysReady),
         INTERNAL_TOKEN.into(),
         100,
         30,

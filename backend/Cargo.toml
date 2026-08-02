@@ -38,6 +38,8 @@ utoipa-swagger-ui = { version = "9", features = ["axum", "vendored"] }
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+# Integration tests implement async ports (e.g. a not-ready ReadinessProbe).
+async-trait = "0.1"
 
 [[bin]]
 name = "backend"

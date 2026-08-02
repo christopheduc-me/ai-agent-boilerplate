@@ -33,8 +33,8 @@ use crate::application::{
     RefreshSession, RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
-    DigestSender, JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
-    RefreshTokenRepository, SecurityAudit, TokenService, UserRepository,
+    DigestSender, JobDispatcher, JobRepository, PasswordHasher, ReadinessProbe,
+    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, TokenService, UserRepository,
 };
 use crate::domain::{
     AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
@@ -62,6 +62,8 @@ pub struct AppState {
     /// Per-account login throttle (ADR-057), keyed by email — independent of
     /// the per-IP limiter, so credential-stuffing across many IPs is capped too.
     login_throttle: rate_limit::Limiter,
+    /// Readiness of critical dependencies (ADR-059): backs `GET /readyz`.
+    readiness: Arc<dyn ReadinessProbe>,
     internal_token: String,
     refresh_ttl_days: i64,
 }
@@ -105,6 +107,7 @@ impl AppState {
         tokens: Arc<dyn TokenService>,
         audit: Arc<dyn SecurityAudit>,
         login_throttle: rate_limit::Limiter,
+        readiness: Arc<dyn ReadinessProbe>,
         internal_token: String,
         daily_search_quota: u32,
         refresh_ttl_days: i64,
@@ -144,6 +147,7 @@ impl AppState {
             tokens,
             audit,
             login_throttle,
+            readiness,
             internal_token,
             refresh_ttl_days,
         }
@@ -295,7 +299,13 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         ));
 
     Router::new()
+        // Liveness (ADR-014): the process is up. The Docker HEALTHCHECK probes
+        // this; a dependency blip must not trip it and restart-loop the container.
         .route("/healthz", get(|| async { "ok" }))
+        // Readiness (ADR-059): 200 only when critical dependencies (the DB) are
+        // reachable, else 503 — for a load balancer / orchestrator to route or
+        // drain this instance without killing it.
+        .route("/readyz", get(readyz))
         // Interactive API docs (ADR-049 amendment): Swagger UI at /api/docs,
         // raw spec at /api/openapi.json. Assets are vendored (self-hosted).
         .merge(SwaggerUi::new("/api/docs").url("/api/openapi.json", ApiDoc::openapi()))
@@ -318,6 +328,15 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
 
 fn error_body(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
+}
+
+/// Readiness probe (ADR-059): 200 when the DB is reachable, 503 otherwise.
+async fn readyz(State(state): State<AppState>) -> Response {
+    if state.readiness.ready().await {
+        (StatusCode::OK, "ready").into_response()
+    } else {
+        (StatusCode::SERVICE_UNAVAILABLE, "not ready").into_response()
+    }
 }
 
 /// Best-effort client IP for the audit log (ADR-057): the first

@@ -337,9 +337,10 @@ the Dockerfile serves dev (profile `full`), CI, and deployment.
 **Rules**:
 - A single image for the FastAPI API and the Celery worker (same code, same
   deps) — only the `command` differs. Avoids version drift.
-- `HEALTHCHECK` on every application service (`/healthz` for Axum and FastAPI,
-  `celery inspect ping` for the worker); `depends_on: condition: service_healthy`
-  in compose.
+- `HEALTHCHECK` on every application service (`/healthz` **liveness** for Axum
+  and FastAPI, `celery inspect ping` for the worker); `depends_on: condition:
+  service_healthy` in compose. The backend also exposes a `/readyz`
+  **readiness** probe (ADR-059) for a load balancer / orchestrator.
 - Configuration comes **exclusively from environment variables** (see
   `.env.example`) — no hardcoded values in the images, same images from dev
   to prod.
@@ -1880,6 +1881,28 @@ deletion removes every per-user row while leaving other accounts intact. The
 frontend exposes account deletion as a topbar action behind a confirm dialog
 (auth store `deleteAccount`), with unit coverage and a browser e2e journey
 (ADR-028): delete → back on login → the old credentials no longer authenticate.
+
+---
+
+### ADR-059 — Readiness probe (decided 2026-08-02)
+
+**Context**: the containers have a **liveness** check (`/healthz` — "the process
+is up", driving the Docker `HEALTHCHECK`, ADR-014), but nothing told a load
+balancer or orchestrator whether an instance could actually *serve* — i.e. reach
+its database. Liveness and readiness are different signals and must not be
+conflated: a transient DB outage should pull an instance from rotation, not trip
+the liveness probe and restart-loop the container.
+
+**Decision**: a `GET /readyz` endpoint backed by a `ReadinessProbe` port. The
+Postgres adapter runs a cheap `SELECT 1`; the in-memory stack has no external
+dependency and is always ready. `/readyz` returns `200` when ready, `503`
+otherwise — the standard contract for Kubernetes readiness probes / LB health
+checks. Liveness (`/healthz`) is left untouched, so a DB blip drains traffic
+(readiness red) without killing the process (liveness green). The probe is a
+port like everything else (hexagonal), so it is unit-tested both ways (a fake
+not-ready probe → 503) plus a Postgres integration test for the real `SELECT 1`.
+Readiness is intentionally DB-only: the agent API being down does not make the
+backend unready (dispatch failures are handled gracefully, ADR-005).
 
 ---
 

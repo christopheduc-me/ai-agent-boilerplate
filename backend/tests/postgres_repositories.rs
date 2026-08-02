@@ -209,14 +209,26 @@ async fn retention_purge_drops_old_finished_one_shot_searches_only() {
     jobs.insert(&recent).await.unwrap();
     jobs.update(&recent).await.unwrap();
 
+    // The purge is global (not user-scoped), and the DB persists across runs, so
+    // assert on WHICH of our rows survive rather than the global deleted count.
     let cutoff = Utc::now() - chrono::Duration::days(30);
-    assert_eq!(jobs.delete_finished_before(cutoff).await.unwrap(), 1);
+    let purged = jobs.delete_finished_before(cutoff).await.unwrap();
+    assert!(purged >= 1, "at least our old one-shot job was purged");
 
     assert!(jobs.find(old_oneshot.id).await.unwrap().is_none());
     assert!(jobs.results_for(old_oneshot.id).await.unwrap().is_empty()); // cascaded
     assert!(jobs.find(old_recurring.id).await.unwrap().is_some());
     assert!(jobs.find(old_pending.id).await.unwrap().is_some());
     assert!(jobs.find(recent.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn readiness_is_true_against_a_live_database() {
+    // ADR-059: PostgresReadiness runs SELECT 1 on the pool.
+    use backend::adapters::persistence::postgres::PostgresReadiness;
+    use backend::domain::ports::ReadinessProbe;
+    let Some(pool) = pool().await else { return };
+    assert!(PostgresReadiness::new(pool).ready().await);
 }
 
 #[tokio::test]

@@ -14,8 +14,8 @@ use uuid::Uuid;
 
 use crate::adapters::leader_lock::LeaderLock;
 use crate::domain::ports::{
-    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
-    UserRepository,
+    JobRepository, PortError, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
+    SecurityAudit, UserRepository,
 };
 use crate::domain::SecurityEvent;
 
@@ -840,5 +840,27 @@ impl SecurityAudit for PostgresSecurityAudit {
             .await
             .map_err(db_err)?;
         Ok(result.rows_affected())
+    }
+}
+
+// ---------------------------------------------------------------- readiness
+
+/// Readiness backed by PostgreSQL (ADR-059): a cheap `SELECT 1` on the pool.
+/// False on any connection/query error, so `/readyz` reports 503 while the DB
+/// is unreachable and the instance is pulled from rotation until it recovers.
+pub struct PostgresReadiness {
+    pool: PgPool,
+}
+
+impl PostgresReadiness {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl ReadinessProbe for PostgresReadiness {
+    async fn ready(&self) -> bool {
+        sqlx::query("SELECT 1").fetch_one(&self.pool).await.is_ok()
     }
 }

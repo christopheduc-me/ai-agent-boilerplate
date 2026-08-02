@@ -12,18 +12,19 @@ use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
 use backend::adapters::persistence::in_memory::{
-    InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-    InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresLeaderLock, PostgresRecurringSearchRepository,
-    PostgresRefreshTokenRepository, PostgresSecurityAudit, PostgresUserRepository,
+    run_migrations, PostgresJobRepository, PostgresLeaderLock, PostgresReadiness,
+    PostgresRecurringSearchRepository, PostgresRefreshTokenRepository, PostgresSecurityAudit,
+    PostgresUserRepository,
 };
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    JobDispatcher, JobRepository, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
-    UserRepository,
+    JobDispatcher, JobRepository, ReadinessProbe, RecurringSearchRepository,
+    RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -114,40 +115,45 @@ async fn serve() {
         Arc<dyn RecurringSearchRepository>,
         // Security audit log (ADR-057).
         Arc<dyn SecurityAudit>,
+        // Readiness probe for /readyz (ADR-059).
+        Arc<dyn ReadinessProbe>,
         // Single-leader gate for the background loop (ADR-053).
         Arc<dyn LeaderLock>,
     );
-    let (users, jobs, refresh_tokens, recurring, audit, leader): Repos = match &config.database_url
-    {
-        Some(url) => {
-            let pool = PgPoolOptions::new()
-                .max_connections(10)
-                .connect(url)
-                .await
-                .expect("failed to connect to PostgreSQL");
-            run_migrations(&pool)
-                .await
-                .expect("failed to run migrations");
-            tracing::info!("using PostgreSQL persistence");
-            (
-                Arc::new(PostgresUserRepository::new(pool.clone())),
-                Arc::new(PostgresJobRepository::new(pool.clone())),
-                Arc::new(PostgresRefreshTokenRepository::new(pool.clone())),
-                Arc::new(PostgresRecurringSearchRepository::new(pool.clone())),
-                Arc::new(PostgresSecurityAudit::new(pool.clone())),
-                Arc::new(PostgresLeaderLock::new(pool)),
-            )
-        }
-        None => (
-            Arc::new(InMemoryUserRepository::default()),
-            Arc::new(InMemoryJobRepository::default()),
-            Arc::new(InMemoryRefreshTokenRepository::default()),
-            Arc::new(InMemoryRecurringSearchRepository::default()),
-            Arc::new(InMemorySecurityAudit::default()),
-            // A single in-memory instance always leads.
-            Arc::new(NoopLeaderLock),
-        ),
-    };
+    let (users, jobs, refresh_tokens, recurring, audit, readiness, leader): Repos =
+        match &config.database_url {
+            Some(url) => {
+                let pool = PgPoolOptions::new()
+                    .max_connections(10)
+                    .connect(url)
+                    .await
+                    .expect("failed to connect to PostgreSQL");
+                run_migrations(&pool)
+                    .await
+                    .expect("failed to run migrations");
+                tracing::info!("using PostgreSQL persistence");
+                (
+                    Arc::new(PostgresUserRepository::new(pool.clone())),
+                    Arc::new(PostgresJobRepository::new(pool.clone())),
+                    Arc::new(PostgresRefreshTokenRepository::new(pool.clone())),
+                    Arc::new(PostgresRecurringSearchRepository::new(pool.clone())),
+                    Arc::new(PostgresSecurityAudit::new(pool.clone())),
+                    Arc::new(PostgresReadiness::new(pool.clone())),
+                    Arc::new(PostgresLeaderLock::new(pool)),
+                )
+            }
+            None => (
+                Arc::new(InMemoryUserRepository::default()),
+                Arc::new(InMemoryJobRepository::default()),
+                Arc::new(InMemoryRefreshTokenRepository::default()),
+                Arc::new(InMemoryRecurringSearchRepository::default()),
+                Arc::new(InMemorySecurityAudit::default()),
+                // No external dependency to check: always ready.
+                Arc::new(AlwaysReady),
+                // A single in-memory instance always leads.
+                Arc::new(NoopLeaderLock),
+            ),
+        };
 
     // Background loop: the reaper (ADR-016), refresh-token purge (ADR-008)
     // and the recurring-search scheduler (ADR-033) share one ticker.
@@ -234,6 +240,7 @@ async fn serve() {
         Arc::new(JwtTokenService::new(&config.jwt_secret, 15)),
         audit,
         login_throttle,
+        readiness,
         config.internal_token,
         config.daily_search_quota,
         config.refresh_token_days,

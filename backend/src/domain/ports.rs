@@ -149,6 +149,16 @@ pub trait DigestSender: Send + Sync {
     async fn send(&self, webhook_url: &str, digest: &Digest) -> Result<(), PortError>;
 }
 
+/// Readiness of the instance's critical dependencies (ADR-059): distinct from
+/// liveness (`/healthz`, "the process is up"). `/readyz` returns 503 when this
+/// is false, so a load balancer or orchestrator only routes traffic here once
+/// the database is reachable — and drains the instance during an outage without
+/// killing it (a DB blip must not trip the liveness probe and restart-loop).
+#[async_trait]
+pub trait ReadinessProbe: Send + Sync {
+    async fn ready(&self) -> bool;
+}
+
 pub trait PasswordHasher: Send + Sync {
     fn hash(&self, password: &str) -> Result<String, PortError>;
     fn verify(&self, password: &str, hash: &str) -> bool;
