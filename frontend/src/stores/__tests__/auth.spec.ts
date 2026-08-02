@@ -14,6 +14,7 @@ vi.mock("@/api", async (importOriginal) => {
       register: vi.fn(),
       logout: vi.fn(),
       refresh: vi.fn(),
+      deleteAccount: vi.fn(),
     },
   };
 });
@@ -24,6 +25,7 @@ const mocked = api as unknown as {
   register: ReturnType<typeof vi.fn>;
   logout: ReturnType<typeof vi.fn>;
   refresh: ReturnType<typeof vi.fn>;
+  deleteAccount: ReturnType<typeof vi.fn>;
 };
 
 beforeEach(() => {
@@ -63,6 +65,19 @@ describe("auth store (ADR-008)", () => {
     await auth.logout();
 
     expect(auth.isAuthenticated).toBe(false);
+  });
+
+  it("deleteAccount erases the account and clears the session (ADR-058)", async () => {
+    mocked.login.mockResolvedValue({ access_token: "tok" });
+    mocked.deleteAccount.mockResolvedValue(undefined);
+    const auth = useAuthStore();
+    await auth.login("a@test.dev", "password");
+
+    await auth.deleteAccount();
+
+    expect(mocked.deleteAccount).toHaveBeenCalledWith("tok");
+    expect(auth.isAuthenticated).toBe(false);
+    expect(auth.token).toBeNull();
   });
 
   it("tryRefresh restores the session from the cookie, or clears it", async () => {

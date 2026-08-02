@@ -843,3 +843,67 @@ async fn exceeding_the_daily_quota_is_audited() {
         .iter()
         .any(|e| e.kind == "quota_exceeded" && e.user_id.is_some()));
 }
+
+// ---------------------------------------------------------------- account deletion (ADR-058)
+
+#[tokio::test]
+async fn deleting_the_account_erases_data_and_ends_the_session() {
+    let app = app();
+    let creds = json!({"email": "bye@example.com", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds.clone(), &[])).await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    // Leave some data behind.
+    send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "to be erased"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+
+    // Delete the account.
+    let response = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/account")
+                .header("authorization", auth.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::NO_CONTENT);
+    let cookie = response
+        .headers()
+        .get("set-cookie")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(cookie.contains("refresh_token=;") || cookie.contains("Max-Age=0"));
+
+    // The account is gone: the same credentials no longer authenticate.
+    let (status, _) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn account_deletion_requires_authentication() {
+    let app = app();
+    let response = app
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri("/api/account")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+}

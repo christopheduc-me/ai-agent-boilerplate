@@ -214,6 +214,11 @@ export const api = {
 
   logout: () => request<void>("/api/auth/logout", { method: "POST" }),
 
+  // Deletes the account and all its data (ADR-058); the server clears the
+  // refresh cookie. Irreversible.
+  deleteAccount: (token: string) =>
+    request<void>("/api/account", { method: "DELETE" }, token),
+
   launchSearch: (keyword: string, token: string, mode: JobMode = "workflow") =>
     request<{ job_id: string }>(
       "/api/searches",

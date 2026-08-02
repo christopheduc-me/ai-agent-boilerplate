@@ -60,6 +60,11 @@ pub struct AppConfig {
     /// are purged by the background loop. Kept generous so an incident stays
     /// investigable; 0 disables the purge (keep forever).
     pub security_event_retention_days: i64,
+    /// Retention for finished one-shot searches (ADR-058): jobs + their results
+    /// older than this are purged by the background loop. 0 disables the purge
+    /// (the default — keep data unless the operator opts in). Recurring-run
+    /// history is never purged by age (it is the dedup memory, ADR-033).
+    pub data_retention_days: i64,
     /// Degraded-mode notices to log once tracing is up (dev fallbacks, ADR-013).
     pub warnings: Vec<&'static str>,
 }
@@ -138,6 +143,7 @@ impl AppConfig {
             digest_allow_private_webhooks: get("DIGEST_ALLOW_PRIVATE_WEBHOOKS")
                 .is_some_and(|v| v == "true"),
             security_event_retention_days: i64::from(get_u32("SECURITY_EVENT_RETENTION_DAYS", 90)),
+            data_retention_days: i64::from(get_u32("DATA_RETENTION_DAYS", 0)),
             warnings,
         })
     }

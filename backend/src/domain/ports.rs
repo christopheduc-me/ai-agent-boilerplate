@@ -19,6 +19,8 @@ pub struct PortError(pub String);
 pub trait UserRepository: Send + Sync {
     async fn insert(&self, user: &User) -> Result<(), PortError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, PortError>;
+    /// Deletes the account (ADR-058). Idempotent — an unknown id is a no-op.
+    async fn delete(&self, id: Uuid) -> Result<(), PortError>;
 }
 
 #[async_trait]
@@ -38,6 +40,13 @@ pub trait JobRepository: Send + Sync {
         &self,
         cutoff: DateTime<Utc>,
     ) -> Result<Vec<ResearchJob>, PortError>;
+    /// Retention purge (ADR-058): deletes **one-shot** finished jobs (and their
+    /// results) created before `cutoff`. Recurring-run history is spared — it is
+    /// the dedup memory (ADR-033), not disposable log data. Returns the count.
+    async fn delete_finished_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError>;
+    /// Deletes all of a user's jobs and their results (account deletion,
+    /// ADR-058). Returns the count.
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError>;
     async fn store_results(&self, job_id: Uuid, results: &[SearchResult]) -> Result<(), PortError>;
     async fn results_for(&self, job_id: Uuid) -> Result<Vec<SearchResult>, PortError>;
     /// Records one decision of the agentic loop (ADR-030). Idempotent on
@@ -68,6 +77,8 @@ pub trait RecurringSearchRepository: Send + Sync {
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError>;
     /// Deletes the user's recurring search; false when unknown or foreign.
     async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError>;
+    /// Deletes all of a user's recurring searches (account deletion, ADR-058).
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError>;
     /// Every recurring search due at `now` (never run, or interval elapsed).
     async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError>;
     async fn mark_ran(&self, id: Uuid, at: DateTime<Utc>) -> Result<(), PortError>;
@@ -85,6 +96,8 @@ pub trait RefreshTokenRepository: Send + Sync {
     /// Revokes an entire rotation lineage (ADR-056): called on reuse detection
     /// to kill the stolen token's whole family in one shot.
     async fn delete_family(&self, family_id: Uuid) -> Result<(), PortError>;
+    /// Revokes all of a user's refresh tokens (account deletion, ADR-058).
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError>;
     /// Purges expired tokens (called by the background reaper).
     async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, PortError>;
 }

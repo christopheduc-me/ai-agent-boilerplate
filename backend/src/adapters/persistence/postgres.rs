@@ -270,6 +270,17 @@ impl UserRepository for PostgresUserRepository {
                 .map_err(db_err)?;
         Ok(row.as_ref().map(user_from_row))
     }
+
+    async fn delete(&self, id: Uuid) -> Result<(), PortError> {
+        // FK ON DELETE CASCADE removes the user's jobs/results/refresh tokens
+        // and recurring searches; security_events.user_id is set null (ADR-058).
+        sqlx::query("DELETE FROM users WHERE id = $1")
+            .bind(id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
 }
 
 // ---------------------------------------------------------------- refresh tokens
@@ -351,6 +362,15 @@ impl RefreshTokenRepository for PostgresRefreshTokenRepository {
             .await
             .map_err(db_err)?;
         Ok(())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let result = sqlx::query("DELETE FROM refresh_tokens WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
     }
 
     async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, PortError> {
@@ -478,6 +498,33 @@ impl JobRepository for PostgresJobRepository {
         .await
         .map_err(db_err)?;
         rows.iter().map(job_from_row).collect()
+    }
+
+    async fn delete_finished_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError> {
+        // One-shot finished jobs only; search_results cascade via FK (ADR-058).
+        // Recurring runs (recurring_search_id NOT NULL) are the dedup memory
+        // (ADR-033) and are never purged by age.
+        let result = sqlx::query(
+            "DELETE FROM research_jobs
+             WHERE recurring_search_id IS NULL
+               AND status IN ('completed', 'failed')
+               AND created_at < $1",
+        )
+        .bind(cutoff)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(result.rows_affected())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        // search_results cascade via FK (ADR-058).
+        let result = sqlx::query("DELETE FROM research_jobs WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
     }
 
     async fn store_results(&self, job_id: Uuid, results: &[SearchResult]) -> Result<(), PortError> {
@@ -697,6 +744,15 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
             .await
             .map_err(db_err)?;
         Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let result = sqlx::query("DELETE FROM recurring_searches WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
     }
 
     async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError> {

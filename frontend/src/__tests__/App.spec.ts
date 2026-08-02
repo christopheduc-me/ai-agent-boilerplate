@@ -28,7 +28,7 @@ describe("App shell", () => {
     useAuthStore().token = "tok";
     await flushPromises();
     await wrapper.vm.$nextTick();
-    await wrapper.find("button").trigger("click");
+    await wrapper.get('[data-testid="logout"]').trigger("click");
     await flushPromises();
 
     expect(useAuthStore().isAuthenticated).toBe(false);

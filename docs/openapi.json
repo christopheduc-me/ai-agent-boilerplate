@@ -9,6 +9,30 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/api/account": {
+      "delete": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Deletes the authenticated user's account and all their data (ADR-058):\njobs, results, recurring searches and refresh tokens. Irreversible; clears\nthe refresh cookie since the session is gone.",
+        "operationId": "delete_account",
+        "responses": {
+          "204": {
+            "description": "Account and all its data deleted (ADR-058)"
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/login": {
       "post": {
         "tags": [

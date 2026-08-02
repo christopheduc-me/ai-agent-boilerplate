@@ -35,6 +35,11 @@ impl UserRepository for InMemoryUserRepository {
             .find(|u| u.email == email)
             .cloned())
     }
+
+    async fn delete(&self, id: Uuid) -> Result<(), PortError> {
+        self.users.lock().unwrap().remove(&id);
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -77,6 +82,13 @@ impl RefreshTokenRepository for InMemoryRefreshTokenRepository {
             .unwrap()
             .retain(|_, t| t.family_id != family_id);
         Ok(())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let mut tokens = self.tokens.lock().unwrap();
+        let before = tokens.len();
+        tokens.retain(|_, t| t.user_id != user_id);
+        Ok((before - tokens.len()) as u64)
     }
 
     async fn delete_expired(&self, now: DateTime<Utc>) -> Result<u64, PortError> {
@@ -161,6 +173,44 @@ impl JobRepository for InMemoryJobRepository {
             })
             .cloned()
             .collect())
+    }
+
+    async fn delete_finished_before(&self, cutoff: DateTime<Utc>) -> Result<u64, PortError> {
+        let mut jobs = self.jobs.lock().unwrap();
+        // One-shot finished jobs only: recurring-run history is dedup memory
+        // (ADR-033), never purged by age.
+        let doomed: Vec<Uuid> = jobs
+            .values()
+            .filter(|j| j.recurring_search_id.is_none() && j.is_finished() && j.created_at < cutoff)
+            .map(|j| j.id)
+            .collect();
+        jobs.retain(|id, _| !doomed.contains(id));
+        drop(jobs);
+        let mut results = self.results.lock().unwrap();
+        let mut steps = self.steps.lock().unwrap();
+        for id in &doomed {
+            results.remove(id);
+            steps.remove(id);
+        }
+        Ok(doomed.len() as u64)
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let mut jobs = self.jobs.lock().unwrap();
+        let doomed: Vec<Uuid> = jobs
+            .values()
+            .filter(|j| j.user_id == user_id)
+            .map(|j| j.id)
+            .collect();
+        jobs.retain(|_, j| j.user_id != user_id);
+        drop(jobs);
+        let mut results = self.results.lock().unwrap();
+        let mut steps = self.steps.lock().unwrap();
+        for id in &doomed {
+            results.remove(id);
+            steps.remove(id);
+        }
+        Ok(doomed.len() as u64)
     }
 
     async fn store_results(&self, job_id: Uuid, results: &[SearchResult]) -> Result<(), PortError> {
@@ -282,6 +332,13 @@ impl RecurringSearchRepository for InMemoryRecurringSearchRepository {
             }
             _ => Ok(false),
         }
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let mut searches = self.searches.lock().unwrap();
+        let before = searches.len();
+        searches.retain(|_, s| s.user_id != user_id);
+        Ok((before - searches.len()) as u64)
     }
 
     async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError> {

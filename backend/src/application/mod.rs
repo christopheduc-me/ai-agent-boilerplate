@@ -1,4 +1,5 @@
 pub mod answer_clarification;
+pub mod delete_account;
 pub mod fail_stale_jobs;
 pub mod ingest_results;
 pub mod launch_search;
@@ -10,6 +11,7 @@ pub mod register_user;
 pub mod run_due_searches;
 
 pub use answer_clarification::AnswerClarification;
+pub use delete_account::DeleteAccount;
 pub use fail_stale_jobs::FailStaleJobs;
 pub use ingest_results::IngestResults;
 pub use launch_search::LaunchSearch;

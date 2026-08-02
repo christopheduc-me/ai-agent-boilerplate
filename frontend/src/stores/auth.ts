@@ -24,6 +24,14 @@ export const useAuthStore = defineStore("auth", () => {
     await api.logout().catch(() => {}); // best effort: local state is already cleared
   }
 
+  /** Deletes the account and all its data (ADR-058), then clears the session.
+   *  Uses withAuth so an expired access token is refreshed once before the
+   *  (irreversible) call, rather than failing on a stale token. */
+  async function deleteAccount(): Promise<void> {
+    await withAuth((t) => api.deleteAccount(t));
+    token.value = null;
+  }
+
   /** Silent session restore: trades the refresh cookie for a new access token.
    *  Returns whether a session is now active. Used on app start (the access
    *  token lives in memory and is lost on reload) and after a 401. */
@@ -53,5 +61,14 @@ export const useAuthStore = defineStore("auth", () => {
     }
   }
 
-  return { token, isAuthenticated, login, register, logout, tryRefresh, withAuth };
+  return {
+    token,
+    isAuthenticated,
+    login,
+    register,
+    logout,
+    deleteAccount,
+    tryRefresh,
+    withAuth,
+  };
 });

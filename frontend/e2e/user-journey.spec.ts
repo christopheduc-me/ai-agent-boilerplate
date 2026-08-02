@@ -135,6 +135,31 @@ test("recurring searches can be created and deleted (ADR-033)", async ({ page })
   await expect(section.getByText("Nothing watched yet.")).toBeVisible();
 });
 
+test("deleting the account clears the session and erases the login (ADR-058)", async ({
+  page,
+}) => {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
+  const password = "e2e-s3cret-password";
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "No account yet? Sign up" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page.getByRole("heading", { name: "Workflow demo" })).toBeVisible();
+
+  // The confirm() dialog guards the irreversible action; accept it.
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.getByTestId("delete-account").click();
+
+  // Back on the login screen, and the credentials no longer authenticate.
+  await expect(page.getByRole("button", { name: "Log in" })).toBeVisible();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill(password);
+  await page.getByRole("button", { name: "Log in" }).click();
+  await expect(page.getByText(/invalid credentials/i)).toBeVisible();
+});
+
 test("a returning user logs in and finds the previous searches", async ({ page }) => {
   const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
   const password = "e2e-s3cret-password";

@@ -1845,6 +1845,44 @@ Postgres), the reuse event (`RefreshSession`), and the HTTP throttle + audit
 
 ---
 
+### ADR-058 — Data lifecycle: retention purge + account deletion (decided 2026-08-02)
+
+**Context**: two data-lifecycle gaps for a long-running deployment — search
+history grew forever, and there was no way for a user to erase their account
+(a GDPR-shaped concern).
+
+1. **Retention purge.** The background loop already purges expired refresh
+   tokens (ADR-008) and old security events (ADR-057); it now also deletes
+   **finished one-shot searches** (and their results, via the `search_results`
+   FK cascade) older than `DATA_RETENTION_DAYS`. Default **0 = disabled** — the
+   purge is destructive, so it is opt-in; nothing is deleted unless the operator
+   sets it. **Recurring-run history is deliberately spared** (`recurring_search_id
+   IS NULL` in the delete): those runs are the dedup memory the scheduler reads
+   via `recent_urls_for_recurring` (ADR-033), not disposable log data — purging
+   them would make a recurring search re-deliver URLs it already sent. Only
+   *finished* jobs are purged, so an in-flight run is never cut off.
+2. **Account deletion** (`DELETE /api/account`, authenticated). A `DeleteAccount`
+   use case erases the user and all their data — recurring searches, jobs +
+   results, refresh tokens, then the user row. The cascade is expressed **through
+   the ports** (`delete_all_for_user` on each repository, then `UserRepository::
+   delete`), not left to the database's `ON DELETE CASCADE`, so the behavior is
+   identical in-memory and on Postgres and is unit-testable with fakes; the FK
+   cascade stays as a defense-in-depth safety net. Every step is idempotent, so a
+   retry converges. The handler clears the refresh cookie (the session is gone).
+   `security_events` for the user are kept but anonymized — their `user_id` FK is
+   `ON DELETE SET NULL` (ADR-057), preserving the security trail without the PII
+   link.
+
+No new migration — the retention purge and the deletion cascade both use columns
+and foreign keys already in place (ADR-006/033/056/057). Tested with fakes and
+against Postgres: the purge spares recurring/unfinished/recent jobs, and account
+deletion removes every per-user row while leaving other accounts intact. The
+frontend exposes account deletion as a topbar action behind a confirm dialog
+(auth store `deleteAccount`), with unit coverage and a browser e2e journey
+(ADR-028): delete → back on login → the old credentials no longer authenticate.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
@@ -1855,6 +1893,7 @@ Postgres), the reuse event (`RefreshSession`), and the HTTP throttle + audit
 | POST | `/api/auth/login` | Login → access token (body) + refresh cookie |
 | POST | `/api/auth/refresh` | Rotates the refresh cookie → new access token |
 | POST | `/api/auth/logout` | Revokes the refresh token, clears the cookie |
+| DELETE | `/api/account` | Deletes the account and all its data — jobs, results, recurring, tokens (ADR-058) |
 | POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |
 | GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |

@@ -163,8 +163,11 @@ async fn serve() {
     );
     let refresh_tokens_for_reaper = refresh_tokens.clone();
     let audit_for_purge = audit.clone();
+    let jobs_for_purge = jobs.clone();
     // Security-event retention (ADR-057): 0 keeps events forever (no purge).
     let security_retention_days = config.security_event_retention_days;
+    // Data retention (ADR-058): 0 keeps finished one-shot searches forever.
+    let data_retention_days = config.data_retention_days;
     let tick = std::time::Duration::from_secs(config.scheduler_tick_seconds);
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(tick);
@@ -190,6 +193,14 @@ async fn serve() {
                 .await
             {
                 tracing::error!(error = %e, "refresh token purge failed");
+            }
+            if data_retention_days > 0 {
+                let cutoff = chrono::Utc::now() - chrono::Duration::days(data_retention_days);
+                match jobs_for_purge.delete_finished_before(cutoff).await {
+                    Ok(0) => {}
+                    Ok(n) => tracing::info!(purged = n, "old one-shot searches purged"),
+                    Err(e) => tracing::error!(error = %e, "data retention purge failed"),
+                }
             }
             if security_retention_days > 0 {
                 let cutoff = chrono::Utc::now() - chrono::Duration::days(security_retention_days);

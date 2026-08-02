@@ -10,6 +10,19 @@ function logout(): void {
   auth.logout();
   router.push({ name: "login" });
 }
+
+async function deleteAccount(): Promise<void> {
+  // Irreversible (ADR-058): confirm before erasing the account and its data.
+  if (!window.confirm("Delete your account and all its data? This cannot be undone.")) {
+    return;
+  }
+  try {
+    await auth.deleteAccount();
+  } catch {
+    // Even on error the local session is cleared; land on login either way.
+  }
+  router.push({ name: "login" });
+}
 </script>
 
 <template>
@@ -18,9 +31,19 @@ function logout(): void {
       <span class="brand-mark" aria-hidden="true" />
       <h1>AI Agent Boilerplate</h1>
     </div>
-    <button v-if="auth.isAuthenticated" type="button" class="btn-ghost" @click="logout">
-      Log out
-    </button>
+    <div v-if="auth.isAuthenticated" class="topbar-actions">
+      <button
+        type="button"
+        class="btn-ghost btn-danger"
+        data-testid="delete-account"
+        @click="deleteAccount"
+      >
+        Delete account
+      </button>
+      <button type="button" class="btn-ghost" data-testid="logout" @click="logout">
+        Log out
+      </button>
+    </div>
   </header>
   <main>
     <RouterView />
@@ -176,6 +199,18 @@ button:disabled {
 }
 .btn-ghost:hover {
   background: var(--surface-2);
+}
+.topbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+.btn-danger {
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border-strong));
+}
+.btn-danger:hover {
+  background: color-mix(in srgb, var(--danger) 12%, transparent);
 }
 
 main {

@@ -36,6 +36,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Security hygiene in CI (ADR-015 amendment)** — done: `audit` stage with
       `cargo audit`, `pip-audit`, `npm audit`, gitleaks; runs on the weekly
       schedule only (creation of the schedule: SETUP.md §3).
+- [x] **Data lifecycle (ADR-058)** — done: background-loop retention purge of
+      finished one-shot searches (`DATA_RETENTION_DAYS`, opt-in; recurring-run
+      history spared as ADR-033 dedup memory), and account deletion
+      (`DELETE /api/account`) erasing the user's jobs/results/recurring/tokens
+      through the ports (cascade as safety net).
 
 ## P2.5 — Agentic capabilities (ADR-030 follow-ups)
 

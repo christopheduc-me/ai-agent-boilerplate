@@ -158,6 +158,100 @@ async fn refresh_token_roundtrip_delete_and_purge() {
 }
 
 #[tokio::test]
+async fn retention_purge_drops_old_finished_one_shot_searches_only() {
+    // ADR-058: age-based purge frees one-shot history but spares recurring runs
+    // (dedup memory, ADR-033), unfinished jobs, and recent jobs.
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let jobs = PostgresJobRepository::new(pool.clone());
+    let recurring = PostgresRecurringSearchRepository::new(pool);
+
+    let rs = RecurringSearch::new(user.id, "watched", JobMode::Workflow, 60, None).unwrap();
+    recurring.insert(&rs).await.unwrap();
+    let old = Utc::now() - chrono::Duration::days(120);
+
+    // Old finished one-shot: the only one that should be purged.
+    let mut old_oneshot = ResearchJob::new(user.id, "old one-shot").unwrap();
+    old_oneshot.created_at = old;
+    jobs.insert(&old_oneshot).await.unwrap();
+    old_oneshot.complete();
+    jobs.update(&old_oneshot).await.unwrap();
+    let result = SearchResult {
+        title: "t".into(),
+        url: "https://a".into(),
+        snippet: "s".into(),
+        published_at: None,
+        date_confidence: DateConfidence::Unknown,
+        event_type: backend::domain::EventType::default(),
+        summary: None,
+        is_new: true,
+        raw: serde_json::Value::Null,
+    };
+    jobs.store_results(old_oneshot.id, &[result]).await.unwrap();
+
+    // Old finished recurring run: spared (dedup memory).
+    let mut old_recurring = ResearchJob::new(user.id, "old recurring")
+        .unwrap()
+        .with_recurring(rs.id);
+    old_recurring.created_at = old;
+    jobs.insert(&old_recurring).await.unwrap();
+    old_recurring.complete();
+    jobs.update(&old_recurring).await.unwrap();
+
+    // Old but unfinished one-shot: spared (only finished jobs are purged).
+    let mut old_pending = ResearchJob::new(user.id, "old pending").unwrap();
+    old_pending.created_at = old;
+    jobs.insert(&old_pending).await.unwrap();
+
+    // Recent finished one-shot: spared (within retention).
+    let mut recent = ResearchJob::new(user.id, "recent").unwrap();
+    recent.complete();
+    jobs.insert(&recent).await.unwrap();
+    jobs.update(&recent).await.unwrap();
+
+    let cutoff = Utc::now() - chrono::Duration::days(30);
+    assert_eq!(jobs.delete_finished_before(cutoff).await.unwrap(), 1);
+
+    assert!(jobs.find(old_oneshot.id).await.unwrap().is_none());
+    assert!(jobs.results_for(old_oneshot.id).await.unwrap().is_empty()); // cascaded
+    assert!(jobs.find(old_recurring.id).await.unwrap().is_some());
+    assert!(jobs.find(old_pending.id).await.unwrap().is_some());
+    assert!(jobs.find(recent.id).await.unwrap().is_some());
+}
+
+#[tokio::test]
+async fn account_deletion_removes_all_of_a_users_data() {
+    // ADR-058: the per-user deletes the DeleteAccount use case orchestrates.
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let users = PostgresUserRepository::new(pool.clone());
+    let jobs = PostgresJobRepository::new(pool.clone());
+    let recurring = PostgresRecurringSearchRepository::new(pool.clone());
+    let refresh = PostgresRefreshTokenRepository::new(pool);
+
+    let job = ResearchJob::new(user.id, "k").unwrap();
+    jobs.insert(&job).await.unwrap();
+    let rs = RecurringSearch::new(user.id, "k", JobMode::Workflow, 60, None).unwrap();
+    recurring.insert(&rs).await.unwrap();
+    let (token, _) = RefreshToken::issue(user.id, 30);
+    refresh.insert(&token).await.unwrap();
+
+    assert_eq!(jobs.delete_all_for_user(user.id).await.unwrap(), 1);
+    assert_eq!(recurring.delete_all_for_user(user.id).await.unwrap(), 1);
+    assert_eq!(refresh.delete_all_for_user(user.id).await.unwrap(), 1);
+    users.delete(user.id).await.unwrap();
+
+    assert!(users.find_by_email(&user.email).await.unwrap().is_none());
+    assert!(jobs.find(job.id).await.unwrap().is_none());
+    assert!(recurring.find(rs.id).await.unwrap().is_none());
+    assert!(refresh
+        .find_by_hash(&token.token_hash)
+        .await
+        .unwrap()
+        .is_none());
+}
+
+#[tokio::test]
 async fn security_events_record_list_newest_first_and_purge() {
     // ADR-057: append, read back newest-first, and retention purge.
     let Some(pool) = pool().await else { return };

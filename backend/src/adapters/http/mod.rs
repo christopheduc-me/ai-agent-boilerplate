@@ -29,8 +29,8 @@ use crate::application::recurring_searches::RecurringError;
 use crate::application::refresh_session::RefreshError;
 use crate::application::register_user::RegisterError;
 use crate::application::{
-    AnswerClarification, IngestResults, LaunchSearch, LoginUser, RecurringSearches, RefreshSession,
-    RegisterUser, SearchQueries, SessionTokens,
+    AnswerClarification, DeleteAccount, IngestResults, LaunchSearch, LoginUser, RecurringSearches,
+    RefreshSession, RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
     DigestSender, JobDispatcher, JobRepository, PasswordHasher, RecurringSearchRepository,
@@ -54,6 +54,8 @@ pub struct AppState {
     recurring: Arc<RecurringSearches>,
     ingest: Arc<IngestResults>,
     queries: Arc<SearchQueries>,
+    /// Account deletion (ADR-058): erases the user and cascades their data.
+    delete_account: Arc<DeleteAccount>,
     tokens: Arc<dyn TokenService>,
     /// Security audit log (ADR-057): failed/throttled logins, quota hits.
     audit: Arc<dyn SecurityAudit>,
@@ -108,6 +110,14 @@ impl AppState {
         refresh_ttl_days: i64,
     ) -> Self {
         Self {
+            // Built first so its clones precede the moves of users/jobs/recurring/
+            // refresh_tokens into the other use cases below (ADR-058).
+            delete_account: Arc::new(DeleteAccount::new(
+                users.clone(),
+                jobs.clone(),
+                recurring.clone(),
+                refresh_tokens.clone(),
+            )),
             register: Arc::new(RegisterUser::new(users.clone(), hasher.clone())),
             login: Arc::new(LoginUser::new(
                 users,
@@ -219,6 +229,7 @@ impl utoipa::Modify for SecurityAddon {
         create_recurring,
         list_recurring,
         delete_recurring,
+        delete_account,
     ),
     components(schemas(
         CredentialsRequest,
@@ -277,6 +288,7 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
             "/api/recurring/{id}",
             axum::routing::delete(delete_recurring),
         )
+        .route("/api/account", axum::routing::delete(delete_account))
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
             rate_limit::rate_limit,
@@ -645,6 +657,27 @@ async fn logout(State(state): State<AppState>, headers: HeaderMap) -> Response {
         [("set-cookie", clear_refresh_cookie())],
     )
         .into_response()
+}
+
+/// Deletes the authenticated user's account and all their data (ADR-058):
+/// jobs, results, recurring searches and refresh tokens. Irreversible; clears
+/// the refresh cookie since the session is gone.
+#[utoipa::path(delete, path = "/api/account", tag = "auth",
+    responses(
+        (status = 204, description = "Account and all its data deleted (ADR-058)"),
+        (status = 401, description = "Missing or invalid access token", body = ErrorResponse)))]
+async fn delete_account(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
+    match state.delete_account.execute(user_id).await {
+        Ok(()) => (
+            StatusCode::NO_CONTENT,
+            [("set-cookie", clear_refresh_cookie())],
+        )
+            .into_response(),
+        Err(e) => {
+            tracing::error!(error = %e, "account deletion failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
 }
 
 #[utoipa::path(post, path = "/api/searches", tag = "searches",
