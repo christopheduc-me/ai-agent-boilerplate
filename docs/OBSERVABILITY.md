@@ -81,6 +81,8 @@ these queries:
 | HTTP request rate (RED) | `sum by (route, status) (rate(http_server_requests_total[5m]))` |
 | HTTP p95 latency (RED) | `histogram_quantile(0.95, sum by (le, route) (rate(http_server_duration_seconds_bucket[5m])))` |
 | HTTP error ratio (RED) | `sum(rate(http_server_requests_total{status=~"5.."}[5m])) / sum(rate(http_server_requests_total[5m]))` |
+| Security events (by kind, ADR-057/060) | `sum by (kind) (rate(security_events_total[5m]))` |
+| Refresh-token reuse (compromise signal) | `increase(security_events_total{kind="refresh_reuse_detected"}[1h])` |
 
 > Metric names are the OTLP → Prometheus translation (dots → underscores, unit
 > suffixes, `_total` on counters, `_bucket` on histograms). Confirm the exact

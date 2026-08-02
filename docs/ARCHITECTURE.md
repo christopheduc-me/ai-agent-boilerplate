@@ -1906,6 +1906,26 @@ backend unready (dispatch failures are handled gracefully, ADR-005).
 
 ---
 
+### ADR-060 — Security-event metrics (decided 2026-08-02, extends ADR-050/057)
+
+**Context**: the security audit log (ADR-057) records abuse events to the DB and
+the logs, but there was no **metric** to alert on — an operator could not graph
+or page on a spike of failed logins, throttling, refresh-token reuse or quota
+hits.
+
+**Decision**: a `MeteredSecurityAudit` **decorator over the `SecurityAudit`
+port** emits a `security.events` counter (labelled by `kind`) on every recorded
+event, then delegates to the real store. Being a decorator over the port, it
+counts *every* call site — the HTTP handlers and the refresh use case — with no
+change to those callers, and wraps either backing store (in-memory or Postgres);
+`main` composes it around the concrete audit. The counter is a no-op until a
+`MeterProvider` is installed (telemetry off, ADR-050), so it is free in the
+keyless demo, and `kind` is a closed set so cardinality stays bounded. This is
+the same OTel-metrics pattern as the HTTP RED metrics (ADR-050); the decorator
+keeps the metering concern out of both the use case and the persistence adapters.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

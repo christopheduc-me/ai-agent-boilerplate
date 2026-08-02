@@ -4,3 +4,4 @@ pub mod dispatch;
 pub mod http;
 pub mod leader_lock;
 pub mod persistence;
+pub mod security_metrics;

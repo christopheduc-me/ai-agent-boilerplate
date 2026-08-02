@@ -20,6 +20,7 @@ use backend::adapters::persistence::postgres::{
     PostgresRecurringSearchRepository, PostgresRefreshTokenRepository, PostgresSecurityAudit,
     PostgresUserRepository,
 };
+use backend::adapters::security_metrics::MeteredSecurityAudit;
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
@@ -154,6 +155,10 @@ async fn serve() {
                 Arc::new(NoopLeaderLock),
             ),
         };
+
+    // Count every security event as a metric (ADR-060), whatever the backing
+    // store and whatever the call site — a decorator over the port.
+    let audit: Arc<dyn SecurityAudit> = Arc::new(MeteredSecurityAudit::new(audit));
 
     // Background loop: the reaper (ADR-016), refresh-token purge (ADR-008)
     // and the recurring-search scheduler (ADR-033) share one ticker.

@@ -36,6 +36,10 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 - [x] **Security hygiene in CI (ADR-015 amendment)** — done: `audit` stage with
       `cargo audit`, `pip-audit`, `npm audit`, gitleaks; runs on the weekly
       schedule only (creation of the schedule: SETUP.md §3).
+- [x] **Security-event metrics (ADR-060)** — done: a `MeteredSecurityAudit`
+      decorator over the audit port emits a `security.events` counter (by kind),
+      so failed/throttled logins, refresh reuse and quota hits are alertable in
+      Prometheus/Grafana (PromQL in docs/OBSERVABILITY.md).
 - [x] **Data lifecycle (ADR-058)** — done: background-loop retention purge of
       finished one-shot searches (`DATA_RETENTION_DAYS`, opt-in; recurring-run
       history spared as ADR-033 dedup memory), and account deletion
