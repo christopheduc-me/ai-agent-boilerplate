@@ -109,13 +109,13 @@ export const searchJobDetailSchema = searchJobSchema.extend({
 });
 export type SearchJobDetail = z.infer<typeof searchJobDetailSchema>;
 
-// Per-user notification channels (ADR-061): where digests are delivered.
-export const channelKindSchema = z.enum(["slack", "telegram"]);
+// Per-user notification channels (ADR-061/062): where digests are delivered.
+export const channelKindSchema = z.enum(["slack", "telegram", "email"]);
 export type ChannelKind = z.infer<typeof channelKindSchema>;
 export const channelSchema = z.object({
   id: z.string(),
   kind: channelKindSchema,
-  target: z.string(), // Slack incoming-webhook URL, or Telegram chat id
+  target: z.string(), // Slack webhook URL, Telegram chat id, or email address
   created_at: z.string(),
   // Note: the secret (Telegram bot token) is never returned by the API.
 });
@@ -124,6 +124,8 @@ export const profileSchema = z.object({
   email: z.string(),
   created_at: z.string(),
   channels: z.array(channelSchema),
+  // Whether SMTP is configured server-side (ADR-062): gates the email option.
+  email_enabled: z.boolean(),
 });
 export type Profile = z.infer<typeof profileSchema>;
 

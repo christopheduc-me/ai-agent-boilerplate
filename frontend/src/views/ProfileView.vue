@@ -19,11 +19,14 @@ const kind = ref<ChannelKind>("slack");
 const target = ref("");
 const secret = ref("");
 
-// Slack needs a webhook URL; Telegram needs a chat id + a bot token.
-const targetLabel = computed(() =>
-  kind.value === "slack" ? "Slack incoming-webhook URL" : "Telegram chat id",
-);
+// Slack: webhook URL; Telegram: chat id + bot token; Email: an address.
+const targetLabel = computed(() => {
+  if (kind.value === "slack") return "Slack incoming-webhook URL";
+  if (kind.value === "telegram") return "Telegram chat id";
+  return "Email address";
+});
 const needsSecret = computed(() => kind.value === "telegram");
+const emailEnabled = computed(() => profile.value?.email_enabled ?? false);
 
 async function load(): Promise<void> {
   try {
@@ -92,6 +95,7 @@ onMounted(load);
         <select v-model="kind" data-testid="channel-kind">
           <option value="slack">Slack</option>
           <option value="telegram">Telegram</option>
+          <option v-if="emailEnabled" value="email">Email</option>
         </select>
       </label>
       <label>

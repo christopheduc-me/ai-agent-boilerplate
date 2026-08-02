@@ -19,7 +19,12 @@ const mocked = api as unknown as Record<
   ReturnType<typeof vi.fn>
 >;
 
-const emptyProfile = { email: "me@test.dev", created_at: "2026-01-01T00:00:00Z", channels: [] };
+const emptyProfile = {
+  email: "me@test.dev",
+  created_at: "2026-01-01T00:00:00Z",
+  channels: [],
+  email_enabled: true,
+};
 
 async function mountView() {
   const pinia = makePinia();
@@ -62,6 +67,35 @@ describe("ProfileView (ADR-061)", () => {
     await flushPromises();
 
     expect(mocked.addChannel).toHaveBeenCalledWith("telegram", "chat-42", "tok", "bot-secret");
+  });
+
+  it("offers and adds an email channel when SMTP is enabled (ADR-062)", async () => {
+    mocked.getProfile.mockResolvedValue(emptyProfile);
+    mocked.addChannel.mockResolvedValue({
+      id: "c2",
+      kind: "email",
+      target: "me@example.com",
+      created_at: "x",
+    });
+    const wrapper = await mountView();
+
+    const options = wrapper.findAll('[data-testid="channel-kind"] option').map((o) => o.text());
+    expect(options).toContain("Email");
+
+    await wrapper.find('[data-testid="channel-kind"]').setValue("email");
+    await wrapper.find(".add-channel input").setValue("me@example.com");
+    await wrapper.find('[data-testid="add-channel-form"]').trigger("submit");
+    await flushPromises();
+
+    // No secret for email.
+    expect(mocked.addChannel).toHaveBeenCalledWith("email", "me@example.com", "tok", undefined);
+  });
+
+  it("hides the email option when SMTP is disabled", async () => {
+    mocked.getProfile.mockResolvedValue({ ...emptyProfile, email_enabled: false });
+    const wrapper = await mountView();
+    const options = wrapper.findAll('[data-testid="channel-kind"] option').map((o) => o.text());
+    expect(options).not.toContain("Email");
   });
 
   it("surfaces a validation error from the API", async () => {
