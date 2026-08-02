@@ -109,6 +109,24 @@ export const searchJobDetailSchema = searchJobSchema.extend({
 });
 export type SearchJobDetail = z.infer<typeof searchJobDetailSchema>;
 
+// Per-user notification channels (ADR-061): where digests are delivered.
+export const channelKindSchema = z.enum(["slack", "telegram"]);
+export type ChannelKind = z.infer<typeof channelKindSchema>;
+export const channelSchema = z.object({
+  id: z.string(),
+  kind: channelKindSchema,
+  target: z.string(), // Slack incoming-webhook URL, or Telegram chat id
+  created_at: z.string(),
+  // Note: the secret (Telegram bot token) is never returned by the API.
+});
+export type Channel = z.infer<typeof channelSchema>;
+export const profileSchema = z.object({
+  email: z.string(),
+  created_at: z.string(),
+  channels: z.array(channelSchema),
+});
+export type Profile = z.infer<typeof profileSchema>;
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -271,4 +289,20 @@ export const api = {
 
   getSearch: async (id: string, token: string) =>
     searchJobDetailSchema.parse(await request<unknown>(`/api/searches/${id}`, {}, token)),
+
+  // Profile + notification channels (ADR-061).
+  getProfile: async (token: string) =>
+    profileSchema.parse(await request<unknown>("/api/account", {}, token)),
+
+  addChannel: async (kind: ChannelKind, target: string, token: string, secret?: string) =>
+    channelSchema.parse(
+      await request<unknown>(
+        "/api/account/channels",
+        { method: "POST", body: JSON.stringify({ kind, target, secret: secret || null }) },
+        token,
+      ),
+    ),
+
+  deleteChannel: (id: string, token: string) =>
+    request<void>(`/api/account/channels/${id}`, { method: "DELETE" }, token),
 };

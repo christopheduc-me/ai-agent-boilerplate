@@ -20,6 +20,7 @@ describe("App shell", () => {
       routes: [
         { path: "/", name: "searches", component: { template: "<div />" } },
         { path: "/login", name: "login", component: { template: "<div />" } },
+        { path: "/profile", name: "profile", component: { template: "<div />" } },
       ],
     });
     const wrapper = mount(App, { global: { plugins: [pinia, router] } });

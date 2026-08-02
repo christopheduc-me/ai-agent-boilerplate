@@ -135,6 +135,36 @@ test("recurring searches can be created and deleted (ADR-033)", async ({ page })
   await expect(section.getByText("Nothing watched yet.")).toBeVisible();
 });
 
+test("a user manages notification channels in their profile (ADR-061)", async ({ page }) => {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "No account yet? Sign up" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-s3cret-password");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page.getByRole("heading", { name: "Workflow demo" })).toBeVisible();
+
+  // Go to the profile: the email shows, no channels yet.
+  await page.getByTestId("profile-link").click();
+  await expect(page.getByTestId("profile-email")).toHaveText(email);
+  await expect(page.getByTestId("no-channels")).toBeVisible();
+
+  // Add a Telegram channel (chat id + bot token).
+  await page.getByTestId("channel-kind").selectOption("telegram");
+  await page.getByPlaceholder("Telegram chat id").fill("chat-42");
+  await page.getByPlaceholder("Bot token").fill("123:fake-bot-token");
+  await page.getByRole("button", { name: "Add channel" }).click();
+
+  const item = page.getByTestId("channel-list").locator("li", { hasText: "chat-42" });
+  await expect(item).toBeVisible();
+  await expect(item.getByText("telegram")).toBeVisible();
+
+  // Remove it.
+  await item.getByRole("button", { name: "Delete" }).click();
+  await expect(page.getByTestId("no-channels")).toBeVisible();
+});
+
 test("deleting the account clears the session and erases the login (ADR-058)", async ({
   page,
 }) => {

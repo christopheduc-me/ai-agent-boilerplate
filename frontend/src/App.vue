@@ -32,6 +32,9 @@ async function deleteAccount(): Promise<void> {
       <h1>AI Agent Boilerplate</h1>
     </div>
     <div v-if="auth.isAuthenticated" class="topbar-actions">
+      <RouterLink :to="{ name: 'profile' }" class="btn-ghost" data-testid="profile-link">
+        Profile
+      </RouterLink>
       <button
         type="button"
         class="btn-ghost btn-danger"
@@ -204,6 +207,18 @@ button:disabled {
   display: flex;
   align-items: center;
   gap: 0.5rem;
+}
+/* The Profile link is a RouterLink (<a>): give it the button look. */
+.topbar-actions a.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.5rem 0.9rem;
+  font-weight: 600;
+  border-radius: var(--radius-sm);
+  text-decoration: none;
+}
+.topbar-actions a.btn-ghost:hover {
+  text-decoration: none;
 }
 .btn-danger {
   color: var(--danger);
