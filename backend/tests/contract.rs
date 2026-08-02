@@ -10,14 +10,14 @@ use axum::body::Body;
 use axum::http::Request;
 use axum::Router;
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
-use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
+use backend::adapters::dispatch::{HttpJobDispatcher, NoopEmbedDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::notify::NoopChannelNotifier;
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
-    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
-    InMemoryUserRepository,
+    AlwaysReady, InMemoryDocumentRepository, InMemoryJobRepository,
+    InMemoryNotificationChannelRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
 use backend::domain::{JobMode, ResearchJob};
@@ -49,6 +49,8 @@ fn app() -> Router {
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
         true,
+        Arc::new(InMemoryDocumentRepository::default()),
+        Arc::new(NoopEmbedDispatcher),
         INTERNAL_TOKEN.into(),
         100,
         30,

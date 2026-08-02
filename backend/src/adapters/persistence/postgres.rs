@@ -12,12 +12,17 @@ use sqlx::{PgPool, Postgres, Row};
 use tokio::sync::Mutex;
 use uuid::Uuid;
 
+use pgvector::Vector;
+
 use crate::adapters::leader_lock::LeaderLock;
 use crate::domain::ports::{
-    JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
+    DocumentRepository, JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
     RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
-use crate::domain::{ChannelKind, NotificationChannel, SecurityEvent};
+use crate::domain::{
+    ChannelKind, Document, DocumentStatus, NewChunk, NotificationChannel, RetrievedChunk,
+    SecurityEvent,
+};
 
 /// Advisory-lock key for the background loop (ADR-053): a fixed application id
 /// so every replica contends on the same lock.
@@ -943,6 +948,175 @@ impl NotificationChannelRepository for PostgresNotificationChannelRepository {
 
     async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
         let result = sqlx::query("DELETE FROM notification_channels WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
+    }
+}
+
+// ---------------------------------------------------------------- knowledge base (RAG, ADR-063)
+
+pub struct PostgresDocumentRepository {
+    pool: PgPool,
+}
+
+impl PostgresDocumentRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn doc_status_from_str(value: &str) -> DocumentStatus {
+    match value {
+        "ready" => DocumentStatus::Ready,
+        "failed" => DocumentStatus::Failed,
+        _ => DocumentStatus::Pending,
+    }
+}
+
+fn document_from_row(row: &PgRow) -> Document {
+    Document {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        name: row.get("name"),
+        status: doc_status_from_str(row.get("status")),
+        error: row.get("error"),
+        created_at: row.get("created_at"),
+    }
+}
+
+const DOCUMENT_COLS: &str = "SELECT id, user_id, name, status, error, created_at FROM documents";
+
+#[async_trait]
+impl DocumentRepository for PostgresDocumentRepository {
+    async fn insert(&self, document: &Document) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO documents (id, user_id, name, status, error, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(document.id)
+        .bind(document.user_id)
+        .bind(&document.name)
+        .bind(document.status.as_str())
+        .bind(&document.error)
+        .bind(document.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Document>, PortError> {
+        let rows = sqlx::query(&format!(
+            "{DOCUMENT_COLS} WHERE user_id = $1 ORDER BY created_at DESC"
+        ))
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(document_from_row).collect())
+    }
+
+    async fn find(&self, id: Uuid) -> Result<Option<Document>, PortError> {
+        let row = sqlx::query(&format!("{DOCUMENT_COLS} WHERE id = $1"))
+            .bind(id)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(row.as_ref().map(document_from_row))
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        // Chunks cascade via the FK (ADR-063).
+        let result = sqlx::query("DELETE FROM documents WHERE id = $1 AND user_id = $2")
+            .bind(id)
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn store_chunks(
+        &self,
+        document: &Document,
+        chunks: &[NewChunk],
+    ) -> Result<(), PortError> {
+        let mut tx = self.pool.begin().await.map_err(db_err)?;
+        // Replace semantics: a re-embed (retry) must not duplicate chunks.
+        sqlx::query("DELETE FROM document_chunks WHERE document_id = $1")
+            .bind(document.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        for chunk in chunks {
+            sqlx::query(
+                "INSERT INTO document_chunks (id, document_id, user_id, seq, content, embedding)
+                 VALUES ($1, $2, $3, $4, $5, $6)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(document.id)
+            .bind(document.user_id)
+            .bind(chunk.seq)
+            .bind(&chunk.content)
+            .bind(Vector::from(chunk.embedding.clone()))
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        }
+        sqlx::query("UPDATE documents SET status = 'ready', error = NULL WHERE id = $1")
+            .bind(document.id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+        tx.commit().await.map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn mark_failed(&self, document_id: Uuid, error: &str) -> Result<(), PortError> {
+        sqlx::query("UPDATE documents SET status = 'failed', error = $2 WHERE id = $1")
+            .bind(document_id)
+            .bind(error)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn retrieve(
+        &self,
+        user_id: Uuid,
+        embedding: &[f32],
+        k: i64,
+    ) -> Result<Vec<RetrievedChunk>, PortError> {
+        // Cosine distance (`<=>`, matches the hnsw vector_cosine_ops index).
+        let rows = sqlx::query(
+            "SELECT dc.content, d.name AS document_name
+             FROM document_chunks dc
+             JOIN documents d ON d.id = dc.document_id
+             WHERE dc.user_id = $1
+             ORDER BY dc.embedding <=> $2
+             LIMIT $3",
+        )
+        .bind(user_id)
+        .bind(Vector::from(embedding.to_vec()))
+        .bind(k.max(0))
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows
+            .iter()
+            .map(|row| RetrievedChunk {
+                content: row.get("content"),
+                document_name: row.get("document_name"),
+            })
+            .collect())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let result = sqlx::query("DELETE FROM documents WHERE user_id = $1")
             .bind(user_id)
             .execute(&self.pool)
             .await

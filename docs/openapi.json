@@ -262,6 +262,103 @@
         }
       }
     },
+    "/api/documents": {
+      "get": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Lists the user's knowledge-base documents (ADR-063).",
+        "operationId": "list_documents",
+        "responses": {
+          "200": {
+            "description": "The user's documents",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentView"
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Uploads a document; it is embedded asynchronously by the agent (ADR-063).",
+        "operationId": "create_document",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateDocumentRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Document accepted (status: pending)",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Empty/oversized name or content",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/documents/{id}": {
+      "delete": {
+        "tags": [
+          "knowledge"
+        ],
+        "summary": "Deletes a document and its chunks (ADR-063).",
+        "operationId": "delete_document",
+        "responses": {
+          "204": {
+            "description": "Document removed"
+          },
+          "404": {
+            "description": "Document not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/recurring": {
       "get": {
         "tags": [
@@ -697,6 +794,22 @@
           }
         }
       },
+      "CreateDocumentRequest": {
+        "type": "object",
+        "description": "`{ name, content }` — uploads a text/markdown document to embed (ADR-063).",
+        "required": [
+          "name",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "CreateRecurringRequest": {
         "type": "object",
         "required": [
@@ -760,6 +873,39 @@
           "medium",
           "unknown"
         ]
+      },
+      "DocumentView": {
+        "type": "object",
+        "description": "A knowledge-base document as returned to the client (ADR-063).",
+        "required": [
+          "id",
+          "name",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending` (embedding in progress), `ready`, or `failed`."
+          }
+        }
       },
       "ErrorResponse": {
         "type": "object",

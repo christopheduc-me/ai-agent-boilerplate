@@ -6,12 +6,12 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
+    DocumentRepository, JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
     RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use crate::domain::{
-    AgentStep, JobStatus, JobUsage, NotificationChannel, RecurringSearch, RefreshToken,
-    ResearchJob, SearchResult, SecurityEvent, User,
+    AgentStep, Document, DocumentStatus, JobStatus, JobUsage, NewChunk, NotificationChannel,
+    RecurringSearch, RefreshToken, ResearchJob, RetrievedChunk, SearchResult, SecurityEvent, User,
 };
 
 #[derive(Default)]
@@ -449,5 +449,133 @@ pub struct AlwaysReady;
 impl ReadinessProbe for AlwaysReady {
     async fn ready(&self) -> bool {
         true
+    }
+}
+
+struct StoredChunk {
+    document_id: Uuid,
+    user_id: Uuid,
+    content: String,
+    embedding: Vec<f32>,
+    document_name: String,
+}
+
+fn cosine(a: &[f32], b: &[f32]) -> f32 {
+    let dot: f32 = a.iter().zip(b).map(|(x, y)| x * y).sum();
+    let na: f32 = a.iter().map(|x| x * x).sum::<f32>().sqrt();
+    let nb: f32 = b.iter().map(|x| x * x).sum::<f32>().sqrt();
+    if na == 0.0 || nb == 0.0 {
+        0.0
+    } else {
+        dot / (na * nb)
+    }
+}
+
+#[derive(Default)]
+pub struct InMemoryDocumentRepository {
+    documents: Mutex<HashMap<Uuid, Document>>,
+    chunks: Mutex<Vec<StoredChunk>>,
+}
+
+#[async_trait]
+impl DocumentRepository for InMemoryDocumentRepository {
+    async fn insert(&self, document: &Document) -> Result<(), PortError> {
+        self.documents
+            .lock()
+            .unwrap()
+            .insert(document.id, document.clone());
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Document>, PortError> {
+        let mut docs: Vec<Document> = self
+            .documents
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|d| d.user_id == user_id)
+            .cloned()
+            .collect();
+        docs.sort_by_key(|d| std::cmp::Reverse(d.created_at));
+        Ok(docs)
+    }
+
+    async fn find(&self, id: Uuid) -> Result<Option<Document>, PortError> {
+        Ok(self.documents.lock().unwrap().get(&id).cloned())
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        let mut docs = self.documents.lock().unwrap();
+        match docs.get(&id) {
+            Some(d) if d.user_id == user_id => {
+                docs.remove(&id);
+                self.chunks.lock().unwrap().retain(|c| c.document_id != id);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn store_chunks(
+        &self,
+        document: &Document,
+        chunks: &[NewChunk],
+    ) -> Result<(), PortError> {
+        {
+            let mut all = self.chunks.lock().unwrap();
+            for chunk in chunks {
+                all.push(StoredChunk {
+                    document_id: document.id,
+                    user_id: document.user_id,
+                    content: chunk.content.clone(),
+                    embedding: chunk.embedding.clone(),
+                    document_name: document.name.clone(),
+                });
+            }
+        }
+        if let Some(d) = self.documents.lock().unwrap().get_mut(&document.id) {
+            d.status = DocumentStatus::Ready;
+            d.error = None;
+        }
+        Ok(())
+    }
+
+    async fn mark_failed(&self, document_id: Uuid, error: &str) -> Result<(), PortError> {
+        if let Some(d) = self.documents.lock().unwrap().get_mut(&document_id) {
+            d.status = DocumentStatus::Failed;
+            d.error = Some(error.to_string());
+        }
+        Ok(())
+    }
+
+    async fn retrieve(
+        &self,
+        user_id: Uuid,
+        embedding: &[f32],
+        k: i64,
+    ) -> Result<Vec<RetrievedChunk>, PortError> {
+        let chunks = self.chunks.lock().unwrap();
+        let mut scored: Vec<(f32, &StoredChunk)> = chunks
+            .iter()
+            .filter(|c| c.user_id == user_id)
+            .map(|c| (cosine(embedding, &c.embedding), c))
+            .collect();
+        scored.sort_by(|a, b| b.0.total_cmp(&a.0));
+        Ok(scored
+            .into_iter()
+            .take(k.max(0) as usize)
+            .map(|(_, c)| RetrievedChunk {
+                content: c.content.clone(),
+                document_name: c.document_name.clone(),
+            })
+            .collect())
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let mut docs = self.documents.lock().unwrap();
+        let before = docs.len();
+        docs.retain(|_, d| d.user_id != user_id);
+        self.chunks.lock().unwrap().retain(|c| c.user_id != user_id);
+        Ok((before - docs.len()) as u64)
     }
 }

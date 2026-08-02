@@ -73,6 +73,13 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
 
 ## P3 — Agent product quality
 
+- [x] **RAG knowledge base (ADR-063)** — done: per-user documents (text/markdown)
+      uploaded, chunked + embedded by the agent (`EmbeddingProvider`: fake +
+      Ollama), stored in pgvector, and the top-k chunks retrieved to ground the
+      agent's reasoning. Backend owns the store (`/api/documents`, migration
+      0013, `pgvector/pgvector` image); agent embeds + retrieves through the
+      internal API (`/embed`, `/internal/documents/*`, `/internal/retrieve`).
+
 - [x] **Date cascade stage 2 (ADR-035)** — done: `PageDateFetcher` port reads
       JSON-LD `datePublished` / OpenGraph `article:published_time` before the
       LLM fallback — `high` confidence, bounded fetch, silent degradation.

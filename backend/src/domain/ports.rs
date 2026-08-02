@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::{
-    AgentStep, JobUsage, NotificationChannel, RecurringSearch, RefreshToken, ResearchJob,
-    SearchResult, SecurityEvent, User,
+    AgentStep, Document, JobUsage, NewChunk, NotificationChannel, RecurringSearch, RefreshToken,
+    ResearchJob, RetrievedChunk, SearchResult, SecurityEvent, User,
 };
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
@@ -42,6 +42,45 @@ pub trait NotificationChannelRepository: Send + Sync {
 pub trait ChannelNotifier: Send + Sync {
     async fn notify(&self, channel: &NotificationChannel, digest: &Digest)
         -> Result<(), PortError>;
+}
+
+/// RAG knowledge base (ADR-063): per-user documents + their embedded chunks,
+/// with a cosine nearest-neighbour retrieval. The backend owns this store
+/// (ADR-006/007); the agent embeds and retrieves through the internal API.
+#[async_trait]
+pub trait DocumentRepository: Send + Sync {
+    async fn insert(&self, document: &Document) -> Result<(), PortError>;
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Document>, PortError>;
+    async fn find(&self, id: Uuid) -> Result<Option<Document>, PortError>;
+    /// Deletes the user's document and its chunks; false when unknown or foreign.
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError>;
+    /// Stores the embedded chunks and marks the document ready (ADR-063).
+    async fn store_chunks(&self, document: &Document, chunks: &[NewChunk])
+        -> Result<(), PortError>;
+    /// Marks a document failed with the embedding error.
+    async fn mark_failed(&self, document_id: Uuid, error: &str) -> Result<(), PortError>;
+    /// Top-`k` chunks of a user's knowledge base nearest to `embedding`
+    /// (cosine distance) — the retrieval that grounds the agent (ADR-063).
+    async fn retrieve(
+        &self,
+        user_id: Uuid,
+        embedding: &[f32],
+        k: i64,
+    ) -> Result<Vec<RetrievedChunk>, PortError>;
+    /// Removes all of a user's documents (account deletion cascade, ADR-058).
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError>;
+}
+
+/// Dispatches a document to the agent for chunking + embedding (ADR-063), like
+/// `JobDispatcher` for research jobs — the agent calls back with the chunks.
+#[async_trait]
+pub trait EmbedDispatcher: Send + Sync {
+    async fn dispatch_embed(
+        &self,
+        document_id: Uuid,
+        name: &str,
+        content: &str,
+    ) -> Result<(), PortError>;
 }
 
 /// Sends an email (ADR-062). Implemented by the SMTP adapter, faked in tests,

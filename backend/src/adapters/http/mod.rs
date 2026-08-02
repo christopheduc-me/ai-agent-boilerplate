@@ -23,6 +23,7 @@ use uuid::Uuid;
 
 use crate::application::answer_clarification::AnswerError;
 use crate::application::ingest_results::IngestError;
+use crate::application::knowledge::KnowledgeError;
 use crate::application::launch_search::LaunchError;
 use crate::application::login_user::LoginError;
 use crate::application::profile::ProfileError;
@@ -30,17 +31,17 @@ use crate::application::recurring_searches::RecurringError;
 use crate::application::refresh_session::RefreshError;
 use crate::application::register_user::RegisterError;
 use crate::application::{
-    AnswerClarification, DeleteAccount, IngestResults, LaunchSearch, LoginUser, Profile,
+    AnswerClarification, DeleteAccount, IngestResults, Knowledge, LaunchSearch, LoginUser, Profile,
     RecurringSearches, RefreshSession, RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
-    ChannelNotifier, DigestSender, JobDispatcher, JobRepository, NotificationChannelRepository,
-    PasswordHasher, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
-    SecurityAudit, TokenService, UserRepository,
+    ChannelNotifier, DigestSender, DocumentRepository, EmbedDispatcher, JobDispatcher,
+    JobRepository, NotificationChannelRepository, PasswordHasher, ReadinessProbe,
+    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, TokenService, UserRepository,
 };
 use crate::domain::{
-    AgentStep, ChannelKind, DateConfidence, EventType, JobMode, JobStatus, JobUsage,
-    NotificationChannel, RecurringSearch, ResearchJob, SearchResult, SecurityEvent,
+    AgentStep, ChannelKind, DateConfidence, Document, EventType, JobMode, JobStatus, JobUsage,
+    NewChunk, NotificationChannel, RecurringSearch, ResearchJob, SearchResult, SecurityEvent,
     SecurityEventKind,
 };
 
@@ -61,6 +62,8 @@ pub struct AppState {
     delete_account: Arc<DeleteAccount>,
     /// Profile + notification channels (ADR-061).
     profile: Arc<Profile>,
+    /// Knowledge base for RAG grounding (ADR-063).
+    knowledge: Arc<Knowledge>,
     tokens: Arc<dyn TokenService>,
     /// Security audit log (ADR-057): failed/throttled logins, quota hits.
     audit: Arc<dyn SecurityAudit>,
@@ -116,6 +119,8 @@ impl AppState {
         channels: Arc<dyn NotificationChannelRepository>,
         notifier: Arc<dyn ChannelNotifier>,
         email_enabled: bool,
+        documents: Arc<dyn DocumentRepository>,
+        embed: Arc<dyn EmbedDispatcher>,
         internal_token: String,
         daily_search_quota: u32,
         refresh_ttl_days: i64,
@@ -129,8 +134,10 @@ impl AppState {
                 recurring.clone(),
                 refresh_tokens.clone(),
                 channels.clone(),
+                documents.clone(),
             )),
             profile: Arc::new(Profile::new(users.clone(), channels.clone(), email_enabled)),
+            knowledge: Arc::new(Knowledge::new(documents, jobs.clone(), embed)),
             register: Arc::new(RegisterUser::new(users.clone(), hasher.clone())),
             login: Arc::new(LoginUser::new(
                 users,
@@ -253,6 +260,9 @@ impl utoipa::Modify for SecurityAddon {
         get_profile,
         create_channel,
         delete_channel,
+        list_documents,
+        create_document,
+        delete_document,
     ),
     components(schemas(
         CredentialsRequest,
@@ -268,6 +278,8 @@ impl utoipa::Modify for SecurityAddon {
         ProfileResponse,
         ChannelView,
         CreateChannelRequest,
+        DocumentView,
+        CreateDocumentRequest,
         ErrorResponse,
         SearchResult,
         AgentStep,
@@ -320,6 +332,11 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
             "/api/account/channels/{id}",
             axum::routing::delete(delete_channel),
         )
+        .route("/api/documents", post(create_document).get(list_documents))
+        .route(
+            "/api/documents/{id}",
+            axum::routing::delete(delete_document),
+        )
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
             rate_limit::rate_limit,
@@ -344,6 +361,17 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
         .route("/internal/jobs/{id}/question", post(internal_question))
         .route("/internal/jobs/{id}/usage", post(internal_usage))
         .route("/internal/jobs/{id}/failure", post(internal_failure))
+        // Knowledge base callbacks (ADR-063): embedded chunks, embed failure,
+        // and the retrieval that grounds the agent.
+        .route(
+            "/internal/documents/{id}/chunks",
+            post(internal_store_chunks),
+        )
+        .route(
+            "/internal/documents/{id}/failure",
+            post(internal_document_failure),
+        )
+        .route("/internal/retrieve", post(internal_retrieve))
         // Correlation span (ADR-018) around every request.
         .layer(axum::middleware::from_fn(request_id::request_id))
         // Outermost: security headers on every response, errors included (ADR-054).
@@ -840,6 +868,220 @@ async fn delete_channel(
         Ok(false) => error_body(StatusCode::NOT_FOUND, "channel not found"),
         Err(e) => {
             tracing::error!(error = %e, "remove channel failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+// ---------------------------------------------------------------- knowledge base (RAG, ADR-063)
+
+/// A knowledge-base document as returned to the client (ADR-063).
+#[derive(Serialize, ToSchema)]
+struct DocumentView {
+    id: Uuid,
+    name: String,
+    /// `pending` (embedding in progress), `ready`, or `failed`.
+    status: String,
+    error: Option<String>,
+    created_at: DateTime<Utc>,
+}
+
+/// `{ name, content }` — uploads a text/markdown document to embed (ADR-063).
+#[derive(Deserialize, ToSchema)]
+struct CreateDocumentRequest {
+    name: String,
+    content: String,
+}
+
+fn document_view(document: &Document) -> DocumentView {
+    DocumentView {
+        id: document.id,
+        name: document.name.clone(),
+        status: document.status.as_str().to_string(),
+        error: document.error.clone(),
+        created_at: document.created_at,
+    }
+}
+
+/// Lists the user's knowledge-base documents (ADR-063).
+#[utoipa::path(get, path = "/api/documents", tag = "knowledge",
+    responses(
+        (status = 200, description = "The user's documents", body = [DocumentView]),
+        (status = 401, description = "Missing or invalid access token", body = ErrorResponse)))]
+async fn list_documents(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
+    match state.knowledge.list(user_id).await {
+        Ok(docs) => {
+            let views: Vec<DocumentView> = docs.iter().map(document_view).collect();
+            (StatusCode::OK, Json(views)).into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "list documents failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Uploads a document; it is embedded asynchronously by the agent (ADR-063).
+#[utoipa::path(post, path = "/api/documents", tag = "knowledge",
+    request_body = CreateDocumentRequest,
+    responses(
+        (status = 201, description = "Document accepted (status: pending)", body = DocumentView),
+        (status = 422, description = "Empty/oversized name or content", body = ErrorResponse)))]
+async fn create_document(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(body): Json<CreateDocumentRequest>,
+) -> Response {
+    match state
+        .knowledge
+        .upload(user_id, &body.name, &body.content)
+        .await
+    {
+        Ok(document) => (StatusCode::CREATED, Json(document_view(&document))).into_response(),
+        Err(KnowledgeError::Invalid(e)) => {
+            error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "document upload failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Deletes a document and its chunks (ADR-063).
+#[utoipa::path(delete, path = "/api/documents/{id}", tag = "knowledge",
+    responses(
+        (status = 204, description = "Document removed"),
+        (status = 404, description = "Document not found", body = ErrorResponse)))]
+async fn delete_document(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Response {
+    match state.knowledge.delete(user_id, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => error_body(StatusCode::NOT_FOUND, "document not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "delete document failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+// --- internal (agent callbacks): embedded chunks, embedding failure, retrieval.
+
+#[derive(Deserialize)]
+struct NewChunkDto {
+    seq: i32,
+    content: String,
+    embedding: Vec<f32>,
+}
+
+#[derive(Deserialize)]
+struct StoreChunksRequest {
+    chunks: Vec<NewChunkDto>,
+}
+
+#[derive(Deserialize)]
+struct DocumentFailureRequest {
+    error: String,
+}
+
+async fn internal_store_chunks(
+    State(state): State<AppState>,
+    Path(document_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<StoreChunksRequest>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    let chunks: Vec<NewChunk> = body
+        .chunks
+        .into_iter()
+        .map(|c| NewChunk {
+            seq: c.seq,
+            content: c.content,
+            embedding: c.embedding,
+        })
+        .collect();
+    match state.knowledge.store_chunks(document_id, &chunks).await {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(KnowledgeError::DocumentNotFound) => {
+            error_body(StatusCode::NOT_FOUND, "document not found")
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "store chunks failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+async fn internal_document_failure(
+    State(state): State<AppState>,
+    Path(document_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<DocumentFailureRequest>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    if let Err(e) = state.knowledge.mark_failed(document_id, &body.error).await {
+        tracing::error!(error = %e, "mark document failed failed");
+        return error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error");
+    }
+    StatusCode::NO_CONTENT.into_response()
+}
+
+#[derive(Deserialize)]
+struct RetrieveRequest {
+    job_id: Uuid,
+    embedding: Vec<f32>,
+    #[serde(default = "default_retrieve_k")]
+    k: i64,
+}
+
+fn default_retrieve_k() -> i64 {
+    5
+}
+
+#[derive(Serialize)]
+struct RetrievedChunkDto {
+    content: String,
+    document_name: String,
+}
+
+#[derive(Serialize)]
+struct RetrieveResponse {
+    chunks: Vec<RetrievedChunkDto>,
+}
+
+async fn internal_retrieve(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(body): Json<RetrieveRequest>,
+) -> Response {
+    if let Some(rejection) = check_internal_token(&state, &headers) {
+        return rejection;
+    }
+    match state
+        .knowledge
+        .retrieve_for_job(body.job_id, &body.embedding, body.k)
+        .await
+    {
+        Ok(chunks) => {
+            let chunks = chunks
+                .into_iter()
+                .map(|c| RetrievedChunkDto {
+                    content: c.content,
+                    document_name: c.document_name,
+                })
+                .collect();
+            (StatusCode::OK, Json(RetrieveResponse { chunks })).into_response()
+        }
+        Err(KnowledgeError::JobNotFound) => error_body(StatusCode::NOT_FOUND, "job not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "retrieve failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

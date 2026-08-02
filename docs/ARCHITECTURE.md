@@ -1992,6 +1992,41 @@ against a real server by the operator** (like the ADR-012 live-provider tests).
 
 ---
 
+### ADR-063 — RAG knowledge base: pgvector + retrieval grounding (decided 2026-08-02)
+
+**Context**: the most broadly-useful capability missing for an AI-agent product
+— grounding the agent on the *user's own* documents, not just the web/model.
+
+**Decision**: a per-user knowledge base — upload text/markdown, it is chunked,
+embedded and stored as vectors, and the top-k chunks ground the agent's LLM
+reasoning (classic RAG). The split respects ADR-006 (the agent never touches the
+DB):
+- **Backend owns the store** (pgvector in the same Postgres, ADR-007). Migration
+  `0013` adds `documents` + `document_chunks(embedding vector(768))` with an
+  HNSW cosine index. The compose image becomes `pgvector/pgvector:pg16`.
+- **Agent owns embeddings + chunking** (a provider concern, ADR-009/010): an
+  `EmbeddingProvider` (deterministic fake for the keyless demo/tests; Ollama
+  `nomic-embed-text` live by default — Anthropic has no embeddings API).
+- **Ingestion**: `POST /api/documents {name, content}` stores it `pending` and
+  dispatches an embed task to the agent (`EmbedDispatcher` → agent `/embed`,
+  mirroring `JobDispatcher`). The agent chunks + embeds and calls back
+  `POST /internal/documents/{id}/chunks`; the backend stores them and marks the
+  document `ready` (or `/failure` on error).
+- **Retrieval/grounding**: during a job the agent embeds the keyword and calls
+  `POST /internal/retrieve {job_id, embedding, k}`; the backend resolves the
+  job's owner server-side (the agent never passes a user id, so it can only reach
+  the KB of the job it processes — a security boundary) and returns the nearest
+  chunks (`embedding <=> $` cosine). The agent injects them into the policy LLM
+  context and journals a `knowledge` step.
+
+The retrieval is a hexagonal `DocumentRepository` port (in-memory cosine for
+tests, pgvector in prod); the whole backend path is tested with fakes + a real
+pgvector integration test. **V1 is text/markdown** — PDF/other parsing is a
+documented extension (add a parser before chunking). Changing the embedder's
+dimension needs a new migration (the `vector(768)` column is fixed).
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
@@ -2006,6 +2041,9 @@ against a real server by the operator** (like the ADR-012 live-provider tests).
 | DELETE | `/api/account` | Deletes the account and all its data — jobs, results, recurring, tokens (ADR-058) |
 | POST | `/api/account/channels` | Adds a notification channel `{kind, target, secret?}` — `slack`/`telegram`/`email` (ADR-061/062) |
 | DELETE | `/api/account/channels/{id}` | Removes a notification channel (ADR-061) |
+| GET | `/api/documents` | Lists the user's knowledge-base documents + status (ADR-063) |
+| POST | `/api/documents` | Uploads a document `{name, content}` to embed for RAG grounding (ADR-063) |
+| DELETE | `/api/documents/{id}` | Deletes a document and its chunks (ADR-063) |
 | POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |
 | GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |
@@ -2024,6 +2062,7 @@ enforces a per-account throttle — ADR-057).
 | Method | Route | Description |
 |---|---|---|
 | POST | `/tasks` | `{job_id, keyword, mode, clarification?, seen_urls}` → Celery enqueue |
+| POST | `/embed` | `{document_id, name, content}` → Celery enqueue the embedding of a KB document (ADR-063) |
 
 ### Outbound (Rust → the user's systems)
 
@@ -2041,6 +2080,9 @@ enforces a per-account throttle — ADR-057).
 | POST | `/internal/jobs/{id}/question` | The agent asks the user `{question}` → status `awaiting_input` (ADR-032) |
 | POST | `/internal/jobs/{id}/usage` | One task attempt's spend `{llm_calls, llm_input_tokens, llm_output_tokens, search_calls, cost_usd}` — accumulated (ADR-038) |
 | POST | `/internal/jobs/{id}/failure` | Reports failure `{error}` |
+| POST | `/internal/documents/{id}/chunks` | Embedded chunks of a KB document `{chunks:[{seq, content, embedding}]}` → status `ready` (ADR-063) |
+| POST | `/internal/documents/{id}/failure` | Embedding failed `{error}` → status `failed` (ADR-063) |
+| POST | `/internal/retrieve` | Nearest KB chunks for grounding `{job_id, embedding, k}` → `{chunks:[{content, document_name}]}` (ADR-063) |
 
 ---
 

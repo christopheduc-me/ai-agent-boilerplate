@@ -1,3 +1,4 @@
+pub mod document;
 pub mod job;
 pub mod notification_channel;
 pub mod ports;
@@ -7,6 +8,7 @@ pub mod search_result;
 pub mod security_event;
 pub mod user;
 
+pub use document::{Document, DocumentStatus, NewChunk, RetrievedChunk};
 pub use job::{AgentStep, JobMode, JobStatus, JobUsage, ResearchJob};
 pub use notification_channel::{ChannelKind, NotificationChannel};
 pub use recurring::RecurringSearch;

@@ -7,7 +7,9 @@ use std::sync::Arc;
 
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::digest::WebhookDigestSender;
-use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
+use backend::adapters::dispatch::{
+    HttpEmbedDispatcher, HttpJobDispatcher, NoopEmbedDispatcher, NoopJobDispatcher,
+};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
@@ -16,12 +18,12 @@ use backend::adapters::notify::{
     SlackNotifier, TelegramNotifier,
 };
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
-    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
-    InMemoryUserRepository,
+    AlwaysReady, InMemoryDocumentRepository, InMemoryJobRepository,
+    InMemoryNotificationChannelRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresLeaderLock,
+    run_migrations, PostgresDocumentRepository, PostgresJobRepository, PostgresLeaderLock,
     PostgresNotificationChannelRepository, PostgresReadiness, PostgresRecurringSearchRepository,
     PostgresRefreshTokenRepository, PostgresSecurityAudit, PostgresUserRepository,
 };
@@ -29,9 +31,9 @@ use backend::adapters::security_metrics::MeteredSecurityAudit;
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    ChannelNotifier, EmailTransport, JobDispatcher, JobRepository, NotificationChannelRepository,
-    ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
-    UserRepository,
+    ChannelNotifier, DocumentRepository, EmailTransport, EmbedDispatcher, JobDispatcher,
+    JobRepository, NotificationChannelRepository, ReadinessProbe, RecurringSearchRepository,
+    RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -114,6 +116,14 @@ async fn serve() {
         )),
         None => Arc::new(NoopJobDispatcher),
     };
+    // Embedding dispatcher (ADR-063): same agent micro-API as the job dispatcher.
+    let embed: Arc<dyn EmbedDispatcher> = match &config.agent_api_url {
+        Some(url) => Arc::new(HttpEmbedDispatcher::new(
+            url.clone(),
+            config.internal_token.clone(),
+        )),
+        None => Arc::new(NoopEmbedDispatcher),
+    };
 
     type Repos = (
         Arc<dyn UserRepository>,
@@ -126,10 +136,12 @@ async fn serve() {
         Arc<dyn ReadinessProbe>,
         // Per-user notification channels (ADR-061).
         Arc<dyn NotificationChannelRepository>,
+        // RAG knowledge base (ADR-063).
+        Arc<dyn DocumentRepository>,
         // Single-leader gate for the background loop (ADR-053).
         Arc<dyn LeaderLock>,
     );
-    let (users, jobs, refresh_tokens, recurring, audit, readiness, channels, leader): Repos =
+    let (users, jobs, refresh_tokens, recurring, audit, readiness, channels, documents, leader): Repos =
         match &config.database_url {
             Some(url) => {
                 let pool = PgPoolOptions::new()
@@ -149,6 +161,7 @@ async fn serve() {
                     Arc::new(PostgresSecurityAudit::new(pool.clone())),
                     Arc::new(PostgresReadiness::new(pool.clone())),
                     Arc::new(PostgresNotificationChannelRepository::new(pool.clone())),
+                    Arc::new(PostgresDocumentRepository::new(pool.clone())),
                     Arc::new(PostgresLeaderLock::new(pool)),
                 )
             }
@@ -161,6 +174,7 @@ async fn serve() {
                 // No external dependency to check: always ready.
                 Arc::new(AlwaysReady),
                 Arc::new(InMemoryNotificationChannelRepository::default()),
+                Arc::new(InMemoryDocumentRepository::default()),
                 // A single in-memory instance always leads.
                 Arc::new(NoopLeaderLock),
             ),
@@ -287,6 +301,8 @@ async fn serve() {
         channels,
         notifier,
         email_enabled,
+        documents,
+        embed,
         config.internal_token,
         config.daily_search_quota,
         config.refresh_token_days,

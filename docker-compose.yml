@@ -7,7 +7,9 @@
 #     docker compose --profile full --profile observability up
 services:
   postgres:
-    image: postgres:16-alpine
+    # pgvector image (ADR-063): PostgreSQL 16 with the `vector` extension for the
+    # RAG knowledge base. Drop-in for postgres:16 (same data dir, same PG major).
+    image: pgvector/pgvector:pg16
     environment:
       POSTGRES_USER: app
       POSTGRES_PASSWORD: app

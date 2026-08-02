@@ -7,14 +7,14 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use axum::Router;
 use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
-use backend::adapters::dispatch::NoopJobDispatcher;
+use backend::adapters::dispatch::{NoopEmbedDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
 use backend::adapters::notify::NoopChannelNotifier;
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
-    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
-    InMemoryUserRepository,
+    AlwaysReady, InMemoryDocumentRepository, InMemoryJobRepository,
+    InMemoryNotificationChannelRepository, InMemoryRecurringSearchRepository,
+    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
 };
 use backend::domain::ports::{ReadinessProbe, SecurityAudit};
 use http_body_util::BodyExt;
@@ -55,6 +55,8 @@ fn app_with_audit(
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
         true, // email_enabled (ADR-062)
+        Arc::new(InMemoryDocumentRepository::default()),
+        Arc::new(NoopEmbedDispatcher),
         INTERNAL_TOKEN.into(),
         daily_quota,
         30,
@@ -948,6 +950,8 @@ async fn readyz_reports_503_when_a_dependency_is_down() {
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
         true,
+        Arc::new(InMemoryDocumentRepository::default()),
+        Arc::new(NoopEmbedDispatcher),
         INTERNAL_TOKEN.into(),
         100,
         30,
@@ -1100,4 +1104,127 @@ async fn email_channel_can_be_added_when_smtp_is_enabled() {
     )
     .await;
     assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+// ---------------------------------------------------------------- knowledge base (RAG, ADR-063)
+
+#[tokio::test]
+async fn documents_upload_embed_callback_retrieve_and_delete() {
+    let app = app();
+    let creds = json!({"email": "kb@example.com", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    // Upload a document -> pending (the NoopEmbedDispatcher does not embed).
+    let (status, doc) = send(
+        &app,
+        post_json(
+            "/api/documents",
+            json!({"name": "notes.md", "content": "the sky is blue"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{doc}");
+    assert_eq!(doc["status"], "pending");
+    let doc_id = doc["id"].as_str().unwrap().to_string();
+
+    // Empty content is rejected.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/documents",
+            json!({"name": "empty", "content": "   "}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // The agent posts back embedded chunks -> the document becomes ready.
+    let (status, _) = send(
+        &app,
+        post_json(
+            &format!("/internal/documents/{doc_id}/chunks"),
+            json!({"chunks": [{"seq": 0, "content": "the sky is blue", "embedding": [1.0, 0.0, 0.0]}]}),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    let (_, docs) = send(
+        &app,
+        get("/api/documents", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert_eq!(docs.as_array().unwrap()[0]["status"], "ready");
+
+    // A job of this user retrieves the chunk (internal, agent-only).
+    let (_, launched) = send(
+        &app,
+        post_json(
+            "/api/searches",
+            json!({"keyword": "sky"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    let job_id = launched["job_id"].as_str().unwrap();
+    let (status, hits) = send(
+        &app,
+        post_json(
+            "/internal/retrieve",
+            json!({"job_id": job_id, "embedding": [1.0, 0.0, 0.0], "k": 5}),
+            &[("x-internal-token", INTERNAL_TOKEN)],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(hits["chunks"][0]["content"], "the sky is blue");
+    assert_eq!(hits["chunks"][0]["document_name"], "notes.md");
+
+    // Delete the document.
+    let del = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/documents/{doc_id}"))
+                .header("authorization", auth.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del.status(), StatusCode::NO_CONTENT);
+    let (_, docs) = send(
+        &app,
+        get("/api/documents", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert!(docs.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn documents_require_authentication_and_internal_token() {
+    let app = app();
+    let (status, _) = send(&app, get("/api/documents", &[])).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    // The retrieve callback needs the internal token.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/internal/retrieve",
+            json!({"job_id": uuid_zero(), "embedding": [1.0], "k": 1}),
+            &[],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+fn uuid_zero() -> String {
+    "00000000-0000-0000-0000-000000000000".into()
 }

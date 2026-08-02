@@ -3,7 +3,7 @@
 use async_trait::async_trait;
 use serde::Serialize;
 
-use crate::domain::ports::{JobDispatcher, PortError};
+use crate::domain::ports::{EmbedDispatcher, JobDispatcher, PortError};
 use crate::domain::ResearchJob;
 
 /// Dispatches jobs to the FastAPI micro-API, which enqueues them via Celery.
@@ -84,6 +84,82 @@ pub struct NoopJobDispatcher;
 impl JobDispatcher for NoopJobDispatcher {
     async fn dispatch(&self, job: &ResearchJob, _seen_urls: &[String]) -> Result<(), PortError> {
         tracing::warn!(job_id = %job.id, "NoopJobDispatcher: job not sent to any agent");
+        Ok(())
+    }
+}
+
+#[derive(Serialize)]
+struct EmbedRequest<'a> {
+    document_id: uuid::Uuid,
+    name: &'a str,
+    content: &'a str,
+}
+
+/// Dispatches a document to the agent's `/embed` endpoint for chunking +
+/// embedding (ADR-063); the agent calls back with the chunks.
+pub struct HttpEmbedDispatcher {
+    client: reqwest::Client,
+    base_url: String,
+    internal_token: String,
+}
+
+impl HttpEmbedDispatcher {
+    pub fn new(base_url: String, internal_token: String) -> Self {
+        Self {
+            client: reqwest::Client::new(),
+            base_url: base_url.trim_end_matches('/').to_string(),
+            internal_token,
+        }
+    }
+}
+
+#[async_trait]
+impl EmbedDispatcher for HttpEmbedDispatcher {
+    async fn dispatch_embed(
+        &self,
+        document_id: uuid::Uuid,
+        name: &str,
+        content: &str,
+    ) -> Result<(), PortError> {
+        let mut trace_headers = reqwest::header::HeaderMap::new();
+        crate::telemetry::inject_trace_context(&mut trace_headers);
+        let response = self
+            .client
+            .post(format!("{}/embed", self.base_url))
+            .headers(trace_headers)
+            .header("X-Internal-Token", &self.internal_token)
+            .header("X-Request-Id", document_id.to_string())
+            .json(&EmbedRequest {
+                document_id,
+                name,
+                content,
+            })
+            .send()
+            .await
+            .map_err(|e| PortError(format!("agent API unreachable: {e}")))?;
+        if !response.status().is_success() {
+            return Err(PortError(format!(
+                "agent API returned {}",
+                response.status()
+            )));
+        }
+        Ok(())
+    }
+}
+
+/// No-op embed dispatcher (no agent stack / tests): documents stay `pending`.
+#[derive(Default)]
+pub struct NoopEmbedDispatcher;
+
+#[async_trait]
+impl EmbedDispatcher for NoopEmbedDispatcher {
+    async fn dispatch_embed(
+        &self,
+        document_id: uuid::Uuid,
+        _name: &str,
+        _content: &str,
+    ) -> Result<(), PortError> {
+        tracing::warn!(%document_id, "NoopEmbedDispatcher: document not sent to any agent");
         Ok(())
     }
 }

@@ -280,6 +280,68 @@ async fn notification_channels_roundtrip_scoped_and_cascade() {
 }
 
 #[tokio::test]
+async fn knowledge_base_roundtrip_embed_retrieve_and_scope() {
+    // ADR-063: migration 0013 (pgvector) + documents/chunks + NN retrieval.
+    use backend::adapters::persistence::postgres::PostgresDocumentRepository;
+    use backend::domain::ports::DocumentRepository;
+    use backend::domain::{Document, NewChunk};
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let repo = PostgresDocumentRepository::new(pool);
+
+    let doc = Document::new(user.id, "notes.md").unwrap();
+    repo.insert(&doc).await.unwrap();
+    assert_eq!(
+        repo.find(doc.id).await.unwrap().unwrap().status.as_str(),
+        "pending"
+    );
+
+    // 768-dim unit vectors (matches the migration's vector(768)).
+    let mut a = vec![0.0f32; 768];
+    a[0] = 1.0;
+    let mut b = vec![0.0f32; 768];
+    b[1] = 1.0;
+    repo.store_chunks(
+        &doc,
+        &[
+            NewChunk {
+                seq: 0,
+                content: "the sky is blue".into(),
+                embedding: a.clone(),
+            },
+            NewChunk {
+                seq: 1,
+                content: "unrelated".into(),
+                embedding: b,
+            },
+        ],
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        repo.find(doc.id).await.unwrap().unwrap().status.as_str(),
+        "ready"
+    );
+
+    // Nearest chunk to `a` is the one embedded with `a`.
+    let hits = repo.retrieve(user.id, &a, 1).await.unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].content, "the sky is blue");
+    assert_eq!(hits[0].document_name, "notes.md");
+
+    // Scoped: retrieval for a different user sees nothing.
+    assert!(repo
+        .retrieve(Uuid::new_v4(), &a, 5)
+        .await
+        .unwrap()
+        .is_empty());
+
+    // Delete cascades the chunks.
+    assert!(repo.delete(user.id, doc.id).await.unwrap());
+    assert!(repo.retrieve(user.id, &a, 5).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn account_deletion_removes_all_of_a_users_data() {
     // ADR-058: the per-user deletes the DeleteAccount use case orchestrates.
     let Some(pool) = pool().await else { return };
