@@ -54,6 +54,7 @@ fn app_with_audit(
         Arc::new(AlwaysReady),
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
+        true, // email_enabled (ADR-062)
         INTERNAL_TOKEN.into(),
         daily_quota,
         30,
@@ -946,6 +947,7 @@ async fn readyz_reports_503_when_a_dependency_is_down() {
         Arc::new(NotReady),
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
+        true,
         INTERNAL_TOKEN.into(),
         100,
         30,
@@ -1056,4 +1058,46 @@ async fn profile_requires_authentication() {
     let app = app();
     let (status, _) = send(&app, get("/api/account", &[])).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
+}
+
+#[tokio::test]
+async fn email_channel_can_be_added_when_smtp_is_enabled() {
+    // The test app enables email (ADR-062); the profile advertises it.
+    let app = app();
+    let creds = json!({"email": "mail@example.com", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    let (_, profile) = send(
+        &app,
+        get("/api/account", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert_eq!(profile["email_enabled"], true);
+
+    let (status, ch) = send(
+        &app,
+        post_json(
+            "/api/account/channels",
+            json!({"kind": "email", "target": "me@example.com"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ch}");
+    assert_eq!(ch["kind"], "email");
+    assert_eq!(ch["target"], "me@example.com");
+
+    // A malformed address is rejected.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/account/channels",
+            json!({"kind": "email", "target": "not-an-email"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
 }

@@ -252,11 +252,16 @@ async fn notification_channels_roundtrip_scoped_and_cascade() {
         NotificationChannel::new(user.id, ChannelKind::Slack, "https://hooks/x", None).unwrap();
     let telegram =
         NotificationChannel::new(user.id, ChannelKind::Telegram, "chat1", Some("tok")).unwrap();
+    // Email exercises the CHECK widened by migration 0012 (ADR-062).
+    let email =
+        NotificationChannel::new(user.id, ChannelKind::Email, "me@example.com", None).unwrap();
     channels.insert(&slack).await.unwrap();
     channels.insert(&telegram).await.unwrap();
+    channels.insert(&email).await.unwrap();
 
     let listed = channels.list_for_user(user.id).await.unwrap();
-    assert_eq!(listed.len(), 2);
+    assert_eq!(listed.len(), 3);
+    assert!(listed.iter().any(|c| c.kind == ChannelKind::Email));
     // The secret roundtrips (stored for delivery, never exposed by the API).
     let tg = listed
         .iter()
@@ -267,10 +272,10 @@ async fn notification_channels_roundtrip_scoped_and_cascade() {
     // Scoped delete: foreign id is a no-op.
     assert!(!channels.delete(Uuid::new_v4(), slack.id).await.unwrap());
     assert!(channels.delete(user.id, slack.id).await.unwrap());
-    assert_eq!(channels.list_for_user(user.id).await.unwrap().len(), 1);
+    assert_eq!(channels.list_for_user(user.id).await.unwrap().len(), 2);
 
     // delete_all_for_user (account deletion cascade, ADR-058).
-    assert_eq!(channels.delete_all_for_user(user.id).await.unwrap(), 1);
+    assert_eq!(channels.delete_all_for_user(user.id).await.unwrap(), 2);
     assert!(channels.list_for_user(user.id).await.unwrap().is_empty());
 }
 

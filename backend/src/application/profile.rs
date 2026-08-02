@@ -13,6 +13,8 @@ use crate::domain::{ChannelKind, NotificationChannel, User};
 pub enum ProfileError {
     #[error("account not found")]
     NotFound,
+    #[error("email delivery is not configured on this server")]
+    EmailNotConfigured,
     #[error(transparent)]
     InvalidChannel(#[from] ChannelError),
     #[error(transparent)]
@@ -22,14 +24,26 @@ pub enum ProfileError {
 pub struct Profile {
     users: Arc<dyn UserRepository>,
     channels: Arc<dyn NotificationChannelRepository>,
+    /// Whether SMTP is configured (ADR-062): gates creating an `email` channel,
+    /// and surfaced in the profile so the UI can hide the option.
+    email_enabled: bool,
 }
 
 impl Profile {
     pub fn new(
         users: Arc<dyn UserRepository>,
         channels: Arc<dyn NotificationChannelRepository>,
+        email_enabled: bool,
     ) -> Self {
-        Self { users, channels }
+        Self {
+            users,
+            channels,
+            email_enabled,
+        }
+    }
+
+    pub fn email_enabled(&self) -> bool {
+        self.email_enabled
     }
 
     /// The account plus its notification channels.
@@ -53,6 +67,9 @@ impl Profile {
         target: &str,
         secret: Option<&str>,
     ) -> Result<NotificationChannel, ProfileError> {
+        if kind == ChannelKind::Email && !self.email_enabled {
+            return Err(ProfileError::EmailNotConfigured);
+        }
         let channel = NotificationChannel::new(user_id, kind, target, secret)?;
         self.channels.insert(&channel).await?;
         Ok(channel)
@@ -72,11 +89,15 @@ mod tests {
     };
 
     async fn profile_with_user() -> (Profile, Uuid) {
+        profile_with_email(true).await
+    }
+
+    async fn profile_with_email(email_enabled: bool) -> (Profile, Uuid) {
         let users = Arc::new(InMemoryUserRepository::default());
         let channels = Arc::new(InMemoryNotificationChannelRepository::default());
         let user = User::new("me@b.com".into(), "hash".into());
         users.insert(&user).await.unwrap();
-        (Profile::new(users, channels), user.id)
+        (Profile::new(users, channels, email_enabled), user.id)
     }
 
     #[tokio::test]
@@ -105,6 +126,26 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(err, ProfileError::InvalidChannel(_)));
+    }
+
+    #[tokio::test]
+    async fn email_channel_is_gated_on_smtp_being_configured() {
+        // ADR-062: with SMTP off, adding an email channel is refused clearly.
+        let (off, user_id) = profile_with_email(false).await;
+        assert!(!off.email_enabled());
+        assert!(matches!(
+            off.add_channel(user_id, ChannelKind::Email, "me@b.com", None)
+                .await
+                .unwrap_err(),
+            ProfileError::EmailNotConfigured
+        ));
+
+        // With SMTP on it goes through.
+        let (on, user_id) = profile_with_email(true).await;
+        assert!(on.email_enabled());
+        on.add_channel(user_id, ChannelKind::Email, "me@b.com", None)
+            .await
+            .unwrap();
     }
 
     #[tokio::test]

@@ -951,7 +951,8 @@
         "required": [
           "email",
           "created_at",
-          "channels"
+          "channels",
+          "email_enabled"
         ],
         "properties": {
           "channels": {
@@ -966,6 +967,10 @@
           },
           "email": {
             "type": "string"
+          },
+          "email_enabled": {
+            "type": "boolean",
+            "description": "Whether SMTP is configured (ADR-062): the UI hides the email option when\nfalse."
           }
         }
       },

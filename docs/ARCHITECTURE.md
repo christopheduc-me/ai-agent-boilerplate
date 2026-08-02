@@ -1963,6 +1963,35 @@ against a live server here.
 
 ---
 
+### ADR-062 — Email notification channel over SMTP (decided 2026-08-02)
+
+**Context**: completing ADR-061 with the third channel — email. The maintainer
+chose **SMTP** (universal, works with any provider) over an HTTP email API
+(which would have avoided a dependency but tied the boilerplate to one vendor).
+
+**Decision**: an `email` channel kind (migration `0012` widens the `kind` CHECK)
+whose `target` is the recipient address (no per-channel secret — SMTP credentials
+are server-level). Delivery goes through an **`EmailTransport` port** so the
+`EmailNotifier` is testable without a live server:
+- `LettreEmailTransport` — the real adapter (`lettre`, SMTP over **STARTTLS +
+  rustls**, no OpenSSL), built only when SMTP is configured.
+- `DisabledEmailTransport` — returns a clear "not configured" error; also the
+  fallback if the SMTP config is invalid at startup.
+- A fake transport in tests asserts the email is well-formed (to/subject/body).
+
+**Opt-in + gating**: SMTP is configured via `SMTP_HOST` + `SMTP_FROM` (required
+pair) plus `SMTP_PORT` (default 587), `SMTP_USERNAME`, `SMTP_PASSWORD`. When it
+is off, `email_enabled` is `false`: the profile advertises it (`GET /api/account`),
+the frontend hides the email option, and creating an email channel is refused
+(`422`, `ProfileError::EmailNotConfigured`) rather than silently never delivering.
+
+**Validation caveat**: as flagged, the real SMTP send **cannot be tested here**
+(no mail server; the "no test calls a live service" rule). The logic is covered
+with a fake transport; the actual `lettre` → SMTP path must be **validated once
+against a real server by the operator** (like the ADR-012 live-provider tests).
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
@@ -1975,7 +2004,7 @@ against a live server here.
 | POST | `/api/auth/logout` | Revokes the refresh token, clears the cookie |
 | GET | `/api/account` | Profile: email + notification channels (ADR-061) |
 | DELETE | `/api/account` | Deletes the account and all its data — jobs, results, recurring, tokens (ADR-058) |
-| POST | `/api/account/channels` | Adds a notification channel `{kind, target, secret?}` — `slack`/`telegram` (ADR-061) |
+| POST | `/api/account/channels` | Adds a notification channel `{kind, target, secret?}` — `slack`/`telegram`/`email` (ADR-061/062) |
 | DELETE | `/api/account/channels/{id}` | Removes a notification channel (ADR-061) |
 | POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |

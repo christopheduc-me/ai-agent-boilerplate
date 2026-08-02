@@ -55,6 +55,12 @@ services:
       RATE_LIMIT_REDIS_URL: ${RATE_LIMIT_REDIS_URL:-}
       # Security audit log retention in days (ADR-057); 0 = keep forever.
       SECURITY_EVENT_RETENTION_DAYS: ${SECURITY_EVENT_RETENTION_DAYS:-90}
+      # Email notification channel (ADR-062): SMTP_HOST + SMTP_FROM enable it.
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USERNAME: ${SMTP_USERNAME:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      SMTP_FROM: ${SMTP_FROM:-}
       # Retention for finished one-shot searches in days (ADR-058); 0 = keep forever.
       DATA_RETENTION_DAYS: ${DATA_RETENTION_DAYS:-0}
       # Digest webhook HMAC signing (ADR-047): empty = unsigned.

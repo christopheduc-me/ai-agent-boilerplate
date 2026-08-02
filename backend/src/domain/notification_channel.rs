@@ -5,7 +5,7 @@
 //! A channel is a `kind` plus a `target` and an optional `secret`:
 //!   * Slack    — `target` is an incoming-webhook URL, no secret.
 //!   * Telegram — `target` is the chat id, `secret` is the bot token.
-//!   * Email (planned, ADR-062) — `target` is the address, no secret.
+//!   * Email (ADR-062) — `target` is the address, no secret (SMTP is server-level).
 //!
 //! Pure domain: delivery is a port (`ChannelNotifier`), storage another
 //! (`NotificationChannelRepository`).
@@ -21,6 +21,7 @@ pub const MAX_SECRET_LEN: usize = 512;
 pub enum ChannelKind {
     Slack,
     Telegram,
+    Email,
 }
 
 impl ChannelKind {
@@ -28,6 +29,7 @@ impl ChannelKind {
         match self {
             Self::Slack => "slack",
             Self::Telegram => "telegram",
+            Self::Email => "email",
         }
     }
 
@@ -35,6 +37,7 @@ impl ChannelKind {
         match value {
             "slack" => Some(Self::Slack),
             "telegram" => Some(Self::Telegram),
+            "email" => Some(Self::Email),
             _ => None,
         }
     }
@@ -54,6 +57,8 @@ pub enum ChannelError {
     InvalidSlackUrl,
     #[error("telegram requires a bot token")]
     MissingTelegramToken,
+    #[error("email target must be a valid address")]
+    InvalidEmail,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -98,6 +103,17 @@ impl NotificationChannel {
             ChannelKind::Telegram => {
                 if secret.is_none() {
                     return Err(ChannelError::MissingTelegramToken);
+                }
+            }
+            ChannelKind::Email => {
+                // A pragmatic sanity check (not full RFC 5322): one `@` with a
+                // non-empty local part and a dotted domain. SMTP credentials are
+                // server-level config, so an email channel carries no secret.
+                let valid = target.split_once('@').is_some_and(|(local, domain)| {
+                    !local.is_empty() && domain.contains('.') && !domain.starts_with('.')
+                });
+                if !valid {
+                    return Err(ChannelError::InvalidEmail);
                 }
             }
         }
@@ -159,10 +175,30 @@ mod tests {
     }
 
     #[test]
+    fn email_requires_a_valid_address() {
+        let user = Uuid::new_v4();
+        let ok =
+            NotificationChannel::new(user, ChannelKind::Email, "me@example.com", None).unwrap();
+        assert_eq!(ok.target, "me@example.com");
+        assert!(ok.secret.is_none());
+        for bad in ["not-an-email", "@example.com", "me@nodot", "me@.com"] {
+            assert_eq!(
+                NotificationChannel::new(user, ChannelKind::Email, bad, None).unwrap_err(),
+                ChannelError::InvalidEmail,
+                "{bad} must be rejected"
+            );
+        }
+    }
+
+    #[test]
     fn kind_strings_roundtrip() {
-        for kind in [ChannelKind::Slack, ChannelKind::Telegram] {
+        for kind in [
+            ChannelKind::Slack,
+            ChannelKind::Telegram,
+            ChannelKind::Email,
+        ] {
             assert_eq!(ChannelKind::parse(kind.as_str()), Some(kind));
         }
-        assert_eq!(ChannelKind::parse("email"), None);
+        assert_eq!(ChannelKind::parse("carrier-pigeon"), None);
     }
 }

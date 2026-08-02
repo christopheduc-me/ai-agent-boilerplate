@@ -157,7 +157,7 @@ docs/                           # ARCHITECTURE.md (55 ADRs), FORKING.md, COMMAND
 - [docs/FORKING.md](docs/FORKING.md) — **make it yours**: swap the example
   domain for your own agent task at the hexagonal seams, keep the infrastructure.
 - [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) — every technical decision
-  (ADR-001 → ADR-061), kept in sync with the code at all times.
+  (ADR-001 → ADR-062), kept in sync with the code at all times.
 - [docs/OBSERVABILITY.md](docs/OBSERVABILITY.md) — the three pillars (traces,
   logs, metrics), what to measure and where to find it.
 - [docs/COMMANDS.md](docs/COMMANDS.md) — every dev/test/deploy command.

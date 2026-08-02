@@ -115,6 +115,7 @@ impl AppState {
         readiness: Arc<dyn ReadinessProbe>,
         channels: Arc<dyn NotificationChannelRepository>,
         notifier: Arc<dyn ChannelNotifier>,
+        email_enabled: bool,
         internal_token: String,
         daily_search_quota: u32,
         refresh_ttl_days: i64,
@@ -129,7 +130,7 @@ impl AppState {
                 refresh_tokens.clone(),
                 channels.clone(),
             )),
-            profile: Arc::new(Profile::new(users.clone(), channels.clone())),
+            profile: Arc::new(Profile::new(users.clone(), channels.clone(), email_enabled)),
             register: Arc::new(RegisterUser::new(users.clone(), hasher.clone())),
             login: Arc::new(LoginUser::new(
                 users,
@@ -743,6 +744,9 @@ struct ProfileResponse {
     email: String,
     created_at: DateTime<Utc>,
     channels: Vec<ChannelView>,
+    /// Whether SMTP is configured (ADR-062): the UI hides the email option when
+    /// false.
+    email_enabled: bool,
 }
 
 /// `{ kind, target, secret? }` — adds a notification channel (ADR-061).
@@ -779,6 +783,7 @@ async fn get_profile(State(state): State<AppState>, AuthUser(user_id): AuthUser)
                 email: user.email,
                 created_at: user.created_at,
                 channels: channels.iter().map(channel_view).collect(),
+                email_enabled: state.profile.email_enabled(),
             }),
         )
             .into_response(),
@@ -810,7 +815,7 @@ async fn create_channel(
         .await
     {
         Ok(channel) => (StatusCode::CREATED, Json(channel_view(&channel))).into_response(),
-        Err(ProfileError::InvalidChannel(e)) => {
+        Err(e @ ProfileError::InvalidChannel(_)) | Err(e @ ProfileError::EmailNotConfigured) => {
             error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
         }
         Err(e) => {

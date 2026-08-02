@@ -44,6 +44,14 @@ pub trait ChannelNotifier: Send + Sync {
         -> Result<(), PortError>;
 }
 
+/// Sends an email (ADR-062). Implemented by the SMTP adapter, faked in tests,
+/// and a "not configured" variant when SMTP is off. Keeping it a port lets the
+/// email notifier be tested without a live SMTP server.
+#[async_trait]
+pub trait EmailTransport: Send + Sync {
+    async fn send_email(&self, to: &str, subject: &str, body: &str) -> Result<(), PortError>;
+}
+
 #[async_trait]
 pub trait JobRepository: Send + Sync {
     async fn insert(&self, job: &ResearchJob) -> Result<(), PortError>;

@@ -11,7 +11,10 @@ use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
-use backend::adapters::notify::{DispatchingChannelNotifier, SlackNotifier, TelegramNotifier};
+use backend::adapters::notify::{
+    DisabledEmailTransport, DispatchingChannelNotifier, EmailNotifier, LettreEmailTransport,
+    SlackNotifier, TelegramNotifier,
+};
 use backend::adapters::persistence::in_memory::{
     AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
     InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
@@ -26,8 +29,9 @@ use backend::adapters::security_metrics::MeteredSecurityAudit;
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    ChannelNotifier, JobDispatcher, JobRepository, NotificationChannelRepository, ReadinessProbe,
-    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
+    ChannelNotifier, EmailTransport, JobDispatcher, JobRepository, NotificationChannelRepository,
+    ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository, SecurityAudit,
+    UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -237,11 +241,32 @@ async fn serve() {
         config.rate_limits.redis_url.as_deref(),
     );
 
-    // Notification channels (ADR-061): Slack reuses the digest SSRF opt-in
-    // (DIGEST_ALLOW_PRIVATE_WEBHOOKS); Telegram hits the fixed Bot API host.
+    // Email transport (ADR-062): real SMTP when configured, otherwise a disabled
+    // one — and email channel creation is gated off (email_enabled = false).
+    let (email_transport, email_enabled): (Arc<dyn EmailTransport>, bool) = match &config.smtp {
+        Some(smtp) => match LettreEmailTransport::new(
+            &smtp.host,
+            smtp.port,
+            smtp.username.clone(),
+            smtp.password.clone(),
+            &smtp.from,
+        ) {
+            Ok(transport) => (Arc::new(transport), true),
+            Err(e) => {
+                tracing::error!(error = %e, "invalid SMTP config, email delivery disabled");
+                (Arc::new(DisabledEmailTransport), false)
+            }
+        },
+        None => (Arc::new(DisabledEmailTransport), false),
+    };
+
+    // Notification channels (ADR-061/062): Slack reuses the digest SSRF opt-in
+    // (DIGEST_ALLOW_PRIVATE_WEBHOOKS); Telegram hits the fixed Bot API host;
+    // email goes through the SMTP transport above.
     let notifier: Arc<dyn ChannelNotifier> = Arc::new(DispatchingChannelNotifier::new(
         Arc::new(SlackNotifier::new(config.digest_allow_private_webhooks)),
         Arc::new(TelegramNotifier::new("https://api.telegram.org")),
+        Arc::new(EmailNotifier::new(email_transport)),
     ));
 
     let state = AppState::new(
@@ -261,6 +286,7 @@ async fn serve() {
         readiness,
         channels,
         notifier,
+        email_enabled,
         config.internal_token,
         config.daily_search_quota,
         config.refresh_token_days,

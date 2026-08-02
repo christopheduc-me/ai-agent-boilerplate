@@ -33,6 +33,17 @@ pub const REQUIRED_IN_PRODUCTION: &[&str] = &[
 
 use crate::adapters::http::RateLimitConfig;
 
+/// SMTP settings for the email notification channel (ADR-062). Present only when
+/// `SMTP_HOST` and `SMTP_FROM` are both set — otherwise email delivery is off.
+#[derive(Debug, Clone)]
+pub struct SmtpConfig {
+    pub host: String,
+    pub port: u16,
+    pub username: String,
+    pub password: String,
+    pub from: String,
+}
+
 /// Everything `main` reads from the environment, parsed and validated in one
 /// place so the wiring binary stays a thin shell (and this logic is testable).
 #[derive(Debug)]
@@ -65,6 +76,9 @@ pub struct AppConfig {
     /// (the default — keep data unless the operator opts in). Recurring-run
     /// history is never purged by age (it is the dedup memory, ADR-033).
     pub data_retention_days: i64,
+    /// SMTP for the email notification channel (ADR-062): None disables email
+    /// delivery (the default; opt-in via `SMTP_HOST` + `SMTP_FROM`).
+    pub smtp: Option<SmtpConfig>,
     /// Degraded-mode notices to log once tracing is up (dev fallbacks, ADR-013).
     pub warnings: Vec<&'static str>,
 }
@@ -144,6 +158,20 @@ impl AppConfig {
                 .is_some_and(|v| v == "true"),
             security_event_retention_days: i64::from(get_u32("SECURITY_EVENT_RETENTION_DAYS", 90)),
             data_retention_days: i64::from(get_u32("DATA_RETENTION_DAYS", 0)),
+            smtp: match (get("SMTP_HOST"), get("SMTP_FROM")) {
+                (Some(host), Some(from)) => Some(SmtpConfig {
+                    host,
+                    port: get("SMTP_PORT").and_then(|v| v.parse().ok()).unwrap_or(587),
+                    username: get("SMTP_USERNAME").unwrap_or_default(),
+                    password: get("SMTP_PASSWORD").unwrap_or_default(),
+                    from,
+                }),
+                (Some(_), None) => {
+                    warnings.push("SMTP_HOST set but SMTP_FROM missing — email channel disabled");
+                    None
+                }
+                _ => None,
+            },
             warnings,
         })
     }

@@ -48,6 +48,7 @@ fn app() -> Router {
         Arc::new(AlwaysReady),
         Arc::new(InMemoryNotificationChannelRepository::default()),
         Arc::new(NoopChannelNotifier),
+        true,
         INTERNAL_TOKEN.into(),
         100,
         30,

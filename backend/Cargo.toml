@@ -18,6 +18,13 @@ argon2 = "0.5"
 rand_core = { version = "0.6", features = ["getrandom"] }
 jsonwebtoken = "9"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+# Email digest channel (ADR-062): SMTP over STARTTLS with rustls (no OpenSSL).
+lettre = { version = "0.11", default-features = false, features = [
+    "smtp-transport",
+    "tokio1-rustls-tls",
+    "builder",
+    "hostname",
+] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate", "macros"] }
 dotenvy = "0.15"
 sha2 = "0.11.0"
