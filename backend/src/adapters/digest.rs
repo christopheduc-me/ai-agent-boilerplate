@@ -30,7 +30,7 @@ const SIGNATURE_HEADER: &str = "X-Signature-256";
 /// True if `ip` is not a public/global address — loopback, private, link-local,
 /// CGNAT, etc. (ADR-055). Used to keep the user-supplied webhook URL from
 /// reaching internal services (SSRF).
-fn is_blocked_ip(ip: IpAddr) -> bool {
+pub(crate) fn is_blocked_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
             v4.is_private()
@@ -95,7 +95,7 @@ async fn ensure_public_host(url: &str, allow_private: bool) -> Result<(), PortEr
 /// resolve-then-check pre-flight leaves open (an attacker's DNS answering a
 /// public IP to the check, then `127.0.0.1` to the connect). `ensure_public_host`
 /// still runs first for a fast, clear rejection; this is the race-free backstop.
-struct PublicOnlyResolver;
+pub(crate) struct PublicOnlyResolver;
 
 impl Resolve for PublicOnlyResolver {
     fn resolve(&self, name: Name) -> Resolving {

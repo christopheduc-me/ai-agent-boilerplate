@@ -3,7 +3,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    Digest, DigestEntry, DigestSender, JobRepository, PortError, RecurringSearchRepository,
+    ChannelNotifier, Digest, DigestEntry, DigestSender, JobRepository,
+    NotificationChannelRepository, PortError, RecurringSearchRepository,
 };
 use crate::domain::{AgentStep, JobUsage, ResearchJob, SearchResult};
 
@@ -20,6 +21,8 @@ pub struct IngestResults {
     jobs: Arc<dyn JobRepository>,
     recurring: Arc<dyn RecurringSearchRepository>,
     digests: Arc<dyn DigestSender>,
+    channels: Arc<dyn NotificationChannelRepository>,
+    notifier: Arc<dyn ChannelNotifier>,
 }
 
 impl IngestResults {
@@ -27,17 +30,23 @@ impl IngestResults {
         jobs: Arc<dyn JobRepository>,
         recurring: Arc<dyn RecurringSearchRepository>,
         digests: Arc<dyn DigestSender>,
+        channels: Arc<dyn NotificationChannelRepository>,
+        notifier: Arc<dyn ChannelNotifier>,
     ) -> Self {
         Self {
             jobs,
             recurring,
             digests,
+            channels,
+            notifier,
         }
     }
 
-    /// Digest hook (ADR-036): a recurring run that delivered new results
-    /// notifies the saved webhook. Strictly best-effort — a dead webhook (or
-    /// a deleted recurring search) never fails the ingestion.
+    /// Digest hook (ADR-036/061): a recurring run that delivered new results
+    /// notifies the recurring search's saved webhook (if any) **and** every
+    /// notification channel in the owner's profile (Slack, Telegram…). Strictly
+    /// best-effort — a dead webhook/channel (or a deleted search) never fails
+    /// the ingestion; each destination is tried independently.
     async fn maybe_send_digest(&self, job: &ResearchJob, results: &[SearchResult]) {
         let Some(rs_id) = job.recurring_search_id else {
             return;
@@ -46,11 +55,8 @@ impl IngestResults {
         if new_results.is_empty() {
             return; // nothing new since the last run: no notification
         }
-        let webhook_url = match self.recurring.find(rs_id).await {
-            Ok(Some(search)) => match search.webhook_url {
-                Some(url) => url,
-                None => return,
-            },
+        let search = match self.recurring.find(rs_id).await {
+            Ok(Some(search)) => search,
             Ok(None) => return, // deleted meanwhile
             Err(e) => {
                 tracing::warn!(error = %e, "digest lookup failed");
@@ -71,8 +77,27 @@ impl IngestResults {
                 })
                 .collect(),
         };
-        if let Err(e) = self.digests.send(&webhook_url, &digest).await {
-            tracing::warn!(job_id = %job.id, error = %e, "digest delivery failed");
+        // The recurring search's own webhook (ADR-036), if set.
+        if let Some(url) = &search.webhook_url {
+            if let Err(e) = self.digests.send(url, &digest).await {
+                tracing::warn!(job_id = %job.id, error = %e, "digest webhook delivery failed");
+            }
+        }
+        // The owner's profile channels (ADR-061).
+        match self.channels.list_for_user(search.user_id).await {
+            Ok(channels) => {
+                for channel in &channels {
+                    if let Err(e) = self.notifier.notify(channel, &digest).await {
+                        tracing::warn!(
+                            job_id = %job.id,
+                            kind = channel.kind.as_str(),
+                            error = %e,
+                            "digest channel delivery failed"
+                        );
+                    }
+                }
+            }
+            Err(e) => tracing::warn!(error = %e, "channel lookup failed"),
         }
     }
 
@@ -156,10 +181,15 @@ impl IngestResults {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::adapters::notify::NoopChannelNotifier;
     use crate::adapters::persistence::in_memory::{
-        InMemoryJobRepository, InMemoryRecurringSearchRepository,
+        InMemoryJobRepository, InMemoryNotificationChannelRepository,
+        InMemoryRecurringSearchRepository,
     };
-    use crate::domain::{DateConfidence, JobMode, JobStatus, RecurringSearch, ResearchJob};
+    use crate::domain::{
+        ChannelKind, DateConfidence, JobMode, JobStatus, NotificationChannel, RecurringSearch,
+        ResearchJob,
+    };
     use std::sync::Mutex;
 
     /// Records digest deliveries for assertions.
@@ -176,12 +206,55 @@ mod tests {
         }
     }
 
+    /// Records channel deliveries (kind, target) for assertions (ADR-061).
+    #[derive(Default)]
+    struct RecordingChannelNotifier {
+        sent: Mutex<Vec<(String, String)>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ChannelNotifier for RecordingChannelNotifier {
+        async fn notify(
+            &self,
+            channel: &NotificationChannel,
+            _digest: &Digest,
+        ) -> Result<(), PortError> {
+            self.sent
+                .lock()
+                .unwrap()
+                .push((channel.kind.as_str().into(), channel.target.clone()));
+            Ok(())
+        }
+    }
+
     fn ingest_with(
         jobs: Arc<InMemoryJobRepository>,
         recurring: Arc<InMemoryRecurringSearchRepository>,
         digests: Arc<RecordingDigestSender>,
     ) -> IngestResults {
-        IngestResults::new(jobs, recurring, digests)
+        IngestResults::new(
+            jobs,
+            recurring,
+            digests,
+            Arc::new(InMemoryNotificationChannelRepository::default()),
+            Arc::new(NoopChannelNotifier),
+        )
+    }
+
+    /// Same, but with explicit channels + notifier to assert profile delivery.
+    fn ingest_with_channels(
+        jobs: Arc<InMemoryJobRepository>,
+        recurring: Arc<InMemoryRecurringSearchRepository>,
+        channels: Arc<InMemoryNotificationChannelRepository>,
+        notifier: Arc<RecordingChannelNotifier>,
+    ) -> IngestResults {
+        IngestResults::new(
+            jobs,
+            recurring,
+            Arc::new(RecordingDigestSender::default()),
+            channels,
+            notifier,
+        )
     }
 
     fn a_result(title: &str) -> SearchResult {
@@ -208,7 +281,7 @@ mod tests {
     #[tokio::test]
     async fn start_marks_the_job_running() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -223,7 +296,7 @@ mod tests {
     #[tokio::test]
     async fn late_start_does_not_reopen_a_finished_job() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -239,7 +312,7 @@ mod tests {
     #[tokio::test]
     async fn stores_results_and_completes_the_job() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -258,7 +331,7 @@ mod tests {
     #[tokio::test]
     async fn records_agent_failure() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -277,7 +350,7 @@ mod tests {
     #[tokio::test]
     async fn unknown_job_is_an_error() {
         let jobs = Arc::new(InMemoryJobRepository::default());
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs,
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -300,7 +373,7 @@ mod tests {
     #[tokio::test]
     async fn records_agent_steps_idempotently() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -333,7 +406,7 @@ mod tests {
     #[tokio::test]
     async fn request_input_pauses_a_running_job() {
         let (jobs, job) = repo_with_job().await;
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             jobs.clone(),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -352,7 +425,7 @@ mod tests {
 
     #[tokio::test]
     async fn step_for_an_unknown_job_is_an_error() {
-        let ingest = IngestResults::new(
+        let ingest = ingest_with(
             Arc::new(InMemoryJobRepository::default()),
             Arc::new(InMemoryRecurringSearchRepository::default()),
             Arc::new(RecordingDigestSender::default()),
@@ -400,6 +473,65 @@ mod tests {
         assert_eq!(digest.new_count, 1);
         // Only the NEW results ride in the digest.
         assert_eq!(digest.new_results[0].title, "fresh");
+    }
+
+    #[tokio::test]
+    async fn recurring_run_notifies_the_owner_profile_channels() {
+        // ADR-061: a recurring run with news notifies the owner's channels
+        // (Slack, Telegram…) in addition to the search webhook.
+        let jobs = Arc::new(InMemoryJobRepository::default());
+        let recurring = Arc::new(InMemoryRecurringSearchRepository::default());
+        let channels = Arc::new(InMemoryNotificationChannelRepository::default());
+        let notifier = Arc::new(RecordingChannelNotifier::default());
+        let ingest = ingest_with_channels(
+            jobs.clone(),
+            recurring.clone(),
+            channels.clone(),
+            notifier.clone(),
+        );
+
+        let user_id = Uuid::new_v4();
+        let rs = RecurringSearch::new(user_id, "rust", JobMode::Agent, 60, None).unwrap();
+        recurring.insert(&rs).await.unwrap();
+        // Two channels in the owner's profile.
+        channels
+            .insert(
+                &NotificationChannel::new(user_id, ChannelKind::Slack, "https://hooks/x", None)
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        channels
+            .insert(
+                &NotificationChannel::new(user_id, ChannelKind::Telegram, "chat1", Some("tok"))
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        // A different user's channel must NOT be notified.
+        channels
+            .insert(
+                &NotificationChannel::new(
+                    Uuid::new_v4(),
+                    ChannelKind::Slack,
+                    "https://hooks/other",
+                    None,
+                )
+                .unwrap(),
+            )
+            .await
+            .unwrap();
+
+        let job = ResearchJob::new(user_id, "rust")
+            .unwrap()
+            .with_recurring(rs.id);
+        jobs.insert(&job).await.unwrap();
+        ingest.complete(job.id, &[a_result("fresh")]).await.unwrap();
+
+        let sent = notifier.sent.lock().unwrap();
+        assert_eq!(sent.len(), 2, "only the owner's two channels");
+        assert!(sent.contains(&("slack".into(), "https://hooks/x".into())));
+        assert!(sent.contains(&("telegram".into(), "chat1".into())));
     }
 
     #[tokio::test]

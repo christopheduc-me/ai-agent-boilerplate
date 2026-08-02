@@ -6,12 +6,12 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    JobRepository, PortError, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
-    SecurityAudit, UserRepository,
+    JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
+    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use crate::domain::{
-    AgentStep, JobStatus, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult,
-    SecurityEvent, User,
+    AgentStep, JobStatus, JobUsage, NotificationChannel, RecurringSearch, RefreshToken,
+    ResearchJob, SearchResult, SecurityEvent, User,
 };
 
 #[derive(Default)]
@@ -36,9 +36,60 @@ impl UserRepository for InMemoryUserRepository {
             .cloned())
     }
 
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, PortError> {
+        Ok(self.users.lock().unwrap().get(&id).cloned())
+    }
+
     async fn delete(&self, id: Uuid) -> Result<(), PortError> {
         self.users.lock().unwrap().remove(&id);
         Ok(())
+    }
+}
+
+#[derive(Default)]
+pub struct InMemoryNotificationChannelRepository {
+    channels: Mutex<HashMap<Uuid, NotificationChannel>>,
+}
+
+#[async_trait]
+impl NotificationChannelRepository for InMemoryNotificationChannelRepository {
+    async fn insert(&self, channel: &NotificationChannel) -> Result<(), PortError> {
+        self.channels
+            .lock()
+            .unwrap()
+            .insert(channel.id, channel.clone());
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<NotificationChannel>, PortError> {
+        let mut channels: Vec<NotificationChannel> = self
+            .channels
+            .lock()
+            .unwrap()
+            .values()
+            .filter(|c| c.user_id == user_id)
+            .cloned()
+            .collect();
+        channels.sort_by_key(|c| c.created_at);
+        Ok(channels)
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        let mut channels = self.channels.lock().unwrap();
+        match channels.get(&id) {
+            Some(c) if c.user_id == user_id => {
+                channels.remove(&id);
+                Ok(true)
+            }
+            _ => Ok(false),
+        }
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let mut channels = self.channels.lock().unwrap();
+        let before = channels.len();
+        channels.retain(|_, c| c.user_id != user_id);
+        Ok((before - channels.len()) as u64)
     }
 }
 

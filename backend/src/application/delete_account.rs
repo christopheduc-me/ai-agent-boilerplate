@@ -11,7 +11,8 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::domain::ports::{
-    JobRepository, PortError, RecurringSearchRepository, RefreshTokenRepository, UserRepository,
+    JobRepository, NotificationChannelRepository, PortError, RecurringSearchRepository,
+    RefreshTokenRepository, UserRepository,
 };
 
 pub struct DeleteAccount {
@@ -19,6 +20,7 @@ pub struct DeleteAccount {
     jobs: Arc<dyn JobRepository>,
     recurring: Arc<dyn RecurringSearchRepository>,
     refresh_tokens: Arc<dyn RefreshTokenRepository>,
+    channels: Arc<dyn NotificationChannelRepository>,
 }
 
 impl DeleteAccount {
@@ -27,12 +29,14 @@ impl DeleteAccount {
         jobs: Arc<dyn JobRepository>,
         recurring: Arc<dyn RecurringSearchRepository>,
         refresh_tokens: Arc<dyn RefreshTokenRepository>,
+        channels: Arc<dyn NotificationChannelRepository>,
     ) -> Self {
         Self {
             users,
             jobs,
             recurring,
             refresh_tokens,
+            channels,
         }
     }
 
@@ -40,6 +44,7 @@ impl DeleteAccount {
         self.recurring.delete_all_for_user(user_id).await?;
         self.jobs.delete_all_for_user(user_id).await?;
         self.refresh_tokens.delete_all_for_user(user_id).await?;
+        self.channels.delete_all_for_user(user_id).await?;
         self.users.delete(user_id).await?;
         Ok(())
     }
@@ -49,10 +54,13 @@ impl DeleteAccount {
 mod tests {
     use super::*;
     use crate::adapters::persistence::in_memory::{
-        InMemoryJobRepository, InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository,
-        InMemoryUserRepository,
+        InMemoryJobRepository, InMemoryNotificationChannelRepository,
+        InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemoryUserRepository,
     };
-    use crate::domain::{JobMode, RecurringSearch, RefreshToken, ResearchJob, User};
+    use crate::domain::ports::NotificationChannelRepository;
+    use crate::domain::{
+        ChannelKind, JobMode, NotificationChannel, RecurringSearch, RefreshToken, ResearchJob, User,
+    };
 
     #[tokio::test]
     async fn deletes_the_user_and_all_their_data() {
@@ -60,6 +68,7 @@ mod tests {
         let jobs = Arc::new(InMemoryJobRepository::default());
         let recurring = Arc::new(InMemoryRecurringSearchRepository::default());
         let refresh = Arc::new(InMemoryRefreshTokenRepository::default());
+        let channels = Arc::new(InMemoryNotificationChannelRepository::default());
 
         let user = User::new("gone@b.com".into(), "hash".into());
         users.insert(&user).await.unwrap();
@@ -69,6 +78,9 @@ mod tests {
         recurring.insert(&rs).await.unwrap();
         let (token, _) = RefreshToken::issue(user.id, 30);
         refresh.insert(&token).await.unwrap();
+        let channel =
+            NotificationChannel::new(user.id, ChannelKind::Slack, "https://hooks/x", None).unwrap();
+        channels.insert(&channel).await.unwrap();
 
         // A second user's data must survive.
         let other = User::new("stay@b.com".into(), "hash".into());
@@ -81,6 +93,7 @@ mod tests {
             jobs.clone(),
             recurring.clone(),
             refresh.clone(),
+            channels.clone(),
         )
         .execute(user.id)
         .await
@@ -89,6 +102,7 @@ mod tests {
         assert!(users.find_by_email("gone@b.com").await.unwrap().is_none());
         assert!(jobs.find(job.id).await.unwrap().is_none());
         assert!(recurring.list_for_user(user.id).await.unwrap().is_empty());
+        assert!(channels.list_for_user(user.id).await.unwrap().is_empty());
         assert!(refresh
             .find_by_hash(&token.token_hash)
             .await
@@ -106,8 +120,9 @@ mod tests {
         let jobs = Arc::new(InMemoryJobRepository::default());
         let recurring = Arc::new(InMemoryRecurringSearchRepository::default());
         let refresh = Arc::new(InMemoryRefreshTokenRepository::default());
+        let channels = Arc::new(InMemoryNotificationChannelRepository::default());
 
-        DeleteAccount::new(users, jobs, recurring, refresh)
+        DeleteAccount::new(users, jobs, recurring, refresh, channels)
             .execute(Uuid::new_v4())
             .await
             .unwrap();

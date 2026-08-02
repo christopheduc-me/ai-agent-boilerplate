@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use uuid::Uuid;
 
 use super::{
-    AgentStep, JobUsage, RecurringSearch, RefreshToken, ResearchJob, SearchResult, SecurityEvent,
-    User,
+    AgentStep, JobUsage, NotificationChannel, RecurringSearch, RefreshToken, ResearchJob,
+    SearchResult, SecurityEvent, User,
 };
 
 /// Infrastructure failure surfaced through a port (DB down, network error...).
@@ -19,8 +19,29 @@ pub struct PortError(pub String);
 pub trait UserRepository: Send + Sync {
     async fn insert(&self, user: &User) -> Result<(), PortError>;
     async fn find_by_email(&self, email: &str) -> Result<Option<User>, PortError>;
+    /// Looks a user up by id — for the profile view (ADR-061).
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, PortError>;
     /// Deletes the account (ADR-058). Idempotent — an unknown id is a no-op.
     async fn delete(&self, id: Uuid) -> Result<(), PortError>;
+}
+
+/// Per-user notification channels (ADR-061): the profile-level digest targets.
+#[async_trait]
+pub trait NotificationChannelRepository: Send + Sync {
+    async fn insert(&self, channel: &NotificationChannel) -> Result<(), PortError>;
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<NotificationChannel>, PortError>;
+    /// Deletes the user's channel; false when unknown or foreign.
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError>;
+    /// Removes all of a user's channels (account deletion cascade, ADR-058).
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError>;
+}
+
+/// Delivers a digest to one notification channel (ADR-061): Slack, Telegram…
+/// Best-effort like the webhook sender — a dead channel never fails ingestion.
+#[async_trait]
+pub trait ChannelNotifier: Send + Sync {
+    async fn notify(&self, channel: &NotificationChannel, digest: &Digest)
+        -> Result<(), PortError>;
 }
 
 #[async_trait]

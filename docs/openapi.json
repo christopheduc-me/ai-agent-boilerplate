@@ -10,6 +10,35 @@
   },
   "paths": {
     "/api/account": {
+      "get": {
+        "tags": [
+          "account"
+        ],
+        "summary": "The user's profile + notification channels (ADR-061).",
+        "operationId": "get_profile",
+        "responses": {
+          "200": {
+            "description": "Profile with notification channels",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "auth"
@@ -22,6 +51,71 @@
           },
           "401": {
             "description": "Missing or invalid access token",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/channels": {
+      "post": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Adds a notification channel where digests are delivered (ADR-061).",
+        "operationId": "create_channel",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateChannelRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Channel added",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChannelView"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Unknown kind or invalid target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ErrorResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/account/channels/{id}": {
+      "delete": {
+        "tags": [
+          "account"
+        ],
+        "summary": "Removes a notification channel (ADR-061).",
+        "operationId": "delete_channel",
+        "responses": {
+          "204": {
+            "description": "Channel removed"
+          },
+          "404": {
+            "description": "Channel not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -550,6 +644,59 @@
           }
         }
       },
+      "ChannelView": {
+        "type": "object",
+        "description": "A notification channel as returned to the client (ADR-061). The `secret`\n(Telegram bot token) is **never** serialized back.",
+        "required": [
+          "id",
+          "kind",
+          "target",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`slack` or `telegram`."
+          },
+          "target": {
+            "type": "string",
+            "description": "Slack incoming-webhook URL, or Telegram chat id."
+          }
+        }
+      },
+      "CreateChannelRequest": {
+        "type": "object",
+        "description": "`{ kind, target, secret? }` — adds a notification channel (ADR-061).",
+        "required": [
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "description": "`slack` or `telegram`."
+          },
+          "secret": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Per-channel secret (Telegram bot token); omit for Slack."
+          },
+          "target": {
+            "type": "string",
+            "description": "Slack incoming-webhook URL, or Telegram chat id."
+          }
+        }
+      },
       "CreateRecurringRequest": {
         "type": "object",
         "required": [
@@ -795,6 +942,30 @@
           },
           "usage": {
             "$ref": "#/components/schemas/JobUsage"
+          }
+        }
+      },
+      "ProfileResponse": {
+        "type": "object",
+        "description": "The logged-in user's profile (ADR-061): account + notification channels.",
+        "required": [
+          "email",
+          "created_at",
+          "channels"
+        ],
+        "properties": {
+          "channels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ChannelView"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "email": {
+            "type": "string"
           }
         }
       },

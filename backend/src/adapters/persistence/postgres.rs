@@ -14,10 +14,10 @@ use uuid::Uuid;
 
 use crate::adapters::leader_lock::LeaderLock;
 use crate::domain::ports::{
-    JobRepository, PortError, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
-    SecurityAudit, UserRepository,
+    JobRepository, NotificationChannelRepository, PortError, ReadinessProbe,
+    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
-use crate::domain::SecurityEvent;
+use crate::domain::{ChannelKind, NotificationChannel, SecurityEvent};
 
 /// Advisory-lock key for the background loop (ADR-053): a fixed application id
 /// so every replica contends on the same lock.
@@ -265,6 +265,16 @@ impl UserRepository for PostgresUserRepository {
         let row =
             sqlx::query("SELECT id, email, password_hash, created_at FROM users WHERE email = $1")
                 .bind(email)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(db_err)?;
+        Ok(row.as_ref().map(user_from_row))
+    }
+
+    async fn find_by_id(&self, id: Uuid) -> Result<Option<User>, PortError> {
+        let row =
+            sqlx::query("SELECT id, email, password_hash, created_at FROM users WHERE id = $1")
+                .bind(id)
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(db_err)?;
@@ -862,5 +872,81 @@ impl PostgresReadiness {
 impl ReadinessProbe for PostgresReadiness {
     async fn ready(&self) -> bool {
         sqlx::query("SELECT 1").fetch_one(&self.pool).await.is_ok()
+    }
+}
+
+// ---------------------------------------------------------------- notification channels
+
+pub struct PostgresNotificationChannelRepository {
+    pool: PgPool,
+}
+
+impl PostgresNotificationChannelRepository {
+    pub fn new(pool: PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+fn channel_from_row(row: &PgRow) -> NotificationChannel {
+    NotificationChannel {
+        id: row.get("id"),
+        user_id: row.get("user_id"),
+        // The CHECK constraint keeps `kind` in the known set; default is unreachable.
+        kind: ChannelKind::parse(row.get("kind")).unwrap_or(ChannelKind::Slack),
+        target: row.get("target"),
+        secret: row.get("secret"),
+        created_at: row.get("created_at"),
+    }
+}
+
+#[async_trait]
+impl NotificationChannelRepository for PostgresNotificationChannelRepository {
+    async fn insert(&self, channel: &NotificationChannel) -> Result<(), PortError> {
+        sqlx::query(
+            "INSERT INTO notification_channels (id, user_id, kind, target, secret, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(channel.id)
+        .bind(channel.user_id)
+        .bind(channel.kind.as_str())
+        .bind(&channel.target)
+        .bind(&channel.secret)
+        .bind(channel.created_at)
+        .execute(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(())
+    }
+
+    async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<NotificationChannel>, PortError> {
+        let rows = sqlx::query(
+            "SELECT id, user_id, kind, target, secret, created_at
+             FROM notification_channels WHERE user_id = $1 ORDER BY created_at",
+        )
+        .bind(user_id)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(db_err)?;
+        Ok(rows.iter().map(channel_from_row).collect())
+    }
+
+    async fn delete(&self, user_id: Uuid, id: Uuid) -> Result<bool, PortError> {
+        let result =
+            sqlx::query("DELETE FROM notification_channels WHERE id = $1 AND user_id = $2")
+                .bind(id)
+                .bind(user_id)
+                .execute(&self.pool)
+                .await
+                .map_err(db_err)?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    async fn delete_all_for_user(&self, user_id: Uuid) -> Result<u64, PortError> {
+        let result = sqlx::query("DELETE FROM notification_channels WHERE user_id = $1")
+            .bind(user_id)
+            .execute(&self.pool)
+            .await
+            .map_err(db_err)?;
+        Ok(result.rows_affected())
     }
 }

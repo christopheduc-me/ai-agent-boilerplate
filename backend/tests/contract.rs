@@ -13,9 +13,11 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
+use backend::adapters::notify::NoopChannelNotifier;
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
-    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
+    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
+    InMemoryUserRepository,
 };
 use backend::domain::ports::JobDispatcher;
 use backend::domain::{JobMode, ResearchJob};
@@ -44,6 +46,8 @@ fn app() -> Router {
         Arc::new(InMemorySecurityAudit::default()),
         Limiter::per_minute(1000, "login", None),
         Arc::new(AlwaysReady),
+        Arc::new(InMemoryNotificationChannelRepository::default()),
+        Arc::new(NoopChannelNotifier),
         INTERNAL_TOKEN.into(),
         100,
         30,

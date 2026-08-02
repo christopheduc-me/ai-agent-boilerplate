@@ -11,21 +11,23 @@ use backend::adapters::dispatch::{HttpJobDispatcher, NoopJobDispatcher};
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState};
 use backend::adapters::leader_lock::{LeaderLock, NoopLeaderLock};
+use backend::adapters::notify::{DispatchingChannelNotifier, SlackNotifier, TelegramNotifier};
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
-    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
+    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
+    InMemoryUserRepository,
 };
 use backend::adapters::persistence::postgres::{
-    run_migrations, PostgresJobRepository, PostgresLeaderLock, PostgresReadiness,
-    PostgresRecurringSearchRepository, PostgresRefreshTokenRepository, PostgresSecurityAudit,
-    PostgresUserRepository,
+    run_migrations, PostgresJobRepository, PostgresLeaderLock,
+    PostgresNotificationChannelRepository, PostgresReadiness, PostgresRecurringSearchRepository,
+    PostgresRefreshTokenRepository, PostgresSecurityAudit, PostgresUserRepository,
 };
 use backend::adapters::security_metrics::MeteredSecurityAudit;
 use backend::application::{FailStaleJobs, RunDueSearches};
 use backend::config::AppConfig;
 use backend::domain::ports::{
-    JobDispatcher, JobRepository, ReadinessProbe, RecurringSearchRepository,
-    RefreshTokenRepository, SecurityAudit, UserRepository,
+    ChannelNotifier, JobDispatcher, JobRepository, NotificationChannelRepository, ReadinessProbe,
+    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, UserRepository,
 };
 use sqlx::postgres::PgPoolOptions;
 
@@ -118,10 +120,12 @@ async fn serve() {
         Arc<dyn SecurityAudit>,
         // Readiness probe for /readyz (ADR-059).
         Arc<dyn ReadinessProbe>,
+        // Per-user notification channels (ADR-061).
+        Arc<dyn NotificationChannelRepository>,
         // Single-leader gate for the background loop (ADR-053).
         Arc<dyn LeaderLock>,
     );
-    let (users, jobs, refresh_tokens, recurring, audit, readiness, leader): Repos =
+    let (users, jobs, refresh_tokens, recurring, audit, readiness, channels, leader): Repos =
         match &config.database_url {
             Some(url) => {
                 let pool = PgPoolOptions::new()
@@ -140,6 +144,7 @@ async fn serve() {
                     Arc::new(PostgresRecurringSearchRepository::new(pool.clone())),
                     Arc::new(PostgresSecurityAudit::new(pool.clone())),
                     Arc::new(PostgresReadiness::new(pool.clone())),
+                    Arc::new(PostgresNotificationChannelRepository::new(pool.clone())),
                     Arc::new(PostgresLeaderLock::new(pool)),
                 )
             }
@@ -151,6 +156,7 @@ async fn serve() {
                 Arc::new(InMemorySecurityAudit::default()),
                 // No external dependency to check: always ready.
                 Arc::new(AlwaysReady),
+                Arc::new(InMemoryNotificationChannelRepository::default()),
                 // A single in-memory instance always leads.
                 Arc::new(NoopLeaderLock),
             ),
@@ -231,6 +237,13 @@ async fn serve() {
         config.rate_limits.redis_url.as_deref(),
     );
 
+    // Notification channels (ADR-061): Slack reuses the digest SSRF opt-in
+    // (DIGEST_ALLOW_PRIVATE_WEBHOOKS); Telegram hits the fixed Bot API host.
+    let notifier: Arc<dyn ChannelNotifier> = Arc::new(DispatchingChannelNotifier::new(
+        Arc::new(SlackNotifier::new(config.digest_allow_private_webhooks)),
+        Arc::new(TelegramNotifier::new("https://api.telegram.org")),
+    ));
+
     let state = AppState::new(
         users,
         jobs,
@@ -246,6 +259,8 @@ async fn serve() {
         audit,
         login_throttle,
         readiness,
+        channels,
+        notifier,
         config.internal_token,
         config.daily_search_quota,
         config.refresh_token_days,

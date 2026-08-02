@@ -3,5 +3,6 @@ pub mod digest;
 pub mod dispatch;
 pub mod http;
 pub mod leader_lock;
+pub mod notify;
 pub mod persistence;
 pub mod security_metrics;

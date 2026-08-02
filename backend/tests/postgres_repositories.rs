@@ -232,6 +232,49 @@ async fn readiness_is_true_against_a_live_database() {
 }
 
 #[tokio::test]
+async fn notification_channels_roundtrip_scoped_and_cascade() {
+    // ADR-061: migration 0011 + the channel repo + find_by_id.
+    use backend::adapters::persistence::postgres::PostgresNotificationChannelRepository;
+    use backend::domain::ports::NotificationChannelRepository;
+    use backend::domain::{ChannelKind, NotificationChannel};
+    let Some(pool) = pool().await else { return };
+    let user = insert_user(&pool).await;
+    let users = PostgresUserRepository::new(pool.clone());
+    let channels = PostgresNotificationChannelRepository::new(pool);
+
+    // find_by_id (ADR-061) round-trips the user for the profile view.
+    assert_eq!(
+        users.find_by_id(user.id).await.unwrap().unwrap().id,
+        user.id
+    );
+
+    let slack =
+        NotificationChannel::new(user.id, ChannelKind::Slack, "https://hooks/x", None).unwrap();
+    let telegram =
+        NotificationChannel::new(user.id, ChannelKind::Telegram, "chat1", Some("tok")).unwrap();
+    channels.insert(&slack).await.unwrap();
+    channels.insert(&telegram).await.unwrap();
+
+    let listed = channels.list_for_user(user.id).await.unwrap();
+    assert_eq!(listed.len(), 2);
+    // The secret roundtrips (stored for delivery, never exposed by the API).
+    let tg = listed
+        .iter()
+        .find(|c| c.kind == ChannelKind::Telegram)
+        .unwrap();
+    assert_eq!(tg.secret.as_deref(), Some("tok"));
+
+    // Scoped delete: foreign id is a no-op.
+    assert!(!channels.delete(Uuid::new_v4(), slack.id).await.unwrap());
+    assert!(channels.delete(user.id, slack.id).await.unwrap());
+    assert_eq!(channels.list_for_user(user.id).await.unwrap().len(), 1);
+
+    // delete_all_for_user (account deletion cascade, ADR-058).
+    assert_eq!(channels.delete_all_for_user(user.id).await.unwrap(), 1);
+    assert!(channels.list_for_user(user.id).await.unwrap().is_empty());
+}
+
+#[tokio::test]
 async fn account_deletion_removes_all_of_a_users_data() {
     // ADR-058: the per-user deletes the DeleteAccount use case orchestrates.
     let Some(pool) = pool().await else { return };

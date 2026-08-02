@@ -61,8 +61,11 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       journal step with the delta verdict.
 - [x] **Digest webhooks (ADR-036)** — done: optional `webhook_url` per
       recurring search; runs with new results POST a digest (best-effort,
-      shape pinned by `contracts/digest-webhook.json`). An e-mail sender is
-      one more adapter behind the same `DigestSender` port.
+      shape pinned by `contracts/digest-webhook.json`).
+- [x] **Per-user notification channels (ADR-061)** — done: profile-level Slack
+      + Telegram destinations (`GET`/`POST`/`DELETE /api/account[/channels]`),
+      delivered alongside the per-search webhook via a `ChannelNotifier` port
+      (Slack reuses the SSRF guard). Email is the next adapter (ADR-062).
 - [x] **Human-in-the-loop clarification (ADR-032)** — done: the policy can ask
       one question (`awaiting_input` status, reaper-exempt), the answer
       re-dispatches the job with the clarification and a fresh journal.

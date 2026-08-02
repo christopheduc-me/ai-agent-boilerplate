@@ -25,20 +25,23 @@ use crate::application::answer_clarification::AnswerError;
 use crate::application::ingest_results::IngestError;
 use crate::application::launch_search::LaunchError;
 use crate::application::login_user::LoginError;
+use crate::application::profile::ProfileError;
 use crate::application::recurring_searches::RecurringError;
 use crate::application::refresh_session::RefreshError;
 use crate::application::register_user::RegisterError;
 use crate::application::{
-    AnswerClarification, DeleteAccount, IngestResults, LaunchSearch, LoginUser, RecurringSearches,
-    RefreshSession, RegisterUser, SearchQueries, SessionTokens,
+    AnswerClarification, DeleteAccount, IngestResults, LaunchSearch, LoginUser, Profile,
+    RecurringSearches, RefreshSession, RegisterUser, SearchQueries, SessionTokens,
 };
 use crate::domain::ports::{
-    DigestSender, JobDispatcher, JobRepository, PasswordHasher, ReadinessProbe,
-    RecurringSearchRepository, RefreshTokenRepository, SecurityAudit, TokenService, UserRepository,
+    ChannelNotifier, DigestSender, JobDispatcher, JobRepository, NotificationChannelRepository,
+    PasswordHasher, ReadinessProbe, RecurringSearchRepository, RefreshTokenRepository,
+    SecurityAudit, TokenService, UserRepository,
 };
 use crate::domain::{
-    AgentStep, DateConfidence, EventType, JobMode, JobStatus, JobUsage, RecurringSearch,
-    ResearchJob, SearchResult, SecurityEvent, SecurityEventKind,
+    AgentStep, ChannelKind, DateConfidence, EventType, JobMode, JobStatus, JobUsage,
+    NotificationChannel, RecurringSearch, ResearchJob, SearchResult, SecurityEvent,
+    SecurityEventKind,
 };
 
 /// Name of the HttpOnly cookie carrying the refresh token (ADR-008).
@@ -56,6 +59,8 @@ pub struct AppState {
     queries: Arc<SearchQueries>,
     /// Account deletion (ADR-058): erases the user and cascades their data.
     delete_account: Arc<DeleteAccount>,
+    /// Profile + notification channels (ADR-061).
+    profile: Arc<Profile>,
     tokens: Arc<dyn TokenService>,
     /// Security audit log (ADR-057): failed/throttled logins, quota hits.
     audit: Arc<dyn SecurityAudit>,
@@ -108,19 +113,23 @@ impl AppState {
         audit: Arc<dyn SecurityAudit>,
         login_throttle: rate_limit::Limiter,
         readiness: Arc<dyn ReadinessProbe>,
+        channels: Arc<dyn NotificationChannelRepository>,
+        notifier: Arc<dyn ChannelNotifier>,
         internal_token: String,
         daily_search_quota: u32,
         refresh_ttl_days: i64,
     ) -> Self {
         Self {
-            // Built first so its clones precede the moves of users/jobs/recurring/
-            // refresh_tokens into the other use cases below (ADR-058).
+            // Built first so their clones precede the moves of users/jobs/
+            // recurring/refresh_tokens/channels into the use cases below (ADR-058/061).
             delete_account: Arc::new(DeleteAccount::new(
                 users.clone(),
                 jobs.clone(),
                 recurring.clone(),
                 refresh_tokens.clone(),
+                channels.clone(),
             )),
+            profile: Arc::new(Profile::new(users.clone(), channels.clone())),
             register: Arc::new(RegisterUser::new(users.clone(), hasher.clone())),
             login: Arc::new(LoginUser::new(
                 users,
@@ -142,7 +151,13 @@ impl AppState {
             )),
             answer: Arc::new(AnswerClarification::new(jobs.clone(), dispatcher)),
             recurring: Arc::new(RecurringSearches::new(recurring.clone())),
-            ingest: Arc::new(IngestResults::new(jobs.clone(), recurring, digests)),
+            ingest: Arc::new(IngestResults::new(
+                jobs.clone(),
+                recurring,
+                digests,
+                channels,
+                notifier,
+            )),
             queries: Arc::new(SearchQueries::new(jobs)),
             tokens,
             audit,
@@ -234,6 +249,9 @@ impl utoipa::Modify for SecurityAddon {
         list_recurring,
         delete_recurring,
         delete_account,
+        get_profile,
+        create_channel,
+        delete_channel,
     ),
     components(schemas(
         CredentialsRequest,
@@ -246,6 +264,9 @@ impl utoipa::Modify for SecurityAddon {
         JobCreatedResponse,
         AccessTokenResponse,
         AccountResponse,
+        ProfileResponse,
+        ChannelView,
+        CreateChannelRequest,
         ErrorResponse,
         SearchResult,
         AgentStep,
@@ -292,7 +313,12 @@ pub fn router_with_limits(state: AppState, limits: RateLimitConfig) -> Router {
             "/api/recurring/{id}",
             axum::routing::delete(delete_recurring),
         )
-        .route("/api/account", axum::routing::delete(delete_account))
+        .route("/api/account", get(get_profile).delete(delete_account))
+        .route("/api/account/channels", post(create_channel))
+        .route(
+            "/api/account/channels/{id}",
+            axum::routing::delete(delete_channel),
+        )
         .layer(axum::middleware::from_fn_with_state(
             api_limiter,
             rate_limit::rate_limit,
@@ -694,6 +720,121 @@ async fn delete_account(State(state): State<AppState>, AuthUser(user_id): AuthUs
             .into_response(),
         Err(e) => {
             tracing::error!(error = %e, "account deletion failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// A notification channel as returned to the client (ADR-061). The `secret`
+/// (Telegram bot token) is **never** serialized back.
+#[derive(Serialize, ToSchema)]
+struct ChannelView {
+    id: Uuid,
+    /// `slack` or `telegram`.
+    kind: String,
+    /// Slack incoming-webhook URL, or Telegram chat id.
+    target: String,
+    created_at: DateTime<Utc>,
+}
+
+/// The logged-in user's profile (ADR-061): account + notification channels.
+#[derive(Serialize, ToSchema)]
+struct ProfileResponse {
+    email: String,
+    created_at: DateTime<Utc>,
+    channels: Vec<ChannelView>,
+}
+
+/// `{ kind, target, secret? }` — adds a notification channel (ADR-061).
+#[derive(Deserialize, ToSchema)]
+struct CreateChannelRequest {
+    /// `slack` or `telegram`.
+    kind: String,
+    /// Slack incoming-webhook URL, or Telegram chat id.
+    target: String,
+    /// Per-channel secret (Telegram bot token); omit for Slack.
+    #[serde(default)]
+    secret: Option<String>,
+}
+
+fn channel_view(channel: &NotificationChannel) -> ChannelView {
+    ChannelView {
+        id: channel.id,
+        kind: channel.kind.as_str().to_string(),
+        target: channel.target.clone(),
+        created_at: channel.created_at,
+    }
+}
+
+/// The user's profile + notification channels (ADR-061).
+#[utoipa::path(get, path = "/api/account", tag = "account",
+    responses(
+        (status = 200, description = "Profile with notification channels", body = ProfileResponse),
+        (status = 401, description = "Missing or invalid access token", body = ErrorResponse)))]
+async fn get_profile(State(state): State<AppState>, AuthUser(user_id): AuthUser) -> Response {
+    match state.profile.view(user_id).await {
+        Ok((user, channels)) => (
+            StatusCode::OK,
+            Json(ProfileResponse {
+                email: user.email,
+                created_at: user.created_at,
+                channels: channels.iter().map(channel_view).collect(),
+            }),
+        )
+            .into_response(),
+        Err(ProfileError::NotFound) => error_body(StatusCode::NOT_FOUND, "account not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "profile view failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Adds a notification channel where digests are delivered (ADR-061).
+#[utoipa::path(post, path = "/api/account/channels", tag = "account",
+    request_body = CreateChannelRequest,
+    responses(
+        (status = 201, description = "Channel added", body = ChannelView),
+        (status = 422, description = "Unknown kind or invalid target", body = ErrorResponse)))]
+async fn create_channel(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Json(body): Json<CreateChannelRequest>,
+) -> Response {
+    let Some(kind) = ChannelKind::parse(&body.kind) else {
+        return error_body(StatusCode::UNPROCESSABLE_ENTITY, "unknown channel kind");
+    };
+    match state
+        .profile
+        .add_channel(user_id, kind, &body.target, body.secret.as_deref())
+        .await
+    {
+        Ok(channel) => (StatusCode::CREATED, Json(channel_view(&channel))).into_response(),
+        Err(ProfileError::InvalidChannel(e)) => {
+            error_body(StatusCode::UNPROCESSABLE_ENTITY, &e.to_string())
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "add channel failed");
+            error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
+        }
+    }
+}
+
+/// Removes a notification channel (ADR-061).
+#[utoipa::path(delete, path = "/api/account/channels/{id}", tag = "account",
+    responses(
+        (status = 204, description = "Channel removed"),
+        (status = 404, description = "Channel not found", body = ErrorResponse)))]
+async fn delete_channel(
+    State(state): State<AppState>,
+    AuthUser(user_id): AuthUser,
+    Path(id): Path<Uuid>,
+) -> Response {
+    match state.profile.remove_channel(user_id, id).await {
+        Ok(true) => StatusCode::NO_CONTENT.into_response(),
+        Ok(false) => error_body(StatusCode::NOT_FOUND, "channel not found"),
+        Err(e) => {
+            tracing::error!(error = %e, "remove channel failed");
             error_body(StatusCode::INTERNAL_SERVER_ERROR, "internal error")
         }
     }

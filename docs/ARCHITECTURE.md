@@ -1926,6 +1926,43 @@ keeps the metering concern out of both the use case and the persistence adapters
 
 ---
 
+### ADR-061 — Per-user notification channels: Slack + Telegram (decided 2026-08-02)
+
+**Context**: digests (ADR-036) could only reach a *per-recurring-search* webhook
+URL. Users want to choose, **in their profile**, where their results are
+delivered — email, Slack or Telegram — and to use several at once.
+
+**Decision**: a per-user `NotificationChannel` (kind + `target` + optional
+`secret`), managed in the profile, delivered to **in addition to** the existing
+per-search webhook (kept for backward compatibility, decided with the maintainer).
+
+- **Model** (migration `0011`): `kind` ∈ {`slack`, `telegram`} today (email is
+  ADR-062); `target` is the Slack incoming-webhook URL or the Telegram chat id;
+  `secret` is the Telegram bot token (stored like the digest signing secret,
+  ADR-047 — the user's own integration credential, **never returned by the API**).
+  Multiple channels per user; cascades on account deletion (ADR-058).
+- **Delivery** — a `ChannelNotifier` port with a `DispatchingChannelNotifier`
+  routing by kind: **Slack** POSTs `{"text": …}` to the user URL (so it reuses
+  the digest webhook's SSRF guard — filtering DNS resolver, no redirects,
+  ADR-055/056, and the `DIGEST_ALLOW_PRIVATE_WEBHOOKS` opt-in); **Telegram**
+  POSTs to the fixed Bot API host `sendMessage`. `IngestResults` now sends a
+  recurring run's digest to the search webhook (if any) **and** every profile
+  channel of the owner — each best-effort and independent, so one dead channel
+  never blocks the others or the ingestion.
+- **API** (authenticated, ADR-017 rate-limited): `GET /api/account` returns the
+  profile (email + channels, no secrets); `POST /api/account/channels`
+  `{kind, target, secret?}` adds one (`422` on unknown kind / invalid target);
+  `DELETE /api/account/channels/{id}` removes one. A `Profile` use case holds the
+  validation; the domain `NotificationChannel::new` enforces the per-kind rules
+  (Slack requires `https://`, Telegram requires a token) and the length caps.
+
+Slack and Telegram are plain HTTP POSTs (they reuse `reqwest`, no new heavy
+dependency) and are fully tested with local stubs + fakes. Email is deferred to
+**ADR-062** because it needs an SMTP stack (`lettre`) that cannot be validated
+against a live server here.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
@@ -1936,7 +1973,10 @@ keeps the metering concern out of both the use case and the persistence adapters
 | POST | `/api/auth/login` | Login → access token (body) + refresh cookie |
 | POST | `/api/auth/refresh` | Rotates the refresh cookie → new access token |
 | POST | `/api/auth/logout` | Revokes the refresh token, clears the cookie |
+| GET | `/api/account` | Profile: email + notification channels (ADR-061) |
 | DELETE | `/api/account` | Deletes the account and all its data — jobs, results, recurring, tokens (ADR-058) |
+| POST | `/api/account/channels` | Adds a notification channel `{kind, target, secret?}` — `slack`/`telegram` (ADR-061) |
+| DELETE | `/api/account/channels/{id}` | Removes a notification channel (ADR-061) |
 | POST | `/api/searches` | Launches a search `{keyword, mode?}` → `{job_id}` (`mode`: `workflow` default, or `agent` — ADR-030) |
 | GET | `/api/searches` | List of the user's searches |
 | GET | `/api/searches/{id}` | Status + results sorted by date + agent journal `steps` (ADR-030) + `question`/`answer` (ADR-032) |

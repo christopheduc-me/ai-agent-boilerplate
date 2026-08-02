@@ -10,9 +10,11 @@ use backend::adapters::auth::{Argon2PasswordHasher, JwtTokenService};
 use backend::adapters::dispatch::NoopJobDispatcher;
 use backend::adapters::http::rate_limit::Limiter;
 use backend::adapters::http::{router_with_limits, AppState, RateLimitConfig};
+use backend::adapters::notify::NoopChannelNotifier;
 use backend::adapters::persistence::in_memory::{
-    AlwaysReady, InMemoryJobRepository, InMemoryRecurringSearchRepository,
-    InMemoryRefreshTokenRepository, InMemorySecurityAudit, InMemoryUserRepository,
+    AlwaysReady, InMemoryJobRepository, InMemoryNotificationChannelRepository,
+    InMemoryRecurringSearchRepository, InMemoryRefreshTokenRepository, InMemorySecurityAudit,
+    InMemoryUserRepository,
 };
 use backend::domain::ports::{ReadinessProbe, SecurityAudit};
 use http_body_util::BodyExt;
@@ -50,6 +52,8 @@ fn app_with_audit(
         audit.clone(),
         login_throttle,
         Arc::new(AlwaysReady),
+        Arc::new(InMemoryNotificationChannelRepository::default()),
+        Arc::new(NoopChannelNotifier),
         INTERNAL_TOKEN.into(),
         daily_quota,
         30,
@@ -940,6 +944,8 @@ async fn readyz_reports_503_when_a_dependency_is_down() {
         Arc::new(InMemorySecurityAudit::default()),
         Limiter::per_minute(1000, "login", None),
         Arc::new(NotReady),
+        Arc::new(InMemoryNotificationChannelRepository::default()),
+        Arc::new(NoopChannelNotifier),
         INTERNAL_TOKEN.into(),
         100,
         30,
@@ -953,4 +959,101 @@ async fn readyz_reports_503_when_a_dependency_is_down() {
     let app2 = app_with(RateLimitConfig::default(), 100);
     let live = app2.oneshot(get("/healthz", &[])).await.unwrap();
     assert_eq!(live.status(), StatusCode::OK);
+}
+
+// ---------------------------------------------------------------- profile + notification channels (ADR-061)
+
+#[tokio::test]
+async fn profile_lists_and_manages_notification_channels() {
+    let app = app();
+    let creds = json!({"email": "chan@example.com", "password": "s3cret-password"});
+    send(&app, post_json("/api/auth/register", creds.clone(), &[])).await;
+    let (_, login) = send(&app, post_json("/api/auth/login", creds, &[])).await;
+    let auth = format!("Bearer {}", login["access_token"].as_str().unwrap());
+
+    // Empty profile shows the email and no channels.
+    let (status, profile) = send(
+        &app,
+        get("/api/account", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(profile["email"], "chan@example.com");
+    assert!(profile["channels"].as_array().unwrap().is_empty());
+
+    // Add a Telegram channel (with a bot token).
+    let (status, ch) = send(
+        &app,
+        post_json(
+            "/api/account/channels",
+            json!({"kind": "telegram", "target": "chat-42", "secret": "bot-token"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{ch}");
+    assert_eq!(ch["kind"], "telegram");
+    assert_eq!(ch["target"], "chat-42");
+    assert!(ch.get("secret").is_none(), "secret must never be returned");
+    let channel_id = ch["id"].as_str().unwrap().to_string();
+
+    // A Slack channel needs an https target.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/account/channels",
+            json!({"kind": "slack", "target": "http://insecure"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Unknown kind is rejected.
+    let (status, _) = send(
+        &app,
+        post_json(
+            "/api/account/channels",
+            json!({"kind": "carrier-pigeon", "target": "x"}),
+            &[("authorization", auth.as_str())],
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // The profile now lists the one telegram channel.
+    let (_, profile) = send(
+        &app,
+        get("/api/account", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert_eq!(profile["channels"].as_array().unwrap().len(), 1);
+
+    // Delete it.
+    let del = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method("DELETE")
+                .uri(format!("/api/account/channels/{channel_id}"))
+                .header("authorization", auth.as_str())
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(del.status(), StatusCode::NO_CONTENT);
+    let (_, profile) = send(
+        &app,
+        get("/api/account", &[("authorization", auth.as_str())]),
+    )
+    .await;
+    assert!(profile["channels"].as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn profile_requires_authentication() {
+    let app = app();
+    let (status, _) = send(&app, get("/api/account", &[])).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
 }
