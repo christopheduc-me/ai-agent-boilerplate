@@ -723,6 +723,15 @@ real router; Python: pydantic parse). Tests: `backend/tests/contract.rs`,
 `agent/tests/test_contract.py`. A drift now breaks a unit-speed test suite
 naming the exact contract.
 
+**Hardened (2026-08-01)**: the agent producer tests were tightened to drive the
+**real `HttpResultSink`** (over a mocked transport) and assert the captured
+request body equals the shared fixture, for every internal callback with a body
+(results, step, usage, question, failure) — previously `failure` and `question`
+were only checked against the fixture's *shape* (key set), so an agent-side key
+rename would not have broken the contract suite. This also removes a second
+source of truth: the real wire output is now pinned to the same fixture the
+backend consumes, not to a hand-copied literal.
+
 ### ADR-015 amendment — trivy image scanning (added 2026-07-10)
 
 The weekly security audits also scan the three published images for

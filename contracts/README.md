@@ -29,3 +29,10 @@ Tests: `backend/tests/contract.rs`, `agent/tests/test_contract.py`, and
 `zod` schemas that back `api.ts` (runtime validation, not just types) and
 **tolerates unknown fields** — an additive backend change is stripped, not
 rejected, so an older frontend keeps working during a rolling deploy (ADR-049).
+
+Each producer test drives the **real** serializer/adapter, not a hand-copied
+literal, and compares to the fixture — so the fixture is the single source of
+truth: the agent tests post through the actual `HttpResultSink` and assert the
+captured body equals the fixture (a renamed/added key or wrong endpoint fails
+the suite), and the backend produces its outbound fixtures through
+`HttpJobDispatcher` / `job_detail_json` / `WebhookDigestSender`.
