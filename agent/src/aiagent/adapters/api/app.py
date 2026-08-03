@@ -15,7 +15,7 @@ from pydantic import BaseModel
 
 from aiagent.config import Settings, forbid_placeholders
 from aiagent.logging_setup import configure_logging
-from aiagent.tasks import run_research_task
+from aiagent.tasks import embed_document_task, run_research_task
 from aiagent.telemetry import configure_telemetry
 
 configure_logging()
@@ -87,3 +87,33 @@ def enqueue_task(
         extra={"request_id": request_id, "job_id": body.job_id},
     )
     return {"job_id": body.job_id, "state": "queued"}
+
+
+class EmbedRequest(BaseModel):
+    document_id: str
+    name: str
+    content: str
+
+
+@app.post("/embed", status_code=202)
+def enqueue_embed(
+    body: EmbedRequest,
+    response: Response,
+    x_internal_token: Annotated[str | None, Header()] = None,
+    x_request_id: Annotated[str | None, Header()] = None,
+) -> dict[str, str]:
+    """Enqueues embedding a knowledge-base document (ADR-063)."""
+    settings = Settings.from_env()
+    if x_internal_token != settings.internal_api_token:
+        raise HTTPException(status_code=401, detail="invalid or missing internal token")
+
+    request_id = x_request_id or body.document_id
+    embed_document_task.delay(
+        body.document_id,
+        body.name,
+        body.content,
+        request_id=request_id,
+    )
+    response.headers["X-Request-Id"] = request_id
+    logger.info("embed queued", extra={"request_id": request_id, "document_id": body.document_id})
+    return {"document_id": body.document_id, "state": "queued"}

@@ -88,6 +88,17 @@ class Settings:
     llm_cost_input_per_mtok: float
     llm_cost_output_per_mtok: float
     search_cost_per_call: float
+    # RAG knowledge base (ADR-063): where embeddings run.
+    #   - "ollama"  (default): local, keyless, on AGENT_LLM_BASE_URL.
+    #   - "openai"  : cloud (needs OPENAI_API_KEY) — a 100%-cloud pairing with a
+    #                 hosted LLM. Requests 768 dims to match the vector column.
+    # With AGENT_PROVIDERS=fake a deterministic keyless embedder is used instead.
+    embed_backend: str = "ollama"
+    # The embedding model. Its dimension must match the backend's vector column
+    # (768): nomic-embed-text (Ollama) or text-embedding-3-small/large (OpenAI,
+    # reduced to 768 via the `dimensions` param). Default depends on the backend.
+    embed_model: str = "nomic-embed-text"
+    openai_api_key: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -117,4 +128,10 @@ class Settings:
             llm_cost_input_per_mtok=float(os.environ.get("LLM_COST_INPUT_PER_MTOK", "5.0")),
             llm_cost_output_per_mtok=float(os.environ.get("LLM_COST_OUTPUT_PER_MTOK", "25.0")),
             search_cost_per_call=float(os.environ.get("SEARCH_COST_PER_CALL", "0.008")),
+            embed_backend=(embed_backend := os.environ.get("AGENT_EMBED_BACKEND") or "ollama"),
+            # A sensible default model per backend; override with AGENT_EMBED_MODEL.
+            # `or` so an empty env var (compose passes "") falls back to the default.
+            embed_model=os.environ.get("AGENT_EMBED_MODEL")
+            or ("text-embedding-3-small" if embed_backend == "openai" else "nomic-embed-text"),
+            openai_api_key=os.environ.get("OPENAI_API_KEY", ""),
         )

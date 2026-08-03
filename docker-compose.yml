@@ -130,6 +130,11 @@ services:
       # (ADR-041); the default base URL points at the host's Ollama.
       AGENT_LLM_BACKEND: ${AGENT_LLM_BACKEND:-anthropic}
       AGENT_LLM_BASE_URL: ${AGENT_LLM_BASE_URL:-http://host.docker.internal:11434}
+      # RAG embeddings (ADR-063): "ollama" (local) or "openai" (cloud, needs
+      # OPENAI_API_KEY). With AGENT_PROVIDERS=fake it is ignored (keyless fake).
+      AGENT_EMBED_BACKEND: ${AGENT_EMBED_BACKEND:-ollama}
+      AGENT_EMBED_MODEL: ${AGENT_EMBED_MODEL:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       # Per-call timeout/retries (ADR-044).
       AGENT_LLM_TIMEOUT_SECONDS: ${AGENT_LLM_TIMEOUT_SECONDS:-60}
       AGENT_LLM_MAX_RETRIES: ${AGENT_LLM_MAX_RETRIES:-2}

@@ -77,3 +77,19 @@ class ResultSink(Protocol):
     def deliver(self, job_id: str, results: list[ResearchResult]) -> None: ...
 
     def report_failure(self, job_id: str, error: str) -> None: ...
+
+
+class EmbeddingProvider(Protocol):
+    """Turns text into vectors for the RAG knowledge base (ADR-063). In
+    production Ollama (`nomic-embed-text`); a deterministic hashing fake in the
+    keyless demo/tests. Batch-shaped so a document embeds in one call."""
+
+    def embed(self, texts: list[str]) -> list[list[float]]: ...
+
+
+class KnowledgeRetriever(Protocol):
+    """Retrieves the knowledge-base chunks that ground a job (ADR-063): embeds
+    the query and asks the backend for the nearest chunks of the job's owner.
+    Best-effort — an unreachable backend degrades to no grounding."""
+
+    def retrieve(self, job_id: str, query: str, k: int = 5) -> list[str]: ...

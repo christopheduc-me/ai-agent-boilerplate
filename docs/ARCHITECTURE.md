@@ -2005,8 +2005,12 @@ DB):
   `0013` adds `documents` + `document_chunks(embedding vector(768))` with an
   HNSW cosine index. The compose image becomes `pgvector/pgvector:pg16`.
 - **Agent owns embeddings + chunking** (a provider concern, ADR-009/010): an
-  `EmbeddingProvider` (deterministic fake for the keyless demo/tests; Ollama
-  `nomic-embed-text` live by default — Anthropic has no embeddings API).
+  `EmbeddingProvider` (deterministic fake for the keyless demo/tests; live via
+  `AGENT_EMBED_BACKEND`). **Anthropic has no embeddings API**, so embeddings run
+  on a separate provider: **Ollama** `nomic-embed-text` locally (default), or
+  **OpenAI** `text-embedding-3-*` in the cloud — requested at `dimensions=768`
+  (Matryoshka) so it matches the vector column with no migration. This enables a
+  **100%-cloud** setup: Claude (hosted) for reasoning + OpenAI for embeddings.
 - **Ingestion**: `POST /api/documents {name, content}` stores it `pending` and
   dispatches an embed task to the agent (`EmbedDispatcher` → agent `/embed`,
   mirroring `JobDispatcher`). The agent chunks + embeds and calls back

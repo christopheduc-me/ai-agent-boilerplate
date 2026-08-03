@@ -149,3 +149,38 @@ class FakeResultCritic(_FakeLlm):
                 "one could not be dated and is listed separately."
             )
         )
+
+
+class FakeEmbeddingProvider:
+    """Deterministic keyless embeddings (ADR-063): a hashing bag-of-words into a
+    fixed-dimension unit vector. No model, no network — yet it gives real
+    *lexical* similarity (texts sharing words get a non-zero cosine), so the
+    keyless demo/e2e shows retrieval actually working. `hash()` is process-salted
+    in Python, so we hash with `hashlib` for cross-process determinism."""
+
+    DIM = 768
+
+    def embed(self, texts: list[str]) -> list[list[float]]:
+        return [self._embed_one(text) for text in texts]
+
+    def _embed_one(self, text: str) -> list[float]:
+        import hashlib
+        import math
+        import re
+
+        vec = [0.0] * self.DIM
+        for token in re.findall(r"[a-z0-9]+", text.lower()):
+            digest = hashlib.sha256(token.encode()).digest()
+            idx = int.from_bytes(digest[:4], "big") % self.DIM
+            vec[idx] += 1.0
+        norm = math.sqrt(sum(v * v for v in vec))
+        if norm == 0.0:
+            return vec
+        return [v / norm for v in vec]
+
+
+class FakeKnowledgeRetriever:
+    """No-op retriever for unit tests: no knowledge base, no grounding."""
+
+    def retrieve(self, job_id: str, query: str, k: int = 5) -> list[str]:
+        return []

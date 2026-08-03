@@ -147,6 +147,51 @@ def build_critic(settings: Settings, meter: UsageMeter | None = None) -> ResultC
     )
 
 
+def build_embedder(settings: Settings) -> Any:
+    """Selects the embedding provider (ADR-063): the deterministic keyless fake
+    with AGENT_PROVIDERS=fake; else OpenAI (cloud) or Ollama (local) per
+    AGENT_EMBED_BACKEND."""
+    if settings.providers == "fake":
+        from aiagent.adapters.fake import FakeEmbeddingProvider
+
+        return FakeEmbeddingProvider()
+    if settings.embed_backend == "openai":
+        from aiagent.adapters.knowledge import OpenAIEmbeddingProvider
+
+        return OpenAIEmbeddingProvider(settings.openai_api_key, settings.embed_model)
+    from aiagent.adapters.knowledge import OllamaEmbeddingProvider
+
+    return OllamaEmbeddingProvider(settings.llm_base_url, settings.embed_model)
+
+
+def build_retriever(settings: Settings) -> Any:
+    """The knowledge retriever used to ground a job (ADR-063): embeds the query
+    and asks the backend for the nearest chunks."""
+    from aiagent.adapters.knowledge import EmbeddingKnowledgeRetriever, HttpKnowledgeClient
+
+    client = HttpKnowledgeClient(settings.backend_internal_url, settings.internal_api_token)
+    return EmbeddingKnowledgeRetriever(build_embedder(settings), client)
+
+
+def _augment_with_grounding(goal: str, grounding: list[str]) -> str:
+    """Folds retrieved knowledge-base chunks into the agent's goal (ADR-063), so
+    the policy reasons with the user's own material. No chunks -> unchanged."""
+    if not grounding:
+        return goal
+    context = "\n".join(f"- {chunk}" for chunk in grounding)
+    return f"{goal}\n\nReference material from the user's knowledge base:\n{context}"
+
+
+def _knowledge_grounding(settings: Settings, job_id: str, keyword: str) -> list[str]:
+    """Retrieves the grounding chunks for a job (ADR-063), best-effort. Skipped
+    with the fakes so the keyless e2e stays deterministic — grounding is a live
+    feature; the pipeline itself is unit-tested with fakes."""
+    if settings.providers == "fake":
+        return []
+    chunks: list[str] = build_retriever(settings).retrieve(job_id, keyword, k=5)
+    return chunks
+
+
 def _run_agent(
     settings: Settings,
     job_id: str,
@@ -166,10 +211,14 @@ def _run_agent(
     """Dispatches the agent mode to the configured orchestrator (ADR-046).
     Both drive the same ports; `sink` also acts as StepReporter and
     ClarificationRequester. Returns the results, or None when paused."""
+    # RAG grounding (ADR-063): fold the user's knowledge-base context for this
+    # keyword into the goal the policy reasons on (live only, best-effort).
+    grounding = _knowledge_grounding(settings, job_id, keyword)
     if settings.agent_orchestrator == "loop":
         goal = keyword
         if clarification:
             goal = f'{keyword} (user clarification: "{clarification}")'
+        goal = _augment_with_grounding(goal, grounding)
         return run_agent_research(
             job_id,
             goal,
@@ -191,7 +240,7 @@ def _run_agent(
     with _agent_checkpointer(settings) as checkpointer:
         return run_agent_graph(
             job_id,
-            keyword,
+            _augment_with_grounding(keyword, grounding),
             search,
             enricher,
             policy,
@@ -319,3 +368,45 @@ def run_research_task(
         report_usage()
     logger.info("research task completed", extra={**log_ctx, "results": len(results)})
     return len(results)
+
+
+@app.task(name="aiagent.embed_document", bind=False)
+def embed_document_task(
+    document_id: str,
+    name: str,
+    content: str,
+    request_id: str | None = None,
+) -> int:
+    """Chunks + embeds an uploaded document and posts the chunks back to the
+    backend (ADR-063). An embedding error marks the document failed rather than
+    retrying — the user re-uploads. Returns the number of chunks stored."""
+    settings = Settings.from_env()
+    request_id = request_id or document_id
+    # NB: "name" is a reserved LogRecord field — use document_name in `extra`.
+    log_ctx = {"request_id": request_id, "document_id": document_id, "document_name": name}
+    logger.info("embed task started", extra=log_ctx)
+
+    from aiagent.adapters.knowledge import HttpKnowledgeClient
+    from aiagent.domain.knowledge import chunk_text
+
+    client = HttpKnowledgeClient(settings.backend_internal_url, settings.internal_api_token)
+    try:
+        chunks = chunk_text(content)
+        if not chunks:
+            client.report_document_failure(document_id, "document has no embeddable text")
+            return 0
+        embeddings = build_embedder(settings).embed(chunks)
+        payload = [
+            {"seq": i, "content": chunk, "embedding": embedding}
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=True))
+        ]
+        client.store_chunks(document_id, payload)
+    except Exception as exc:  # noqa: BLE001 - surface as a failed document, no retry
+        logger.error("embed task failed", extra=log_ctx, exc_info=True)
+        try:
+            client.report_document_failure(document_id, f"embedding failed: {exc}")
+        except Exception:  # noqa: BLE001 - best effort
+            logger.warning("failed to report document failure", extra=log_ctx, exc_info=True)
+        return 0
+    logger.info("embed task completed", extra={**log_ctx, "chunks": len(payload)})
+    return len(payload)

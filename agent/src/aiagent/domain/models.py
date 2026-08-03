@@ -70,6 +70,8 @@ class AgentStepKind(StrEnum):
     FINISH = "finish"
     CRITIQUE = "critique"
     REPORT = "report"
+    # Retrieval-augmented grounding on the user's knowledge base (ADR-063).
+    KNOWLEDGE = "knowledge"
 
 
 @dataclass(frozen=True)
