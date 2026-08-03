@@ -9,13 +9,25 @@ vi.mock("@/api", async (importOriginal) => {
   const original = await importOriginal<typeof import("@/api")>();
   return {
     ...original,
-    api: { getProfile: vi.fn(), addChannel: vi.fn(), deleteChannel: vi.fn() },
+    api: {
+      getProfile: vi.fn(),
+      addChannel: vi.fn(),
+      deleteChannel: vi.fn(),
+      listDocuments: vi.fn(),
+      uploadDocument: vi.fn(),
+      deleteDocument: vi.fn(),
+    },
   };
 });
 
 const { api, ApiError } = await import("@/api");
 const mocked = api as unknown as Record<
-  "getProfile" | "addChannel" | "deleteChannel",
+  | "getProfile"
+  | "addChannel"
+  | "deleteChannel"
+  | "listDocuments"
+  | "uploadDocument"
+  | "deleteDocument",
   ReturnType<typeof vi.fn>
 >;
 
@@ -35,7 +47,10 @@ async function mountView() {
   return wrapper;
 }
 
-beforeEach(() => vi.clearAllMocks());
+beforeEach(() => {
+  vi.clearAllMocks();
+  mocked.listDocuments.mockResolvedValue([]); // most tests focus on channels
+});
 
 describe("ProfileView (ADR-061)", () => {
   it("shows the email and the empty state, then lists channels", async () => {
@@ -122,5 +137,47 @@ describe("ProfileView (ADR-061)", () => {
     await flushPromises();
 
     expect(mocked.deleteChannel).toHaveBeenCalledWith("c9", "tok");
+  });
+
+  it("uploads local files, lists and deletes knowledge-base documents (ADR-063)", async () => {
+    mocked.getProfile.mockResolvedValue(emptyProfile);
+    // First load: empty; after upload: one pending doc.
+    mocked.listDocuments
+      .mockResolvedValueOnce([])
+      .mockResolvedValue([
+        { id: "d1", name: "notes.md", status: "pending", error: null, created_at: "x" },
+      ]);
+    mocked.uploadDocument.mockResolvedValue({
+      id: "d1",
+      name: "notes.md",
+      status: "pending",
+      error: null,
+      created_at: "x",
+    });
+    const wrapper = await mountView();
+
+    expect(wrapper.find('[data-testid="no-documents"]').exists()).toBe(true);
+
+    // Selecting a text file reads its content and uploads it; a binary file is skipped.
+    const good = new File(["the sky is blue"], "notes.md", { type: "text/markdown" });
+    const binary = new File(["%PDF-1.7"], "scan.pdf", { type: "application/pdf" });
+    const input = wrapper.find('[data-testid="doc-files"]');
+    Object.defineProperty(input.element, "files", { value: [good, binary], configurable: true });
+    await input.trigger("change");
+    // FileReader is async (a macrotask), so poll rather than flushPromises.
+    await vi.waitFor(() => expect(mocked.uploadDocument).toHaveBeenCalledTimes(1));
+    await flushPromises();
+
+    expect(mocked.uploadDocument).toHaveBeenCalledWith("notes.md", "the sky is blue", "tok");
+    expect(wrapper.find('[data-testid="document-note"]').text()).toContain("skipped 1");
+    const item = wrapper.find('[data-testid="document-d1"]');
+    expect(item.exists()).toBe(true);
+    expect(item.text()).toContain("pending");
+
+    mocked.deleteDocument.mockResolvedValue(undefined);
+    mocked.listDocuments.mockResolvedValue([]);
+    await item.find(".delete").trigger("click");
+    await flushPromises();
+    expect(mocked.deleteDocument).toHaveBeenCalledWith("d1", "tok");
   });
 });

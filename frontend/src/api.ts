@@ -129,6 +129,16 @@ export const profileSchema = z.object({
 });
 export type Profile = z.infer<typeof profileSchema>;
 
+// RAG knowledge base (ADR-063): uploaded documents grounding the agent.
+export const documentSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  status: z.enum(["pending", "ready", "failed"]),
+  error: z.string().nullable(),
+  created_at: z.string(),
+});
+export type KnowledgeDocument = z.infer<typeof documentSchema>;
+
 export class ApiError extends Error {
   constructor(
     public readonly status: number,
@@ -307,4 +317,20 @@ export const api = {
 
   deleteChannel: (id: string, token: string) =>
     request<void>(`/api/account/channels/${id}`, { method: "DELETE" }, token),
+
+  // Knowledge base (ADR-063): upload/list/delete documents to ground the agent.
+  listDocuments: async (token: string) =>
+    z.array(documentSchema).parse(await request<unknown>("/api/documents", {}, token)),
+
+  uploadDocument: async (name: string, content: string, token: string) =>
+    documentSchema.parse(
+      await request<unknown>(
+        "/api/documents",
+        { method: "POST", body: JSON.stringify({ name, content }) },
+        token,
+      ),
+    ),
+
+  deleteDocument: (id: string, token: string) =>
+    request<void>(`/api/documents/${id}`, { method: "DELETE" }, token),
 };

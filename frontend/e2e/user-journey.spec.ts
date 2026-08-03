@@ -165,6 +165,46 @@ test("a user manages notification channels in their profile (ADR-061)", async ({
   await expect(page.getByTestId("no-channels")).toBeVisible();
 });
 
+test("a user uploads a knowledge-base document (ADR-063)", async ({ page }) => {
+  const email = `e2e-${Date.now()}-${Math.floor(Math.random() * 1e6)}@test.dev`;
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "No account yet? Sign up" }).click();
+  await page.getByLabel("Email").fill(email);
+  await page.getByLabel("Password").fill("e2e-s3cret-password");
+  await page.getByRole("button", { name: "Sign up" }).click();
+  await expect(page.getByRole("heading", { name: "Workflow demo" })).toBeVisible();
+
+  await page.getByTestId("profile-link").click();
+  await expect(page.getByTestId("no-documents")).toBeVisible();
+
+  // Pick a local file; the fake embedder (worker) makes it ready quickly.
+  await page.getByTestId("doc-files").setInputFiles({
+    name: "release-notes.md",
+    mimeType: "text/markdown",
+    buffer: Buffer.from("Our product ships weekly on Fridays."),
+  });
+
+  const item = page.getByTestId("document-list").locator("li", { hasText: "release-notes.md" });
+  await expect(item).toBeVisible();
+  // Poll the profile until the background embedding completes (status: ready).
+  await expect(async () => {
+    await page.reload();
+    await page.getByTestId("profile-link").click();
+    await expect(
+      page.getByTestId("document-list").locator("li", { hasText: "release-notes.md" }),
+    ).toContainText("ready");
+  }).toPass({ timeout: 30_000 });
+
+  // Remove it.
+  await page
+    .getByTestId("document-list")
+    .locator("li", { hasText: "release-notes.md" })
+    .getByRole("button", { name: "Delete" })
+    .click();
+  await expect(page.getByTestId("no-documents")).toBeVisible();
+});
+
 test("deleting the account clears the session and erases the login (ADR-058)", async ({
   page,
 }) => {
