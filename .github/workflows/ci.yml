@@ -21,7 +21,8 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:16-alpine
+        # pgvector image (ADR-063): the RAG migration needs the vector extension.
+        image: pgvector/pgvector:pg16
         env:
           POSTGRES_USER: app
           POSTGRES_PASSWORD: app

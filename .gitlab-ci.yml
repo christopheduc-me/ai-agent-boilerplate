@@ -56,7 +56,11 @@ backend:test:
   needs: ["backend:lint"]
   <<: *backend-rules
   services:
-    - postgres:16-alpine
+    # pgvector image (ADR-063): the RAG migration needs the vector extension.
+    # Explicit alias so it stays reachable at `postgres` (DATABASE_URL below);
+    # GitLab otherwise derives the hostname from the image name.
+    - name: pgvector/pgvector:pg16
+      alias: postgres
     - redis:7-alpine
   variables:
     CARGO_HOME: $CI_PROJECT_DIR/.cargo

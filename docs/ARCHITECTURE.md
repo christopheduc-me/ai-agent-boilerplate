@@ -332,7 +332,7 @@ the Dockerfile serves dev (profile `full`), CI, and deployment.
 | Agent — FastAPI API | `agent/Dockerfile` | `python:3.12-slim` + **uv** (deps installed from `uv.lock`) | same slim base, non-root user |
 | Agent — Celery worker | `agent/Dockerfile` (same image) | — | same image, different `command` (`celery -A ... worker`) |
 | Vue frontend | `frontend/Dockerfile` | `node:22-alpine` (`npm ci && npm run build`) | `nginx:alpine` serving static files + reverse-proxying `/api` → backend |
-| PostgreSQL / Redis | official images (`postgres:16-alpine`, `redis/redis-stack-server` — core Redis for the Celery broker **+** RediSearch for the LangGraph checkpointer, ADR-046; plain `redis:7-alpine` suffices only with `AGENT_ORCHESTRATOR=loop`) | — | — |
+| PostgreSQL / Redis | official images (`pgvector/pgvector:pg16` — PostgreSQL 16 + the `vector` extension for RAG, ADR-063; `redis/redis-stack-server` — core Redis for the Celery broker **+** RediSearch for the LangGraph checkpointer, ADR-046; plain `redis:7-alpine` suffices only with `AGENT_ORCHESTRATOR=loop`) | — | — |
 
 **Rules**:
 - A single image for the FastAPI API and the Celery worker (same code, same
@@ -368,7 +368,7 @@ lint → test → build → publish → deploy
 | Stage | backend/ (Rust) | agent/ (Python) | frontend/ (Vue) |
 |---|---|---|---|
 | `lint` | `cargo fmt --check`, `cargo clippy -- -D warnings` | `ruff check`, `ruff format --check`, `mypy` | `eslint`, `vue-tsc --noEmit` |
-| `test` | `cargo test` — GitLab services `postgres:16` + `redis:7` (`DATABASE_URL`/`REDIS_URL` pointing at the services) | `pytest` (port fakes, Celery in eager mode — no external service required) | `vitest run` |
+| `test` | `cargo test` — GitLab services `pgvector/pgvector:pg16` + `redis:7` (`DATABASE_URL`/`REDIS_URL` pointing at the services) | `pytest` (port fakes, Celery in eager mode — no external service required) | `vitest run` |
 | `build` | `docker build` of the image via **kaniko** (no privileged Docker-in-Docker) | same | same |
 | `publish` | push to the **GitLab Container Registry**: `$CI_REGISTRY_IMAGE/backend:$CI_COMMIT_SHORT_SHA` (+ `latest` on `main`) | same (`/agent`) | same (`/frontend`) |
 | `deploy` | **manual** trigger (`when: manual`) on `main`, GitLab environment `production` → **VPS** (see below). |
