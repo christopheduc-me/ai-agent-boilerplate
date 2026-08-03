@@ -6,3 +6,4 @@ pub mod leader_lock;
 pub mod notify;
 pub mod persistence;
 pub mod security_metrics;
+pub mod tls;

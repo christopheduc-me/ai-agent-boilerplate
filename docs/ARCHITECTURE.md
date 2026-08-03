@@ -2031,6 +2031,91 @@ dimension needs a new migration (the `vector(768)` column is fixed).
 
 ---
 
+### ADR-064 — Dependency upgrade wave: sqlx 0.9, reqwest 0.13, Vite 8 (decided 2026-08-03)
+
+**Context**: a periodic sweep of the three bricks against the latest published
+versions. Most moves are routine, but four forced a real decision.
+
+**Decision** — upgrade to current majors *except* where the cost is not repaid:
+
+- **sqlx 0.8 → 0.9 (forced)**. `pgvector` 0.4.2 moved its `sqlx` integration to
+  0.9, so staying on 0.8 put two incompatible `sqlx` versions in the tree and
+  broke `Vector` binding. 0.9 adds the `SqlSafeStr` bound: `sqlx::query` only
+  accepts `&'static str`. The five call sites that built SQL by interpolating a
+  shared column list now use `concat!` over a **macro** instead of `format!`
+  over a `const`, so the strings stay compile-time literals. We deliberately did
+  **not** reach for `AssertSqlSafe`: it would silence the new check rather than
+  satisfy it, and nothing here needs runtime SQL.
+- **sqlx 0.9 raises the MSRV to 1.94**, so `backend/Dockerfile` moves from
+  `rust:1.89-slim` to **`rust:1.97-slim-bookworm`**. CI was already unaffected
+  (`rust:1-slim` on GitLab, `rust-toolchain@stable` on GitHub). The `-bookworm`
+  suffix is not cosmetic: plain `rust:1.97-slim` is Debian 13 (trixie, glibc
+  2.41) while the runtime stage is `debian:bookworm-slim` (glibc 2.36), and the
+  pairing used to be implicit because `rust:1.89-slim` happened to be bookworm
+  too. Building against trixie produced an image that builds and exports
+  perfectly, then dies on startup with
+  `/app/backend: /lib/aarch64-linux-gnu/libc.so.6: version 'GLIBC_2.38' not found`.
+  Only running the container catches this — `docker build` succeeds either way —
+  which is why the ADR-028 e2e stack is the acceptance gate for Dockerfile
+  changes, not the build alone.
+- **reqwest 0.12 → 0.13**, which changes two defaults that matter here. Its
+  crypto provider becomes **aws-lc-rs**, while `lettre` brings **ring**: with
+  reqwest's plain `rustls` feature, cargo unifies both onto the same `rustls`
+  0.23 (verified with `cargo tree -e features -i rustls`, which then reports
+  `ring` *and* `aws-lc-rs`). rustls cannot pick a default provider from crate
+  features in that state and panics at first use. The backend therefore takes
+  the `rustls-no-provider` feature and installs **ring** explicitly, keeping
+  provider selection deterministic. That feature makes client construction panic
+  unless a provider is installed first, so
+  `adapters/tls.rs::ensure_crypto_provider` installs it once per process and is
+  called from every client constructor — in the adapters rather than in `main`,
+  so unit tests building clients are covered too. Second, 0.13 drops the bundled
+  webpki roots for **rustls-platform-verifier**, which reads the system trust
+  store: the `debian:bookworm-slim` runtime image therefore now installs
+  `ca-certificates`. Without it every outbound HTTPS call (agent dispatch,
+  webhooks, Slack, Telegram) would fail to verify at runtime.
+- **jsonwebtoken 9 → 11**, with `default-features = false` and the **`aws_lc_rs`**
+  backend. Version 11 makes the crypto backend an explicit choice, and the other
+  option, `rust_crypto`, pulls in **`rsa`** — the crate ADR-015's advisory review
+  keeps out of the tree. `aws-lc-sys` 0.43 was checked to build inside
+  `rust:1.97-slim` with **neither cmake nor clang installed**, so the builder
+  image needs no extra toolchain. aws-lc-rs stays outside rustls here (it is a
+  direct `jsonwebtoken` dependency), so it does not disturb the ring provider
+  above.
+- **rand_core stays on 0.6**, pinned by `argon2` 0.5.3 → `password-hash` 0.5:
+  `SaltString::generate` needs the `RngCore` impl from that same version. Moving
+  to `rand_core` 0.10 means `argon2` 0.6, which exists only as `0.6.0-rc.8` —
+  0.5.3 *is* the current stable. Password hashing is not where this project
+  spends its release-candidate budget; revisit when 0.6.0 ships.
+
+**Agent**: lockfile refreshed and the declared floors realigned on what is
+actually tested — several had drifted badly (`langchain-anthropic>=0.3` while
+1.5.3 was installed), which let a clean install resolve an API-incompatible
+major.
+
+**Frontend**: **vite 6 → 8**, `@vitejs/plugin-vue` 5 → 6, jsdom 25 → 30,
+`@types/node` 22 → 26, **pinia 3 → 4** (ESM-only; `@vue/devtools-api` is now a
+peer dependency, pulled in explicitly) and **vue-router 4 → 5** (a transition
+release — no breaking change without file-based routing). **TypeScript stops at
+6.0.3**, and this one is structural rather than a stale pin: TypeScript 7 is the
+native (Go) port, whose npm package no longer exports the JavaScript compiler API
+(`lib/tsc`, `lib/typescript.js`) — only a `tsc` binary and an `unstable/*` API.
+Two independent toolchain packages still need that API, and **both are already at
+their newest release**: `vue-tsc` 3.3.9 type-checks SFCs by loading the JS
+compiler through `@volar/typescript` and patching `tsc`, and `typescript-eslint`
+8.65.0 declares `typescript: >=4.8.4 <6.1.0` and aborts with
+`typescript-eslint does not support TS 7.0`. Installing 7.0.2 was tried: it
+breaks `npm run lint` as well as `npm run typecheck`, so swapping out `vue-tsc`
+alone would not help. No flag or prerelease changes this — vue-tsc's only
+concession to 7 is detecting a `typescript` aliased to `@typescript/typescript6`,
+which is TypeScript 6 repackaged (`@typescript/old: npm:typescript@^6`), not an
+upgrade. **TypeScript 7.1** is the announced release carrying the stable
+programmatic API these tools need (~October 2026); Vue, Svelte, Astro and MDX all
+wait on it. Tracked in ROADMAP.md; rewriting the SFCs as TSX would unblock 7.x
+today but is a frontend architecture change, not a version bump.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

@@ -30,6 +30,7 @@ struct TaskRequest<'a> {
 
 impl HttpJobDispatcher {
     pub fn new(base_url: String, internal_token: String) -> Self {
+        crate::adapters::tls::ensure_crypto_provider();
         Self {
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),
@@ -105,6 +106,7 @@ pub struct HttpEmbedDispatcher {
 
 impl HttpEmbedDispatcher {
     pub fn new(base_url: String, internal_token: String) -> Self {
+        crate::adapters::tls::ensure_crypto_provider();
         Self {
             client: reqwest::Client::new(),
             base_url: base_url.trim_end_matches('/').to_string(),

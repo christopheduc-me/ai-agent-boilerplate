@@ -705,9 +705,15 @@ fn recurring_from_row(row: &PgRow) -> RecurringSearch {
     }
 }
 
-const RECURRING_COLS: &str =
-    "SELECT id, user_id, keyword, mode, interval_minutes, webhook_url, created_at, last_run_at
-     FROM recurring_searches";
+// A macro, not a `const`: sqlx 0.9 only accepts `&'static str` SQL (the
+// `SqlSafeStr` bound), so the shared prefix must be `concat!`-ed into a literal
+// at compile time rather than interpolated with `format!` at runtime.
+macro_rules! recurring_cols {
+    () => {
+        "SELECT id, user_id, keyword, mode, interval_minutes, webhook_url, created_at, last_run_at
+         FROM recurring_searches"
+    };
+}
 
 #[async_trait]
 impl RecurringSearchRepository for PostgresRecurringSearchRepository {
@@ -732,7 +738,7 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
     }
 
     async fn find(&self, id: Uuid) -> Result<Option<RecurringSearch>, PortError> {
-        let row = sqlx::query(&format!("{RECURRING_COLS} WHERE id = $1"))
+        let row = sqlx::query(concat!(recurring_cols!(), " WHERE id = $1"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await
@@ -741,8 +747,9 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
     }
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<RecurringSearch>, PortError> {
-        let rows = sqlx::query(&format!(
-            "{RECURRING_COLS} WHERE user_id = $1 ORDER BY created_at DESC"
+        let rows = sqlx::query(concat!(
+            recurring_cols!(),
+            " WHERE user_id = $1 ORDER BY created_at DESC"
         ))
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -771,9 +778,9 @@ impl RecurringSearchRepository for PostgresRecurringSearchRepository {
     }
 
     async fn list_due(&self, now: DateTime<Utc>) -> Result<Vec<RecurringSearch>, PortError> {
-        let rows = sqlx::query(&format!(
-            "{RECURRING_COLS}
-             WHERE last_run_at IS NULL
+        let rows = sqlx::query(concat!(
+            recurring_cols!(),
+            " WHERE last_run_at IS NULL
                 OR last_run_at + make_interval(mins => interval_minutes) <= $1"
         ))
         .bind(now)
@@ -987,7 +994,12 @@ fn document_from_row(row: &PgRow) -> Document {
     }
 }
 
-const DOCUMENT_COLS: &str = "SELECT id, user_id, name, status, error, created_at FROM documents";
+// Macro rather than `const` for the same reason as `recurring_cols!` above.
+macro_rules! document_cols {
+    () => {
+        "SELECT id, user_id, name, status, error, created_at FROM documents"
+    };
+}
 
 #[async_trait]
 impl DocumentRepository for PostgresDocumentRepository {
@@ -1009,8 +1021,9 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn list_for_user(&self, user_id: Uuid) -> Result<Vec<Document>, PortError> {
-        let rows = sqlx::query(&format!(
-            "{DOCUMENT_COLS} WHERE user_id = $1 ORDER BY created_at DESC"
+        let rows = sqlx::query(concat!(
+            document_cols!(),
+            " WHERE user_id = $1 ORDER BY created_at DESC"
         ))
         .bind(user_id)
         .fetch_all(&self.pool)
@@ -1020,7 +1033,7 @@ impl DocumentRepository for PostgresDocumentRepository {
     }
 
     async fn find(&self, id: Uuid) -> Result<Option<Document>, PortError> {
-        let row = sqlx::query(&format!("{DOCUMENT_COLS} WHERE id = $1"))
+        let row = sqlx::query(concat!(document_cols!(), " WHERE id = $1"))
             .bind(id)
             .fetch_optional(&self.pool)
             .await

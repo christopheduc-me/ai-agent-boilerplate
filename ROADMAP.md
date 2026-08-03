@@ -136,3 +136,20 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       Redis-shared fixed window (fail-open on Redis outages); unset keeps the
       in-memory limiter. Rate limiting at the reverse proxy remains the
       zero-code alternative for fleets behind a shared proxy tier.
+- [ ] **TypeScript 7 for the frontend (ADR-064 follow-up)** — blocked upstream,
+      not by a stale pin. TS 7 is the native (Go) port and its npm package drops
+      the JavaScript compiler API; both `vue-tsc` 3.3.9 and `typescript-eslint`
+      8.65.0 — each the newest release — still need it, the latter declaring
+      `typescript: >=4.8.4 <6.1.0` and failing hard with
+      `typescript-eslint does not support TS 7.0`. The frontend therefore stays
+      on **typescript 6.0.3**. TypeScript **7.1** is the announced release that
+      ships the stable programmatic API those tools need (expected ~October
+      2026); Vue, Svelte, Astro and MDX are all waiting on it. Recheck then —
+      it should be a plain version bump of `typescript`, `vue-tsc` and
+      `@vue/eslint-config-typescript`, with `npm run typecheck` and
+      `npm run lint` as the acceptance test. Tracking:
+      https://github.com/vuejs/language-tools/issues/5381
+      Rewriting the 8 SFCs as TSX (`jsx: preserve`, `jsxImportSource: vue`)
+      would unblock TS 7 today, but that is a frontend architecture change —
+      losing `<template>`, scoped styles and `v-model` sugar — not a version
+      bump, and it was rejected on those grounds.

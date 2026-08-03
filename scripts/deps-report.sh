@@ -13,14 +13,28 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 section() { printf '\n===== %s =====\n' "$*"; }
 
 report_backend() {
-  section "backend — cargo update --dry-run"
+  section "backend — cargo update --dry-run (within the declared semver ranges)"
   (cd "$ROOT/backend" && cargo update --dry-run 2>&1) \
     | grep -Ev "^\s*(Updating .* index|Locking|note:)" || true
+
+  # The report above only moves the lockfile *inside* the ranges in Cargo.toml,
+  # so it stays silent on the upgrades that need a manifest edit — exactly the
+  # ones that carry the migration work (ADR-064: sqlx 0.8 → 0.9, reqwest 0.12 →
+  # 0.13, jsonwebtoken 9 → 11 were all invisible here). `--verbose` adds the
+  # "Unchanged <dep> (available: <newer>)" lines that reveal them.
+  section "backend — beyond the declared ranges (needs a Cargo.toml edit)"
+  (cd "$ROOT/backend" && cargo update --dry-run --verbose 2>&1) \
+    | grep -E "^\s*Unchanged .* \(available: " || echo "none"
 }
 
 report_agent() {
-  section "agent — uv lock --upgrade --dry-run"
+  section "agent — uv lock --upgrade --dry-run (within the declared constraints)"
   (cd "$ROOT/agent" && uv lock --upgrade --dry-run 2>&1) || true
+
+  # Same blind spot as the backend: packages held back by an upper bound in a
+  # parent's requirements never show up above.
+  section "agent — beyond the declared constraints (pyproject.toml edit)"
+  (cd "$ROOT/agent" && uv pip list --outdated 2>&1) || true
 }
 
 report_frontend() {

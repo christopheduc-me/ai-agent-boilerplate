@@ -34,6 +34,7 @@ fn digest_to_text(digest: &Digest) -> String {
 }
 
 fn short_client(with_resolver: Option<Arc<PublicOnlyResolver>>) -> reqwest::Client {
+    crate::adapters::tls::ensure_crypto_provider();
     let mut builder = reqwest::Client::builder()
         .timeout(Duration::from_secs(5))
         .redirect(reqwest::redirect::Policy::none());

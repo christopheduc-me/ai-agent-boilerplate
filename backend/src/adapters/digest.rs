@@ -132,6 +132,7 @@ impl WebhookDigestSender {
     /// opts in via `DIGEST_ALLOW_PRIVATE_WEBHOOKS` for an internal notification
     /// target on a trusted network.
     pub fn new(secret: Option<String>, allow_private: bool) -> Self {
+        crate::adapters::tls::ensure_crypto_provider();
         let mut builder = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(5))
             // No redirects (ADR-055): a public URL must not 3xx to an internal

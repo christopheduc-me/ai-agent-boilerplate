@@ -380,7 +380,10 @@ cd frontend && npm install <package>
 cd frontend && npm update
 
 # Outdated report across the three bricks (native tools, no bot — ADR-022);
-# also run weekly by both CIs alongside the security audits
+# also run weekly by both CIs alongside the security audits.
+# Two sections per brick: what a lockfile refresh would move *within* the
+# declared ranges, then what is held back *beyond* them and needs a manifest
+# edit (that second section is where major upgrades like sqlx 0.8 → 0.9 show up).
 scripts/deps-report.sh            # or: scripts/deps-report.sh backend|agent|frontend
 
 # Security audits, exactly as the weekly CI runs them (ADR-015 amendment)
