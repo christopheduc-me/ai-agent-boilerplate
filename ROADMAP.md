@@ -136,6 +136,19 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       Redis-shared fixed window (fail-open on Redis outages); unset keeps the
       in-memory limiter. Rate limiting at the reverse proxy remains the
       zero-code alternative for fleets behind a shared proxy tier.
+- [ ] **Deep Agents as the orchestrator (ADR-065)** — evaluated and deferred, not
+      rejected. `deepagents` is an opinionated harness above LangGraph adding a
+      planning tool, subagents with their own context, and a filesystem backend
+      for context offloading. The agent mode (four nodes, three typed actions)
+      does not need any of them, and the harness hands the loop to the model,
+      which weakens the step budget (ADR-030), defensive parsing (ADR-043) and
+      the spend cap (ADR-048). **Trigger to revisit**: a long-deliverable use
+      case (a 200-question questionnaire, a dossier analysis, a tender response)
+      — there all three earn their keep. Answer first whether it can honour an
+      external spend cap and emit typed journal steps; that decides whether it
+      is an adapter swap or a rewrite of the guardrails. Middle path if only
+      part is wanted: `Planner` / `SubAgent` domain ports, added the way
+      `AgentPolicy` and `ResultCritic` were. See ADR-065.
 - [ ] **TypeScript 7 for the frontend (ADR-064 follow-up)** — blocked upstream,
       not by a stale pin. TS 7 is the native (Go) port and its npm package drops
       the JavaScript compiler API; both `vue-tsc` 3.3.9 and `typescript-eslint`

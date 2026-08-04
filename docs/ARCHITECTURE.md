@@ -2116,6 +2116,56 @@ today but is a frontend architecture change, not a version bump.
 
 ---
 
+### ADR-065 — Deep Agents evaluated, deferred (decided 2026-08-03, relates to ADR-046)
+
+**Context**: `deepagents` (LangChain) is the obvious next question for anyone
+reading ADR-046, and forks building a different product will ask it before we
+do. Recording the evaluation so it is not re-litigated from scratch.
+
+**Where it sits.** Its own docs describe three layers: LangGraph is the runtime
+(state, checkpoints, streaming, interrupts), LangChain's `create_agent()` is the
+agent abstraction, and Deep Agents is an **opinionated harness** on top
+(middleware, backends, subagents, skills, memory). This boilerplate sits on the
+*runtime* layer with a hand-written `StateGraph`, so adopting Deep Agents would
+replace the graph in `adapters/orchestration/langgraph_agent.py` — not the
+checkpointer, the streaming or the `interrupt()`-based HITL, which it also
+builds on.
+
+**What it adds**, and nothing else: a planning tool (`write_todos`), **subagents**
+with their own context window, and a filesystem backend for offloading
+intermediate work out of the context.
+
+**Decision: not now.** The agent mode is four nodes and three typed actions
+(`SearchAction` / `AskAction` / `FinishAction`). Planning and subagents solve a
+problem this loop does not have, and the harness hands the loop to the model,
+which cuts against three guarantees the boilerplate sells:
+
+- the **step budget** (ADR-030), which bounds a runaway loop,
+- **defensive parsing** (ADR-043), where a malformed reply degrades to *finish*,
+- the **spend cap** (ADR-048), which assumes the call count is predictable.
+
+The `AgentPolicy` port would also lose its purpose — it *is* the "decide the next
+action" step — and the SSE journal would stream tool calls instead of the typed
+steps (`search`, `critique`, `knowledge`) pinned by the ADR-049 contract
+fixtures on all three languages.
+
+**Revisit when the task shape changes.** For a long-deliverable product — a
+200-question security questionnaire, a dossier analysis, a tender response — all
+three additions become load-bearing at once: the plan is real, one subagent per
+section keeps question 180 from inheriting the context of the previous 179, and
+context overflow becomes the central problem. That is what *deep* means here.
+
+**Middle path, if only part of it is wanted**: add `Planner` and `SubAgent` as
+domain ports, exactly as `AgentPolicy` and `ResultCritic` were, and keep the
+budgets, the defensive degradation and the typed steps. More code to own, one
+less fast-moving harness to track (ADR-064 is a fresh reminder of that cost).
+
+**Open question, deliberately not answered here**: whether `deepagents` can
+honour an externally-imposed spend cap and emit typed journal steps. Answer that
+first — it decides whether adoption is a swap or a rewrite of the guardrails.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

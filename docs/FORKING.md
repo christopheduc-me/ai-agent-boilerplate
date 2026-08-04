@@ -39,6 +39,13 @@ you usually leave it alone. Its unit tests (`tests/test_run_agent_research.py`,
 `tests/test_langgraph_agent.py`) use scripted fakes of the ports: update the
 fakes, keep the TDD.
 
+If your task is a **long deliverable** rather than a bounded loop — answering a
+200-question questionnaire, analysing a dossier, drafting a tender response —
+the orchestrator is the one piece worth reconsidering: read **ADR-065**, which
+evaluates LangChain's `deepagents` harness (planning, subagents, context
+offloading), says why this boilerplate does not use it today, and gives the
+trigger and the middle path.
+
 ## 2. Swap the adapters (how)
 
 Each port has a **production adapter** and a **keyless fake** (ADR-021). Replace
