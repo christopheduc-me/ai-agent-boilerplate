@@ -17,7 +17,7 @@ from datetime import UTC, datetime
 
 import pytest
 
-from aiagent.domain.models import EventType, RawSearchHit, SearchAction
+from aiagent.domain.models import AskAction, EventType, RawSearchHit, SearchAction
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_LIVE_TESTS") != "1",
@@ -82,6 +82,30 @@ def test_claude_policy_starts_an_unambiguous_goal_with_a_search() -> None:
     # Fresh loop, clear goal, nothing collected: a sane policy searches.
     assert isinstance(action, SearchAction), f"expected a search, got {action!r}"
     assert action.query.strip()
+    assert action.reason.strip()
+
+
+def test_claude_policy_asks_when_the_goal_is_ambiguous() -> None:
+    """The `ask` branch is the human-in-the-loop feature (ADR-032) and this is
+    the only test in the repository that exercises it against a real model —
+    everywhere else, including the e2e stack, it runs through a scripted fake.
+    A prompt edit that weakens the ask instruction shows up here and nowhere
+    else (ADR-067)."""
+    from aiagent.adapters.chat_model import make_chat_model
+    from aiagent.adapters.llm import LlmAgentPolicy
+    from aiagent.config import Settings
+
+    # Genuinely ambiguous, no clarification in the transcript: the two
+    # conditions the prompt sets for asking.
+    action = LlmAgentPolicy(make_chat_model(Settings.from_env(), max_tokens=256)).decide(
+        "mercury", [], []
+    )
+
+    assert isinstance(action, AskAction), (
+        f"expected a clarification question on an ambiguous goal, got {action!r} — "
+        "the ask branch is unreachable in production if the policy never picks it"
+    )
+    assert action.question.strip(), "model asked an empty question"
     assert action.reason.strip()
 
 

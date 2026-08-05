@@ -31,7 +31,7 @@ Everything task-specific is in three files on the agent side:
 |---|---|
 | `agent/src/aiagent/domain/models.py` | The domain types: `RawSearchHit`, `HitEnrichment`, `ResearchResult` (the example's "a dated web result"). Reshape them into *your* input/output — e.g. a support ticket, a code diff, a lead. Keep `SearchAction`/`AskAction`/`FinishAction`/`AgentStep` (the loop's vocabulary) unless you change the control flow. |
 | `agent/src/aiagent/domain/ports.py` | The `Protocol`s the agent calls: `SearchProvider` (gather), `HitEnricher` (analyze), `AgentPolicy` (decide next action), `ResultCritic` (review). Rename/reshape them to your task's verbs. |
-| `agent/src/aiagent/adapters/llm.py` | The prompts (`ENRICHMENT_PROMPT`, `POLICY_PROMPT`, `CRITIQUE_PROMPT`) and their pydantic reply schemas (`EnrichmentReply`, `ActionReply`, `CritiqueReply`). This is where you teach the LLM *your* task. |
+| `agent/src/aiagent/adapters/llm.py` | The prompts (`ENRICHMENT_PROMPT`, `POLICY_PROMPT`, `CRITIQUE_PROMPT`) and their pydantic reply schemas (`EnrichmentReply`, `ActionReply`, `CritiqueReply`). This is where you teach the LLM *your* task. **The prompts are locked** (ADR-067): editing one fails `tests/test_prompt_contract.py` on purpose — run the live suite (`RUN_LIVE_TESTS=1`), then paste the new hash the failure prints. Nothing else in CI runs a real model, so this is the moment to check your wording still works. |
 
 The orchestration in `application/run_agent_research.py` and
 `adapters/orchestration/langgraph_agent.py` drives those ports generically —

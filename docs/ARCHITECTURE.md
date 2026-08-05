@@ -2204,6 +2204,51 @@ covers strictly less than the e2e suite already does.
 
 ---
 
+### ADR-067 — Prompt guards: a lock in CI, the `ask` branch live (decided 2026-08-03, extends ADR-012/043)
+
+**Context**: the prompts were the one part of the agent no test touched. Every
+unit test drives the policy through `FakeAgentPolicy`, and so does the e2e stack
+(`AGENT_PROVIDERS=fake`), so editing `POLICY_PROMPT` could weaken or drop an
+instruction with the whole suite still green. Defensive parsing (ADR-043) then
+makes the failure silent *by design*: an action the parser does not recognise
+degrades to *finish*, which is correct behaviour for a confused model and
+indistinguishable from a prompt that stopped offering the choice.
+
+The exposed branch was **`ask`** — the entire human-in-the-loop feature
+(ADR-032), with its `awaiting_input` status, its reaper exemption and its own
+e2e journey. The live suite (ADR-012) covered only the `search` branch, and the
+e2e journey drives a scripted fake. Nothing anywhere ran the real prompt through
+the `ask` path.
+
+**Decision**, split by what is honestly testable without a model:
+
+- **A prompt lock** (`tests/test_prompt_contract.py`): the sha256 prefix of the
+  three prompts is pinned. It has no opinion on wording — it refuses to let a
+  prompt change reach `main` unnoticed, and its failure message points at the
+  live suite and prints the new hash to paste in. Keyless, so it runs in CI.
+- **Structural checks** on what *is* structured: the `ActionReply.action`
+  description (what structured output shows the model) must document every
+  action label, and every label must round-trip through `action_from_reply`.
+  Both derive the labels from the domain action types, so adding an action
+  forces both to be updated.
+- **A live test for `ask`** (`test_claude_policy_asks_when_the_goal_is_ambiguous`),
+  joining the ADR-012 opt-in family behind `RUN_LIVE_TESTS=1`. It is the only
+  place the `ask` branch meets a real model.
+
+**Rejected, and worth recording because it looked right**: asserting that
+`POLICY_PROMPT` contains each action word. It was implemented, then tested
+against a prompt with the ask instruction deleted — and **passed**, because
+"ask" survives in "Never ask once a clarification is present", a sentence that
+*forbids* asking. A substring check cannot tell an instruction from its
+negation. It was dropped rather than kept as false assurance; the lock, which
+claims less, is what actually catches the edit.
+
+**Cost for forks**: rewriting the prompts is step 3 of FORKING.md, so a fork
+hits the lock immediately. That is the intended first lesson — change the
+prompt, run the live suite, update the hash.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
