@@ -10,7 +10,7 @@
 [![Python](https://img.shields.io/badge/Python-3.12-3776AB?logo=python&logoColor=white)](agent/)
 [![Vue](https://img.shields.io/badge/Vue-3-42b883?logo=vuedotjs&logoColor=white)](frontend/)
 [![Docker](https://img.shields.io/badge/Docker-compose-2496ED?logo=docker&logoColor=white)](docker-compose.yml)
-[![ADRs](https://img.shields.io/badge/ADRs-65-8A2BE2)](docs/ARCHITECTURE.md)
+[![ADRs](https://img.shields.io/badge/ADRs-66-8A2BE2)](docs/ARCHITECTURE.md)
 
 **A production-shaped, fully documented boilerplate for building AI-agent web
 applications** — Rust API, Python agent workers, Vue frontend, wired together
@@ -149,7 +149,7 @@ agent/src/aiagent/application/  # run_research use case (date cascade)
 agent/src/aiagent/adapters/     # tavily, llm (Claude), sink (callbacks), api (FastAPI)
 frontend/src/                   # Vue 3 SPA
 deploy/                         # production-only files for forks (compose override, Caddyfile)
-docs/                           # ARCHITECTURE.md (65 ADRs), FORKING.md, COMMANDS.md, diagrams/
+docs/                           # ARCHITECTURE.md (66 ADRs), FORKING.md, COMMANDS.md, diagrams/
 ```
 
 ## Documentation

@@ -191,7 +191,14 @@ jobs:
   build:
     name: build ${{ matrix.component }} image
     runs-on: ubuntu-latest
-    needs: [backend, agent, frontend]
+    # `e2e` is in the needs on purpose (ADR-066): the unit suites run on the
+    # host, so an image that builds but cannot execute — a glibc mismatch
+    # between the builder and runtime bases, a missing shared library — is only
+    # caught by actually starting the containers. Without this, `build` ran in
+    # parallel with `e2e` and published `latest` to GHCR before the verdict.
+    # PRs are unaffected: `push` is already false there, so Dockerfile
+    # validation stays as fast as before for contributors and forks.
+    needs: [backend, agent, frontend, e2e]
     permissions:
       contents: read
       packages: write

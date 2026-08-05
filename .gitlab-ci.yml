@@ -191,7 +191,7 @@ e2e:
     - >
       docker create --name playwright --network host
       -e CI=1 -e E2E_BASE_URL=http://localhost:8080
-      mcr.microsoft.com/playwright:v1.61.1-noble
+      mcr.microsoft.com/playwright:v1.62.1-noble
       bash -c "cd /repo/frontend && npm ci && npx playwright test"
     - docker cp "$CI_PROJECT_DIR" playwright:/repo
     - docker start -a playwright
@@ -219,7 +219,9 @@ e2e:
 
 backend:build:
   <<: *kaniko-build
-  needs: ["backend:test"]
+  # `e2e` gates the push (ADR-066): an image can build cleanly and still fail
+  # to start, which only the running stack catches.
+  needs: ["backend:test", "e2e"]
   variables:
     COMPONENT: backend
     IMAGE_NAME: backend
@@ -233,7 +235,7 @@ backend:build:
 
 agent:build:
   <<: *kaniko-build
-  needs: ["agent:test"]
+  needs: ["agent:test", "e2e"]
   variables:
     COMPONENT: agent
     IMAGE_NAME: agent
@@ -247,7 +249,7 @@ agent:build:
 
 frontend:build:
   <<: *kaniko-build
-  needs: ["frontend:test"]
+  needs: ["frontend:test", "e2e"]
   variables:
     COMPONENT: frontend
     IMAGE_NAME: frontend

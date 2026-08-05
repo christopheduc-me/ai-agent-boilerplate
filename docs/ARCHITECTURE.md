@@ -2166,6 +2166,44 @@ first — it decides whether adoption is a swap or a rewrite of the guardrails.
 
 ---
 
+### ADR-066 — Image publication waits for the e2e verdict (decided 2026-08-03, amends ADR-015/019)
+
+**Context**: publishing ran *beside* the end-to-end job instead of behind it. On
+GitHub, `build` and `e2e` both declared `needs: [backend, agent, frontend]`, so
+they started together and `build` pushed the `sha` and **`latest`** tags to GHCR
+without ever seeing the e2e result. The GitLab mirror had the same hole by a
+different route: `build` sits in a later stage, but an explicit `needs:`
+short-circuits stage ordering, so `backend:build` fired as soon as
+`backend:test` went green.
+
+The gap matters because the unit suites run **on the host, not in the image**.
+An image can compile, export and pass every test while its binary cannot start —
+ADR-064 hit exactly that: a builder base on Debian trixie (glibc 2.41) against a
+`bookworm-slim` runtime (2.36), which `docker build` reports as a success and
+only `docker run` rejects. In the old ordering that image reaches GHCR and gets
+tagged `latest`, the pipeline then turns red, and anything deploying in between
+pulls a container that will not boot.
+
+**Decision**: `e2e` joins the `needs` of every image-build job on both CIs —
+`needs: [backend, agent, frontend, e2e]` on GitHub, `needs: ["<brick>:test",
+"e2e"]` on the three kaniko jobs. Publication is now strictly downstream of the
+running stack.
+
+The cost is a few minutes of serialisation on the default branch only.
+**Merge/pull requests are unaffected**: they already build without pushing
+(`push: false` / `--no-push`), so Dockerfile validation stays as fast as it was
+for contributors and forks. The `needs` is deliberately hard rather than
+`optional: true` — `e2e` runs on every non-scheduled pipeline, and a missing
+gate should fail loudly rather than disappear silently.
+
+Rejected alternative: keep the jobs parallel and smoke-run the image before the
+push (`load: true`, check the binary resolves its libraries, then push). It
+catches this one failure mode a little sooner, but it restructures a job that
+today builds and pushes in a single `docker/build-push-action` step, and it
+covers strictly less than the e2e suite already does.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
