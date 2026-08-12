@@ -274,6 +274,13 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://otel-collector:4318 \
   docker compose --profile full --profile observability up -d --build --wait
 open http://localhost:16686                 # Jaeger (traces)
 open http://localhost:3001                  # Grafana (metrics dashboards)
+open http://localhost:9090/alerts           # Prometheus alerting rules (ADR-068)
+
+# Validate + unit-test the rules after editing deploy/observability/alerts.yml
+docker run --rm --entrypoint promtool -v "$PWD/deploy/observability:/rules:ro" \
+  prom/prometheus:v3.1.0 check rules /rules/alerts.yml
+docker run --rm --entrypoint promtool -v "$PWD/deploy/observability:/rules:ro" \
+  prom/prometheus:v3.1.0 test rules /rules/alerts_test.yml
 
 # Hot-reload dev: run the observability stack in Docker, point local bricks at it
 docker compose --profile observability up -d otel-collector jaeger prometheus grafana

@@ -104,9 +104,26 @@ a failed call is already a red span (the exception is recorded automatically).
   ratio-based sampling in production. The Python SDK honours
   `OTEL_TRACES_SAMPLER=parentbased_traceidratio` out of the box; the Rust
   provider's sampler is set in `backend/src/telemetry.rs` (default: always-on).
-- **Alert on the signals above, not on log volume.** Spend rate and the HTTP
-  error ratio are the two that catch real incidents first — wire Prometheus
-  alerting rules on those before anything else.
+- **Alert on the signals above, not on log volume.** Six starter rules ship in
+  `deploy/observability/alerts.yml` (ADR-068) and load automatically with the
+  `observability` profile — firing state at http://localhost:9090/alerts. They
+  cover fleet spend rate, the HTTP 5xx ratio, the job failure ratio,
+  refresh-token reuse, and the metrics pipeline from both ends. **Their
+  thresholds are starting points, not recommendations**: every one is marked
+  `TUNE` in the file and should be set from a week of your own data.
+  `promtool test rules deploy/observability/alerts_test.yml` covers the cases
+  where a rule would silently never fire — run it after editing.
+- **Two rules watch the pipeline, and neither implies the other.**
+  `CollectorScrapeDown` proves Prometheus can reach the collector's endpoint and
+  nothing more: a collector that is up but no longer *receiving* OTLP keeps `up`
+  at 1 while every `aiagent_*` series quietly goes stale.
+  `AgentProducesNoJobMetrics` covers that other end — submissions accepted by
+  the backend with no job outcome coming back, which is what a dead worker looks
+  like. Both exist because when metrics stop, every other rule goes silent, and
+  silence reads exactly like "all is well".
+- **Routing needs Alertmanager**, which this profile does not ship. Rules decide
+  *when* something fires; until you add one, these back a Grafana alert or get
+  read in the Prometheus UI — nobody is paged.
 - **Never trace secrets.** Prompts and results can carry user data; the spans
   here record *metadata* (model, tokens, decision), never prompt/response text —
   keep it that way.

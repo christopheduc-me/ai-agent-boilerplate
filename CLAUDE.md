@@ -7,7 +7,7 @@ messages, identifiers — is written in **English only**.
 
 ## Architecture document is the single source of truth
 
-`docs/ARCHITECTURE.md` records every technical decision (ADR-001 to ADR-067)
+`docs/ARCHITECTURE.md` records every technical decision (ADR-001 to ADR-068)
 and MUST stay in sync with the code at all times:
 
 - Any change that affects the architecture (new adapter, new dependency,

@@ -196,6 +196,8 @@ services:
     image: prom/prometheus:v3.1.0
     volumes:
       - ./deploy/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      # Alerting rules (ADR-068); `rule_files` in prometheus.yml points here.
+      - ./deploy/observability/alerts.yml:/etc/prometheus/alerts.yml:ro
     ports:
       - "9090:9090" # UI
 

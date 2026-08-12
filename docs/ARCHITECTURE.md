@@ -2249,6 +2249,85 @@ prompt, run the live suite, update the hash.
 
 ---
 
+### ADR-068 — Starter Prometheus alerting rules (decided 2026-08-12, completes ADR-050)
+
+**Context**: the observability stack shipped everything except the part that
+wakes someone. `docs/OBSERVABILITY.md` published nine PromQL queries, named
+spend rate and the HTTP error ratio as "the two that catch real incidents
+first", and instructed forks to "wire Prometheus alerting rules on those before
+anything else" — while `deploy/observability/prometheus.yml` carried no
+`rule_files` and the repository held no rules at all. It was the only place the
+documentation prescribed something the code did not provide, and it was not
+marked *(planned)* nor tracked in ROADMAP.md either.
+
+One gap mattered more than the others: the spend cap (ADR-048) bounds **one
+job**. A thousand jobs each under their cap still empty the budget overnight,
+and nothing watched the aggregate.
+
+**Decision**: six starter rules in `deploy/observability/alerts.yml`, loaded
+through `rule_files` and mounted by the `observability` profile. They reuse the
+PromQL already published in OBSERVABILITY.md so the two read together:
+`AgentSpendRateHigh` (the fleet-level view the per-job cap cannot give),
+`HttpErrorRatioHigh`, `AgentJobFailureRatioHigh`, `CollectorScrapeDown`,
+`AgentProducesNoJobMetrics`, and `RefreshTokenReuseDetected` — the last with no
+threshold, since ADR-057/060 already treats a single replay as a compromise
+signal.
+
+Two rules watch the pipeline because **neither implies the other**, a
+distinction a code review caught in the first draft. `CollectorScrapeDown`
+proves Prometheus can reach the collector's endpoint and nothing more: a
+collector that is up but no longer *receiving* OTLP keeps `up` at 1 while every
+`aiagent_*` series goes stale. `AgentProducesNoJobMetrics` covers the producer
+end — submissions accepted with no outcome returning — and is conditioned on
+backend traffic so an idle deployment stays quiet. Both matter because when
+metrics stop, every other rule goes silent, and silence is indistinguishable
+from healthy; `CollectorScrapeDown` carries a `blackhole` label for an
+Alertmanager inhibition rule later.
+
+The failure ratio excludes `paused` from **both sides**. `aiagent_jobs_total`
+counts task terminations rather than distinct jobs — a HITL job (ADR-032)
+increments `paused` when it pauses and `completed` when the answer resumes it —
+so leaving pauses in the denominator lets a burst of clarifications dilute a
+real failure spike below the threshold. The first draft filtered only the
+numerator; the unit test now pins the corrected behaviour.
+
+**Rules are unit-tested** (`alerts_test.yml`, `promtool test rules`), because an
+alert fails in a direction no syntax check catches: a wrong label, a diluted
+denominator or an empty-vector comparison makes it silently never fire, which
+looks exactly like a healthy system.
+
+Two PromQL properties `AgentProducesNoJobMetrics` depends on are worth naming,
+because both were wrong in an earlier draft and neither is visible to
+`check rules`. `sum(rate(...))` over a series that does not exist yields an
+**empty vector, not 0**, so a bare `== 0` matches nothing — the rule went quiet
+precisely when the agent stopped publishing altogether, the failure it exists to
+catch; `or vector(0)` fixes it. And a rate window equal to `for` cannot hold a
+single submission long enough to reach `firing`, so a lone stuck job never
+alerted — the window is now 1h against `for: 15m`, with both sides of the `and`
+on the same window so sparse-but-healthy traffic stays silent.
+
+**Thresholds are starting points, not recommendations.** A boilerplate cannot
+know a fork's traffic or budget; each one is marked `TUNE` in the file, to be
+set from a week of real data. Left untouched they will either cry wolf or stay
+silent through a real incident, and the file says exactly that at the top.
+
+**Deliberately not included: Alertmanager.** Rules decide *when* something
+fires; routing it to a human is another service in the compose profile and
+another decision (which channel, which rotation, which inhibition). Until then
+the rules surface at `:9090/alerts` and can back a Grafana alert. Shipping
+rules without saying this would imply notifications that never arrive — the
+worst possible failure for an alerting system.
+
+**Verified** with `promtool check rules`, `check config` and `test rules`, then
+by booting the profile and reading `/api/v1/rules`: all six load, and
+`CollectorScrapeDown` was watched transitioning `inactive → pending` against a
+stopped collector, so at least one expression is known to match rather than
+assumed to. Every unit test was also confirmed to fail against the expression it
+guards before being kept — a test that passes both before and after a fix proves
+nothing about either.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

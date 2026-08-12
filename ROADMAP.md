@@ -136,6 +136,17 @@ Manual setup and deployment steps live in [SETUP.md](SETUP.md).
       Redis-shared fixed window (fail-open on Redis outages); unset keeps the
       in-memory limiter. Rate limiting at the reverse proxy remains the
       zero-code alternative for fleets behind a shared proxy tier.
+- [ ] **Alertmanager for the observability profile (ADR-068 follow-up)** — the
+      six starter rules in `deploy/observability/alerts.yml` decide *when*
+      something fires; nothing routes it. Until a fork adds Alertmanager they
+      surface at `:9090/alerts` or back a Grafana alert, which means an incident
+      at 3am waits for someone to look. Adding it is a service in the
+      `observability` profile plus three decisions the boilerplate cannot make
+      for you: which channel, which rotation, and which inhibition rules
+      (`CollectorScrapeDown` already carries a `blackhole` label for exactly
+      that — while the pipeline is blind, every other rule's silence is
+      meaningless). Tune the thresholds first: routing untuned alerts just
+      pages people about nothing.
 - [ ] **Deep Agents as the orchestrator (ADR-065)** — evaluated and deferred, not
       rejected. `deepagents` is an opinionated harness above LangGraph adding a
       planning tool, subagents with their own context, and a filesystem backend

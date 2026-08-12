@@ -1,0 +1,197 @@
+# Unit tests for the alerting rules (ADR-068), run with:
+#   docker run --rm --entrypoint promtool -v "$PWD/deploy/observability:/rules:ro" \
+#     prom/prometheus:v3.1.0 test rules /rules/alerts_test.yml
+#
+# Alert expressions fail in one direction that no syntax check catches: a wrong
+# label value or a diluted denominator makes a rule silently never fire, and
+# silence is exactly what a healthy system looks like. These cases pin the two
+# behaviours a code review caught by reading, so a future edit cannot undo them
+# unnoticed.
+rule_files:
+  - alerts.yml
+
+evaluation_interval: 1m
+
+tests:
+  # --- AgentJobFailureRatioHigh -------------------------------------------
+  # The regression: `paused` (the ADR-032 HITL wait) is not a terminal outcome
+  # and must be out of BOTH sides of the ratio. Here 3 failures against 7
+  # completions is 30% and must fire — while a flood of 40 pauses/min would
+  # drag a whole-denominator ratio down to 6% and hide it.
+  - name: paused jobs must not dilute the failure ratio
+    interval: 1m
+    input_series:
+      - series: 'aiagent_jobs_total{outcome="failed"}'
+        values: "0+3x60"
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "0+7x60"
+      - series: 'aiagent_jobs_total{outcome="paused"}'
+        values: "0+40x60"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentJobFailureRatioHigh
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+            exp_annotations:
+              summary: "30% of finished jobs are failing"
+              description: >-
+                Defensive parsing (ADR-043) degrades a confused model instead of crashing, so a provider outage shows up here rather than as errors.
+
+  # Below the threshold it must stay silent — a rule that always fires is as
+  # useless as one that never does.
+  - name: a healthy failure ratio stays silent
+    interval: 1m
+    input_series:
+      - series: 'aiagent_jobs_total{outcome="failed"}'
+        values: "0+1x60"
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "0+99x60"
+      - series: 'aiagent_jobs_total{outcome="paused"}'
+        values: "0+40x60"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentJobFailureRatioHigh
+        exp_alerts: []
+
+  # --- CollectorScrapeDown ------------------------------------------------
+  # `up == 0` cannot match a series that does not exist yet, which is the state
+  # of a freshly started Prometheus before its first scrape. The `absent(...)`
+  # branch covers it; without it this case is a blind spot.
+  - name: the collector scrape alert fires when up has never been recorded
+    interval: 1m
+    input_series:
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "0+1x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CollectorScrapeDown
+        exp_alerts:
+          # `absent()` carries the matcher's labels through to the alert, so
+          # `job` is present here even though no series ever existed.
+          - exp_labels:
+              severity: critical
+              blackhole: "true"
+              job: otel-collector
+            exp_annotations:
+              summary: "Prometheus cannot scrape the OTel collector"
+              description: "No metric reaches Prometheus while this fires — treat every other rule's silence as unknown, not healthy."
+
+  - name: the collector scrape alert fires when up reports a failed scrape
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "0x30"
+    alert_rule_test:
+      - eval_time: 20m
+        alertname: CollectorScrapeDown
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              blackhole: "true"
+              job: otel-collector
+              instance: otel-collector:8889
+            exp_annotations:
+              summary: "Prometheus cannot scrape the OTel collector"
+              description: "No metric reaches Prometheus while this fires — treat every other rule's silence as unknown, not healthy."
+
+  # --- AgentProducesNoJobMetrics ------------------------------------------
+  # A live collector says nothing about producers still feeding it. This is the
+  # gap `CollectorScrapeDown` cannot cover: scrapes succeed, job series go stale.
+  - name: accepted submissions with no job outcome means a dead producer
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "1x60"
+      - series: 'http_server_requests_total{route="/api/searches",method="POST",status="202"}'
+        values: "0+5x60"
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "10x60" # flat: accepted but never finished
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentProducesNoJobMetrics
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Jobs are being accepted but the agent reports no outcome"
+              description: >-
+                The backend is queueing work and no worker is finishing it: a dead Celery worker, a broken Redis, or an agent that stopped pushing OTLP. Job-level rules cannot fire in this state — their silence means nothing.
+
+  # The case the previous test could not see, because a flat series still
+  # *exists*: when the agent never publishes at all, `sum(rate(...))` is an
+  # empty vector and a bare `== 0` matches nothing. This is the harshest form
+  # of the failure — the producer is gone, not merely idle — and the rule must
+  # still fire. It is what `or vector(0)` buys.
+  - name: an agent that never publishes at all still alerts
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "1x60"
+      - series: 'http_server_requests_total{route="/api/searches",method="POST",status="202"}'
+        values: "0+5x60"
+      # No aiagent_jobs_total series whatsoever.
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentProducesNoJobMetrics
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Jobs are being accepted but the agent reports no outcome"
+              description: >-
+                The backend is queueing work and no worker is finishing it: a dead Celery worker, a broken Redis, or an agent that stopped pushing OTLP. Job-level rules cannot fire in this state — their silence means nothing.
+
+  # A single stuck job, which a rate window equal to `for` could only catch at
+  # the exact boundary — or miss entirely, depending on evaluation alignment.
+  # One submission, never any outcome: the rule must reach `firing`.
+  - name: one lone submission with no outcome still reaches firing
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "1x60"
+      # A single increment at minute 1, flat thereafter.
+      - series: 'http_server_requests_total{route="/api/searches",method="POST",status="202"}'
+        values: "0 1x59"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentProducesNoJobMetrics
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+            exp_annotations:
+              summary: "Jobs are being accepted but the agent reports no outcome"
+              description: >-
+                The backend is queueing work and no worker is finishing it: a dead Celery worker, a broken Redis, or an agent that stopped pushing OTLP. Job-level rules cannot fire in this state — their silence means nothing.
+
+  # The false positive this rule is shaped to avoid: an idle deployment has no
+  # outcomes either, and must not page anyone.
+  - name: an idle system with no submissions stays silent
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "1x60"
+      - series: 'http_server_requests_total{route="/api/searches",method="POST",status="202"}'
+        values: "10x60" # flat: nobody submitting
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "10x60"
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentProducesNoJobMetrics
+        exp_alerts: []
+
+  # Sparse but healthy: one submission, one outcome, both inside the window.
+  # This is what the same-window-on-both-sides choice protects.
+  - name: a sparse healthy deployment stays silent
+    interval: 1m
+    input_series:
+      - series: 'up{job="otel-collector",instance="otel-collector:8889"}'
+        values: "1x60"
+      - series: 'http_server_requests_total{route="/api/searches",method="POST",status="202"}'
+        values: "0 1x59"
+      - series: 'aiagent_jobs_total{outcome="completed"}'
+        values: "0 0 1x58" # finished two minutes after submission
+    alert_rule_test:
+      - eval_time: 40m
+        alertname: AgentProducesNoJobMetrics
+        exp_alerts: []

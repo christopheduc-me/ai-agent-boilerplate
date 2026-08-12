@@ -1,0 +1,146 @@
+# Prometheus alerting rules (ADR-068), the ones docs/OBSERVABILITY.md names as
+# the first to wire. Expressions reuse the PromQL published in that document, so
+# the two stay readable together.
+#
+# THRESHOLDS ARE STARTING POINTS, NOT RECOMMENDATIONS. A boilerplate cannot know
+# your traffic or your budget: every `> N` below is marked TUNE and should be set
+# from a week of your own data. Left as-is they will either cry wolf or stay
+# silent through a real incident.
+#
+# Rules only decide *when* something is firing. Routing it to a human needs
+# Alertmanager, which the `observability` profile does not ship — see ADR-068.
+# Until then these surface in the Prometheus UI (:9090/alerts) and can back a
+# Grafana alert.
+#
+# Two rules cover the pipeline itself, and the split is deliberate:
+# `CollectorScrapeDown` proves Prometheus can reach the collector, while
+# `AgentProducesNoJobMetrics` proves producers are still feeding it. Neither
+# implies the other.
+#
+# Metric names are the OTLP -> Prometheus translation (dots to underscores, unit
+# suffix, `_total` on counters). If a rule never fires, confirm the series exists
+# in :9090 before trusting the threshold.
+groups:
+  - name: aiagent-spend
+    rules:
+      # The gap the per-job spend cap (ADR-048) cannot close: that cap bounds one
+      # job, so a thousand jobs each under their cap still empty the budget. This
+      # is the fleet-level view of the same risk.
+      - alert: AgentSpendRateHigh
+        # TUNE: 1 USD/min = 60 USD/h. Set it from your own baseline.
+        expr: sum(rate(aiagent_job_cost_USD_total[5m])) * 60 > 1
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Fleet LLM spend is {{ $value | printf \"%.2f\" }} USD/min"
+          description: >-
+            Aggregate spend across all jobs, which the per-job cap (ADR-048) does
+            not bound. Check for a retry loop, a stuck agent burning its step
+            budget, or genuine traffic growth.
+
+  - name: aiagent-availability
+    rules:
+      - alert: HttpErrorRatioHigh
+        # TUNE: 5% of requests failing over 10 minutes.
+        expr: >-
+          sum(rate(http_server_requests_total{status=~"5.."}[5m]))
+          / sum(rate(http_server_requests_total[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of HTTP requests are 5xx"
+          description: "One of the two signals docs/OBSERVABILITY.md flags as catching real incidents first."
+
+      - alert: AgentJobFailureRatioHigh
+        # `outcome` is completed|failed|paused (agent/src/aiagent/metrics.py),
+        # and the counter records *task terminations*, not distinct jobs: a HITL
+        # job increments `paused` when it pauses and `completed` when the answer
+        # resumes it. `paused` must therefore be excluded from BOTH sides — in
+        # the denominator too, or a burst of clarification pauses inflates it and
+        # dilutes a real failure spike into silence.
+        # TUNE: 20% of terminal outcomes failing over 15 minutes.
+        expr: >-
+          sum(rate(aiagent_jobs_total{outcome="failed"}[15m]))
+          / sum(rate(aiagent_jobs_total{outcome=~"completed|failed"}[15m])) > 0.2
+        for: 15m
+        labels:
+          severity: warning
+        annotations:
+          summary: "{{ $value | humanizePercentage }} of finished jobs are failing"
+          description: >-
+            Defensive parsing (ADR-043) degrades a confused model instead of
+            crashing, so a provider outage shows up here rather than as errors.
+
+      # Scope, precisely: this covers the collector's /metrics endpoint being
+      # unreachable — nothing more. A collector that is up but no longer
+      # *receiving* OTLP pushes keeps `up` at 1 while every aiagent_* series goes
+      # stale, so this rule alone does not prove the pipeline carries data. The
+      # producer side is `AgentProducesNoJobMetrics` below.
+      # `absent(...)` matters as much as `== 0`: before the first scrape (a fresh
+      # Prometheus) the series does not exist yet, and `== 0` cannot match a
+      # series that is absent — observed while validating these rules.
+      - alert: CollectorScrapeDown
+        expr: up{job="otel-collector"} == 0 or absent(up{job="otel-collector"})
+        for: 5m
+        labels:
+          severity: critical
+          # Alertmanager convention: mute the rest while the pipeline is blind.
+          blackhole: "true"
+        annotations:
+          summary: "Prometheus cannot scrape the OTel collector"
+          description: "No metric reaches Prometheus while this fires — treat every other rule's silence as unknown, not healthy."
+
+      # The dead-producer signal the rule above cannot give. Conditioned on the
+      # backend still accepting job submissions, so it stays quiet on an idle or
+      # freshly deployed system — where "no job outcomes" is correct, not a fault.
+      # `route` is the matched path template (backend/src/adapters/http/request_id.rs).
+      #
+      # Three details this expression depends on, each of which silently disables
+      # the rule if changed carelessly:
+      #
+      # 1. `or vector(0)` is load-bearing. `sum(rate(...))` over a series that
+      #    does not exist yields an EMPTY vector, not 0, so a bare `== 0` matches
+      #    nothing — the rule would go quiet exactly when the agent stops
+      #    publishing altogether, which is the failure it exists to catch.
+      # 2. Both sides use the SAME window, so a healthy low-traffic deployment
+      #    stays silent: a submission and the outcome it produces age out
+      #    together. Different windows reintroduce a false positive on sparse
+      #    traffic.
+      # 3. The window must stay comfortably longer than `for`, or a single
+      #    submission cannot hold the condition long enough to reach `firing` —
+      #    a lone stuck job would never alert. 1h against for: 15m leaves room.
+      #
+      # TUNE: `for` also bounds how long a job may legitimately run before it
+      # looks stuck. Raise it above your slowest normal job.
+      - alert: AgentProducesNoJobMetrics
+        expr: >-
+          sum(increase(http_server_requests_total{route="/api/searches",method="POST",status=~"2.."}[1h])) > 0
+          and (sum(increase(aiagent_jobs_total[1h])) or vector(0)) == 0
+        for: 15m
+        labels:
+          severity: critical
+        annotations:
+          summary: "Jobs are being accepted but the agent reports no outcome"
+          description: >-
+            The backend is queueing work and no worker is finishing it: a dead
+            Celery worker, a broken Redis, or an agent that stopped pushing OTLP.
+            Job-level rules cannot fire in this state — their silence means
+            nothing.
+
+  - name: aiagent-security
+    rules:
+      # ADR-057/060 already calls this a compromise signal: a consumed refresh
+      # token being replayed means a stolen lineage. One occurrence is the alert
+      # — no ratio, no threshold to tune.
+      - alert: RefreshTokenReuseDetected
+        expr: increase(security_events_total{kind="refresh_reuse_detected"}[1h]) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "Refresh-token reuse detected ({{ $value }} in the last hour)"
+          description: >-
+            A consumed refresh token was replayed; the family was revoked
+            automatically (ADR-056). Investigate the account — this is the one
+            rule here that should wake someone.
