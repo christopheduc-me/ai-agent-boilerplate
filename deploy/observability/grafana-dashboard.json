@@ -83,8 +83,8 @@
     {
       "id": 5,
       "type": "timeseries",
-      "title": "Job outcomes",
-      "description": "Finished jobs by outcome (completed / failed / paused).",
+      "title": "Task outcomes",
+      "description": "Task terminations by outcome, NOT distinct jobs (ADR-068): a job paused for clarification (ADR-032) is counted once as `paused`, then again as `completed` when the answer resumes it. Summing the series over-counts HITL jobs; `completed + failed` alone is the per-job view.",
       "gridPos": { "h": 8, "w": 12, "x": 0, "y": 16 },
       "datasource": { "type": "prometheus", "uid": "prometheus" },
       "fieldConfig": { "defaults": { "unit": "short" }, "overrides": [] },

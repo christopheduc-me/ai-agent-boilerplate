@@ -433,4 +433,28 @@ docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml --profile
 # Manual database backup (a daily cron does this, see ADR-015)
 docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml exec postgres \
   pg_dump -U app aiagent > backup_$(date +%F).sql
+
+# Restore a backup (ADR-069). ON_ERROR_STOP matters: without it psql skips the
+# statements it chokes on and still reports success, leaving a partial database.
+gunzip -c backup_2026-08-12.sql.gz | docker compose -f docker-compose.yml \
+  -f deploy/docker-compose.prod.yml exec -T postgres \
+  psql -U app -d aiagent -v ON_ERROR_STOP=1
+
+# Prove the backup actually restores, before you need it (ADR-069). Restores a
+# dump into a throwaway container and checks the pgvector schema and row counts.
+scripts/backup-restore-drill.sh                 # dump the running database first
+scripts/backup-restore-drill.sh backup.sql      # or verify an existing dump
 ```
+
+Two things make a restore of *this* schema fail, both measured (ADR-069):
+
+- **The target must not be older than the source.** `pg_dump` emits a
+  `\restrict` directive that an older `psql` rejects on line 5 with
+  `invalid command \restrict`, restoring **nothing** — a 16.14 dump was measured
+  aborting this way against a stock `postgres:16` image at 16.9.
+- **The target needs the `vector` extension** (`pgvector/pgvector:pg16`, not
+  `postgres:16`), or the knowledge-base tables cannot be recreated (ADR-063).
+
+Restoring into an existing database also expects it to be empty — the dump
+issues `CREATE TABLE`, not `CREATE OR REPLACE`. Drop and recreate the database,
+or restore into a fresh instance.

@@ -2328,6 +2328,55 @@ nothing about either.
 
 ---
 
+### ADR-069 — Backup restore drill (decided 2026-08-12, completes ADR-015)
+
+**Context**: SETUP.md installs a daily `pg_dump` cron and COMMANDS.md documents
+the backup command, but **no restore procedure existed anywhere** and no dump had
+ever been restored. That is an unproven backup: the first attempt happens during
+an incident, which is the worst moment to discover it does not work.
+
+The risk was not theoretical, because ADR-063 made this more than a plain
+PostgreSQL database — `CREATE EXTENSION vector`, a `vector(768)` column and an
+HNSW index all have to survive the round trip.
+
+**Decision**: `scripts/backup-restore-drill.sh` restores a dump into a throwaway
+container and asserts what this schema actually depends on — migration count,
+the `vector` extension, the column type, the HNSW index, a **real cosine query**
+against the restored vectors, and row counts matching the source. It exits
+non-zero on any mismatch, so it works as a manual drill or a scheduled job. The
+restore procedure itself is now in COMMANDS.md §10, where only the backup was.
+
+**What the drill found**, by running it rather than reasoning about it:
+
+- Against a matching `pgvector/pgvector:pg16`, the documented `pg_dump` restores
+  **cleanly**: 13 migrations, extension 0.8.6, `vector(768)`, the HNSW index and
+  identical row counts. The pgvector risk was real but is handled — the dump
+  carries `CREATE EXTENSION IF NOT EXISTS vector` itself.
+- The failure mode is elsewhere, and it was **not** the one predicted. Restoring
+  into a stock `postgres:16` (16.9) aborted on **line 5** with
+  `invalid command \restrict`, leaving **zero tables**. `pg_dump` 16.14 emits a
+  `\restrict` directive that an older `psql` does not know. A restore target that
+  is merely a few *minor* versions behind the source silently produces an empty
+  database, and the error names nothing about versions.
+
+Both directions are covered: the drill was confirmed to exit 0 on a matching
+image and 1 on the skewed one, with a message that explains the version rule.
+
+**Also corrected here**: ADR-068 established that `aiagent_jobs_total` counts
+task terminations rather than distinct jobs, and fixed the failure-ratio alert
+accordingly — but left the two places people actually read that counter. The
+Grafana panel and the OBSERVABILITY.md query presented it as per-job, so any
+reader over-counted HITL jobs. Both now carry the caveat, with a
+`completed|failed` variant for the per-job view.
+
+**Not automated in CI.** The drill needs a database with representative data;
+the e2e stack could provide one, but a green drill against a fixture proves less
+than a red drill against production data would. It is documented as a manual
+exercise to run after any migration touching the knowledge base, and after any
+PostgreSQL image bump — which is precisely when the version rule above bites.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

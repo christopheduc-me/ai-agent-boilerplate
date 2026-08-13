@@ -77,7 +77,8 @@ these queries:
 | LLM call latency (p95, by op) | `histogram_quantile(0.95, sum by (le, operation) (rate(aiagent_llm_call_duration_seconds_bucket[5m])))` |
 | Token throughput (by type) | `sum by (type) (rate(aiagent_llm_tokens_total[5m]))` |
 | Spend rate ($/min, by outcome) | `sum by (outcome) (rate(aiagent_job_cost_USD_total[5m])) * 60` |
-| Job outcomes | `sum by (outcome) (increase(aiagent_jobs_total[1h]))` |
+| Task outcomes (see note) | `sum by (outcome) (increase(aiagent_jobs_total[1h]))` |
+| Jobs finished (per job) | `sum(increase(aiagent_jobs_total{outcome=~"completed\|failed"}[1h]))` |
 | HTTP request rate (RED) | `sum by (route, status) (rate(http_server_requests_total[5m]))` |
 | HTTP p95 latency (RED) | `histogram_quantile(0.95, sum by (le, route) (rate(http_server_duration_seconds_bucket[5m])))` |
 | HTTP error ratio (RED) | `sum(rate(http_server_requests_total{status=~"5.."}[5m])) / sum(rate(http_server_requests_total[5m]))` |
@@ -87,6 +88,12 @@ these queries:
 > Metric names are the OTLP → Prometheus translation (dots → underscores, unit
 > suffixes, `_total` on counters, `_bucket` on histograms). Confirm the exact
 > names in the Prometheus UI (`:9090`) if a query returns nothing.
+
+> **`aiagent_jobs_total` counts task terminations, not distinct jobs.** A job
+> that pauses for clarification (ADR-032) increments `paused`, then `completed`
+> when the answer resumes it — so summing every outcome over-counts HITL jobs.
+> Filter to `completed|failed` for a per-job view, and keep `paused` out of both
+> sides of any ratio (ADR-068).
 
 ## Reading a run in Jaeger
 

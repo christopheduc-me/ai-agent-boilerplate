@@ -115,3 +115,9 @@ docs/COMMANDS.md §10.
   0 3 * * * cd /opt/aiagent && docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml exec -T postgres pg_dump -U app aiagent | gzip > /opt/aiagent/backups/aiagent_$(date +\%F).sql.gz
   ```
   - [ ] Create `/opt/aiagent/backups/` and add a retention rule (e.g. `find ... -mtime +14 -delete`).
+  - [ ] **Restore one of those dumps before you rely on them** (ADR-069):
+        `scripts/backup-restore-drill.sh /opt/aiagent/backups/aiagent_<date>.sql`.
+        A backup nobody has restored is not a backup — and a restore target even
+        a few minor versions older than the source silently produces an empty
+        database (see docs/COMMANDS.md §10). Re-run the drill after any
+        PostgreSQL image bump.
