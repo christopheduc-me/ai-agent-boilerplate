@@ -2377,6 +2377,53 @@ PostgreSQL image bump — which is precisely when the version rule above bites.
 
 ---
 
+### ADR-070 — Bound the SSE poll: idle cadence and a stream lifetime (decided 2026-08-12, revisits ADR-026)
+
+**Context**: the SSE stream (ADR-026) polls the database once per second, per
+open connection, and each poll costs **three** round-trips —
+`find` + `results_for` + `steps_for` in `SearchQueries::get`. It stops when
+`job.is_finished()`, which covers only `Completed` and `Failed`.
+
+`awaiting_input` is neither. It is also the one status the reaper deliberately
+skips (`WHERE status IN ('pending','running')`), because a user may answer hours
+later (ADR-032). So a stream on a job waiting for clarification **never ends
+server-side**: it reads the database at 1 Hz for as long as the tab stays open,
+against a pool of `max_connections(10)`.
+
+The shape of the problem is the worst kind: the product *invites* it. The UI
+shows the question and waits for an answer, so leaving the tab open is the
+expected behaviour, not an abuse. The rate limiter (ADR-017) does not help
+either — it counts requests per minute, while one request here opens a stream
+that then costs 180 queries a minute indefinitely.
+
+**Decision**, two bounds, both small and in `adapters/http/sse.rs`:
+
+- **An idle cadence.** `awaiting_input` polls every 15s instead of 1s. That
+  status cannot change except through the user's own POST, and *that* client
+  gets its own HTTP response — so the fast cadence buys nothing. The decision
+  lives in `poll_interval()`, split out to be testable without a clock.
+- **A stream lifetime** of 30 minutes, checked before each read. ADR-026 already
+  specifies that the client falls back to polling when the stream fails, so
+  closing is safe — and it bounds every case like this one that has not been
+  thought of yet.
+
+**Verified**: the lifetime test was confirmed to fail when the bound is removed
+(the stream then hangs past the timeout), so it tests the guarantee rather than
+the code path.
+
+**Explicitly not measured.** This is a cost read from the code — three queries
+per second per idle viewer — not an observed outage. No load test was run, and
+on a low-traffic deployment it would never show. It is fixed because the cost is
+permanent and silent: it only surfaces as saturation, with no prior signal, and
+none of the ADR-068 alerts would name it.
+
+**Left alone**: the per-poll cost itself. Reading a cheap change marker
+(status + `updated_at` + counts) before the full detail would cut three queries
+to one in the common no-change case. It is a bigger change to `SearchQueries`
+and the two bounds above already remove the unbounded part.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
