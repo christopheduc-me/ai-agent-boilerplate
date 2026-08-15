@@ -2424,6 +2424,51 @@ and the two bounds above already remove the unbounded part.
 
 ---
 
+### ADR-071 — Capacity is configuration, not a constant (decided 2026-08-12, extends ADR-015)
+
+**Context**: this project parameterises everything it asks an operator to
+think about — 45 variables covering timeouts, quotas, rate limits, the step
+budget, the spend cap, retention. Capacity was the one dimension left out
+entirely, and there was no ADR on it:
+
+- the PostgreSQL pool was **hardcoded** at `max_connections(10)`, the only
+  tunable in the codebase with no variable, no default documented anywhere and
+  no rationale;
+- the Celery worker ran **without `--concurrency`**, so Celery forked one worker
+  per CPU and the number of parallel LLM jobs silently depended on the host;
+- `deploy/docker-compose.prod.yml` set **no resource limits**, while ADR-015's
+  recommended topology puts PostgreSQL, Redis, the backend, two agent processes,
+  Caddy and the frontend on a single VPS.
+
+Each mattered for a different reason. The pool bounds concurrent *viewers* as
+much as concurrent requests, because every open SSE stream borrows a connection
+per poll (ADR-070) — a link nothing recorded. The worker concurrency is the
+multiplier on the fleet spend rate that `AgentSpendRateHigh` watches (ADR-068):
+the per-job cap (ADR-048) bounds one job, concurrency decides how many run at
+once, so the bill depended on an undeclared number. And on a single host an
+unbounded worker OOM-kills PostgreSQL — the one failure that loses data instead
+of merely serving errors.
+
+**Decision**: `DATABASE_MAX_CONNECTIONS` (default 10, floored at 1 — a pool of
+zero deadlocks every request instead of failing loudly) and `CELERY_CONCURRENCY`
+(default 4; these jobs wait on provider APIs, so the CPU count was the wrong
+unit anyway). Memory limits on all six production services, sized for a ~4 GB
+VPS and marked as a starting point, with PostgreSQL given the largest
+reservation so the kernel evicts anything else first.
+
+**Verified** by resolving both compose files: the limits render as 512M/512M/1G
+/128M/1G/256M, and `CELERY_CONCURRENCY` substitutes in both its default and
+overridden form. A unit test pins the pool default, an override, and the
+non-zero floor.
+
+**Not measured, again.** As with ADR-070 these are numbers read from the
+topology, not from a load test — none was run, and no benchmark exists in this
+repository. They are explicitly starting points. What the change buys is not the
+values but the fact that an operator can now *see* and *change* them, and that
+one process can no longer take the host down with it.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

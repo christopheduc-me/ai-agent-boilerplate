@@ -53,6 +53,10 @@ pub struct AppConfig {
     pub agent_api_url: Option<String>,
     pub database_url: Option<String>,
     pub job_timeout_minutes: u64,
+    /// PostgreSQL pool size (ADR-071). Every open SSE stream borrows a
+    /// connection per poll (ADR-070), so this bounds concurrent viewers as much
+    /// as concurrent requests.
+    pub database_max_connections: u32,
     /// Cadence of the background loop (reaper + recurring scheduler, ADR-033).
     pub scheduler_tick_seconds: u64,
     pub daily_search_quota: u32,
@@ -141,6 +145,9 @@ impl AppConfig {
             agent_api_url,
             database_url,
             job_timeout_minutes: u64::from(get_u32("JOB_TIMEOUT_MINUTES", 15)),
+            // `.max(1)`: a pool of zero deadlocks every request rather than
+            // failing loudly, so a typo must not be able to produce one.
+            database_max_connections: get_u32("DATABASE_MAX_CONNECTIONS", 10).max(1),
             scheduler_tick_seconds: u64::from(get_u32("SCHEDULER_TICK_SECONDS", 60)).max(1),
             daily_search_quota: get_u32("DAILY_SEARCH_QUOTA", 20),
             rate_limits: RateLimitConfig {
@@ -280,6 +287,32 @@ mod tests {
         assert_eq!(config.rate_limits.auth_per_minute, 10); // fallback on parse error
         assert_eq!(config.bind_addr, "127.0.0.1:9000");
         assert!(config.warnings.is_empty());
+    }
+
+    #[test]
+    fn database_pool_size_is_configurable_and_never_zero() {
+        let default = AppConfig::from_lookup(lookup_from(&[(
+            "JWT_SECRET",
+            "the-quick-brown-fox-jumps-over-the-lazy-dog",
+        )]))
+        .unwrap();
+        assert_eq!(default.database_max_connections, 10);
+
+        let tuned = AppConfig::from_lookup(lookup_from(&[
+            ("JWT_SECRET", "the-quick-brown-fox-jumps-over-the-lazy-dog"),
+            ("DATABASE_MAX_CONNECTIONS", "40"),
+        ]))
+        .unwrap();
+        assert_eq!(tuned.database_max_connections, 40);
+
+        // A pool of zero deadlocks every request instead of failing loudly, so
+        // the floor is part of the contract, not a nicety (ADR-071).
+        let zero = AppConfig::from_lookup(lookup_from(&[
+            ("JWT_SECRET", "the-quick-brown-fox-jumps-over-the-lazy-dog"),
+            ("DATABASE_MAX_CONNECTIONS", "0"),
+        ]))
+        .unwrap();
+        assert_eq!(zero.database_max_connections, 1);
     }
 
     #[test]

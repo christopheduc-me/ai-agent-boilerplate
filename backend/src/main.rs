@@ -145,7 +145,7 @@ async fn serve() {
         match &config.database_url {
             Some(url) => {
                 let pool = PgPoolOptions::new()
-                    .max_connections(10)
+                    .max_connections(config.database_max_connections)
                     .connect(url)
                     .await
                     .expect("failed to connect to PostgreSQL");

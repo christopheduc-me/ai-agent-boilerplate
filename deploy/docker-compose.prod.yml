@@ -5,6 +5,14 @@
 # - Images come from the GitLab registry (pinned tag = reproducible deploys, rollback = previous tag).
 # - Caddy is the only service exposing 80/443 (automatic TLS via Let's Encrypt).
 # - PostgreSQL and Redis publish no port on the host.
+#
+# MEMORY LIMITS ARE SIZED FOR A SMALL VPS (~4 GB) AND ARE A STARTING POINT
+# (ADR-071). They exist so one runaway process cannot take the box down with it:
+# on this single-host topology an unbounded agent worker OOM-kills PostgreSQL,
+# which is the failure that loses data rather than just serving errors. Postgres
+# is therefore given the largest reservation and the worker the tightest cap.
+# Raise them together with your host, and re-check after changing
+# CELERY_CONCURRENCY — that is the multiplier on worker memory.
 services:
   caddy:
     image: caddy:2-alpine
@@ -27,6 +35,10 @@ services:
     environment:
       LOG_FORMAT: json # structured logs in production (ADR-018)
       APP_ENV: production # fail-fast env validation at startup (ADR-020)
+    deploy:
+      resources:
+        limits: { memory: 512M }
+        reservations: { memory: 128M }
 
   agent-api:
     image: ${CI_REGISTRY_IMAGE}/agent:${IMAGE_TAG}
@@ -35,6 +47,10 @@ services:
     environment:
       LOG_FORMAT: json
       APP_ENV: production
+    deploy:
+      resources:
+        limits: { memory: 512M }
+        reservations: { memory: 128M }
 
   agent-worker:
     image: ${CI_REGISTRY_IMAGE}/agent:${IMAGE_TAG}
@@ -42,17 +58,39 @@ services:
     environment:
       LOG_FORMAT: json
       APP_ENV: production
+    deploy:
+      resources:
+        # Scales with CELERY_CONCURRENCY (default 4): each forked worker holds
+        # its own Python process and in-flight payloads.
+        limits: { memory: 1G }
+        reservations: { memory: 256M }
 
   frontend:
     image: ${CI_REGISTRY_IMAGE}/frontend:${IMAGE_TAG}
     build: !reset null
     ports: !reset []
+    # Static assets behind nginx: it needs very little.
+    deploy:
+      resources:
+        limits: { memory: 128M }
 
   postgres:
     ports: !reset []
+    # The one service whose death loses data: largest reservation, so the
+    # kernel evicts anything else first.
+    deploy:
+      resources:
+        limits: { memory: 1G }
+        reservations: { memory: 512M }
 
   redis:
     ports: !reset []
+    # Queue + rate-limit counters only; `maxmemory` inside Redis would be the
+    # next refinement if it ever grows.
+    deploy:
+      resources:
+        limits: { memory: 256M }
+        reservations: { memory: 64M }
 
 volumes:
   caddy_data:

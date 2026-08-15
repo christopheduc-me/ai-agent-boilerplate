@@ -113,7 +113,18 @@ services:
   agent-worker:
     profiles: ["full"]
     build: ./agent
-    command: ["celery", "-A", "aiagent.celery_app", "worker", "--loglevel=info"]
+    # `--concurrency` is explicit (ADR-071): Celery otherwise forks one worker
+    # per CPU, so the number of jobs running LLM calls in parallel — and with it
+    # the fleet spend rate that AgentSpendRateHigh watches (ADR-068) — silently
+    # depends on the host. These are I/O-bound jobs waiting on provider APIs, so
+    # the CPU count is the wrong unit anyway.
+    command:
+      - celery
+      - -A
+      - aiagent.celery_app
+      - worker
+      - --loglevel=info
+      - --concurrency=${CELERY_CONCURRENCY:-4}
     environment:
       REDIS_URL: redis://redis:6379/0
       BACKEND_INTERNAL_URL: http://backend:8000
