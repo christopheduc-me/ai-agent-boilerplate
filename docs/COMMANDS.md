@@ -444,7 +444,20 @@ gunzip -c backup_2026-08-12.sql.gz | docker compose -f docker-compose.yml \
 # dump into a throwaway container and checks the pgvector schema and row counts.
 scripts/backup-restore-drill.sh                 # dump the running database first
 scripts/backup-restore-drill.sh backup.sql      # or verify an existing dump
+
+# Capacity baseline (ADR-072) — needs the full stack up with AGENT_PROVIDERS=fake.
+# Measures what an idle SSE viewer costs the database, and that a burst of
+# submissions all come back. Re-run it after touching the SSE cadence, the pool
+# or the poll interval, and compare against your previous run.
+uv run scripts/load-baseline.py
+uv run scripts/load-baseline.py --viewers 25 --jobs 500 --window 60
 ```
+
+The baseline reports **no** throughput figure on purpose: fake providers return
+instantly, so there is no latency for `CELERY_CONCURRENCY` to parallelise, and
+measuring it that way produced numbers that swung tenfold between identical runs
+(ADR-072). Its numbers are comparable against themselves — same machine, Docker,
+fake providers — never a capacity promise for a real host.
 
 Two things make a restore of *this* schema fail, both measured (ADR-069):
 

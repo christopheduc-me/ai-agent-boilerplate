@@ -2467,6 +2467,54 @@ repository. They are explicitly starting points. What the change buys is not the
 values but the fact that an operator can now *see* and *change* them, and that
 one process can no longer take the host down with it.
 
+*(Superseded in part by ADR-072, which measures the SSE figure.)*
+
+---
+
+### ADR-072 — Capacity baseline against the fake stack (decided 2026-08-16, measures ADR-070/071)
+
+**Context**: ADR-070 and ADR-071 both close with "not measured". They shipped a
+poll cadence, a pool size, a worker concurrency and six memory limits, all
+reasoned from the code. That is two ADRs' worth of numbers nobody had checked.
+
+The stack makes checking cheap and nobody had exploited it: `AGENT_PROVIDERS=fake`
+(ADR-021) is keyless and deterministic, so it can be loaded as hard as you like
+with no API bill and no provider variance.
+
+**Decision**: `scripts/load-baseline.py`, run against the fake stack. It parks
+jobs in `awaiting_input` — the state ADR-070 found unbounded — holds N SSE
+streams open, and samples PostgreSQL's own `xact_commit` counter rather than
+trusting the application's accounting.
+
+**What it measured**, and this is the point of the exercise:
+
+| | transactions/s per idle SSE viewer |
+|---|---|
+| Before ADR-070 (1s cadence) | **3.13** |
+| After ADR-070 (15s cadence) | **0.45 – 0.58** |
+
+The "before" row was an accident worth keeping: the first run hit a stale image
+built eleven days earlier, so it measured the old code. ADR-070 predicted "three
+queries per second per idle viewer" from reading `SearchQueries::get`; the
+measurement returned 3.13. The fix is worth roughly a **5×** reduction, and the
+residual is shared background work (the scheduler tick) divided across viewers,
+not per-viewer cost — so the real SSE saving is larger than the ratio suggests.
+
+**What it refuses to measure, and why that matters more.** An early version
+reported a jobs/min figure for `CELERY_CONCURRENCY`. Across identical runs it
+returned 1.2k, 9.7k and 12.9k — what varied was the script's own polling
+granularity, not the system. Fake providers return instantly, so there is no
+latency for concurrency to parallelise: **worker concurrency cannot be
+characterised on this stack at all.** The figure was removed rather than
+published with caveats. What remains is a burst check — 200 submissions,
+~290 accepted/s, all 200 completing — which proves the queue and callback
+contract hold under a burst without claiming a throughput number.
+
+**Scope, stated in the script's own output**: these come from a laptop, under
+Docker, with fake providers. They are a baseline to re-measure against after a
+change, never a capacity promise for a real host. The ADR-071 memory limits and
+pool size remain unmeasured — nothing here exercises them.
+
 ---
 
 ## 4. API contracts (summary)
