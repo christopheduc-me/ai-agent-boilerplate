@@ -26,7 +26,12 @@ FROM debian:bookworm-slim AS runtime
 # system trust store instead of roots baked into the binary (ADR-064). Without
 # this package every outbound HTTPS call (agent dispatch, webhooks, Slack,
 # Telegram) fails to verify.
+# `upgrade` applies Debian security updates at build time (ADR-074): base images
+# are rebuilt on their own cadence, which lags the archive. This image was
+# passing when the policy was adopted — it is here so bookworm does not repeat
+# what trixie did to the agent image, not to fix a current finding.
 RUN apt-get update \
+    && apt-get upgrade -y --no-install-recommends \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 RUN useradd --system --uid 10001 app

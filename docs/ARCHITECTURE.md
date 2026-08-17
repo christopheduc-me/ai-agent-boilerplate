@@ -2559,6 +2559,49 @@ code path.
 
 ---
 
+### ADR-074 — Apply Debian security updates at image build (decided 2026-08-17, extends ADR-015)
+
+**Context**: the weekly Trivy scan (ADR-015) failed on the agent image with
+**9 HIGH** findings. All nine were the same CVE — CVE-2026-53615, an integer
+overflow in `libblkid` — surfacing through nine binary packages built from one
+`util-linux` source, and Debian had already published the fix
+(`2.41.5-0+deb13u1`) against the shipped `2.41-5`.
+
+The agent Dockerfile ran **no `apt` at all**: every OS package came from
+`python:3.12-slim`. Pulling a fresh base was checked first and does **not**
+help — the freshly pulled image still carried `2.41-5`, because official base
+images are rebuilt on their own cadence, which lags the Debian archive. Only the
+agent was affected: the backend runtime is bookworm, the frontend is Alpine.
+
+**Decision**: both Debian runtime stages upgrade at build time —
+`apt-get update && apt-get upgrade -y --no-install-recommends`, on the **runtime
+stage only**, since builder packages never ship. The image now tracks the
+archive rather than the base image's release schedule. The cost is a slower
+build and an image whose contents depend on archive state at build time; the
+backend already invoked `apt` for `ca-certificates` (ADR-064), so this is one
+word there, not a new layer.
+
+The backend was **passing** when this was adopted. Applying the policy to it is
+preventive consistency, not a fix — so that bookworm does not later repeat what
+trixie just did to the agent.
+
+**Verified** under the CI's exact criteria (`HIGH,CRITICAL` + `ignore-unfixed`,
+`--exit-code 1`): all three images pass. The backend image was also **started**,
+not merely built — ADR-064's glibc trap is precisely the failure a Dockerfile
+change can hide from `docker build`.
+
+**A scan without `ignore-unfixed` is a different question, deliberately left
+alone.** Locally, with a fresher vulnerability database than the CI run had, the
+patched agent image still reports 14 HIGH/CRITICAL findings in `perl-base`,
+`ncurses`, `gzip` and `libacl1` — every one of them `affected` or
+`fix_deferred`, meaning **Debian ships no fix**. Nothing in this repository can
+resolve them. The CI already sets `ignore-unfixed: true` ("only actionable
+findings: a fix must exist"), which is why it reported nine rather than
+twenty-three, and that setting is the right one: a security job that fails on
+findings nobody can act on is a job people learn to ignore.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)
