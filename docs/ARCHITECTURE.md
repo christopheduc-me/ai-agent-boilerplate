@@ -2517,6 +2517,48 @@ pool size remain unmeasured — nothing here exercises them.
 
 ---
 
+### ADR-073 — Frontend render-error boundary (decided 2026-08-16, extends ADR-018)
+
+**Context**: the frontend was the one tier of this project where a failure left
+no trace. The backend records every request with a correlation id (ADR-018),
+emits RED metrics (ADR-050) and audits security events; the agent journals its
+decisions. `main.ts` had no `errorHandler` and no component used
+`onErrorCaptured`, so an exception thrown **during render or a lifecycle hook**
+made Vue unmount the whole tree: a blank page, nothing logged, nothing for the
+user to act on.
+
+This is a narrower gap than it first looks, and the distinction matters. **API
+errors were already handled** — every view carries its own error state, and
+`withAuth` retries after a token refresh (ADR-008). What was uncovered is the
+other kind: a bug in component code, a shape that slipped past the zod schemas,
+a null dereference in a computed.
+
+**Decision**: two layers, because one cannot cover the other.
+
+- `components/ErrorBoundary.vue` wraps the **routed view only**, keyed on
+  `route.path`. Scoping it below the topbar is the point: when a view dies the
+  header stays usable, so the user can still log out or navigate away rather
+  than reload blindly. The fallback offers *Try again* (re-render the subtree —
+  no reload, the session survives) and *Back to searches*, and carries
+  `role="alert"` so it is announced rather than merely displayed.
+- `app.config.errorHandler` in `main.ts` catches what the boundary structurally
+  cannot: errors thrown in the topbar, in a store action, in a watcher outside
+  that subtree.
+
+**Deliberately no telemetry sink.** Both layers only `console.error`. Choosing
+where frontend errors are shipped — Sentry, an OTLP collector, a homegrown
+endpoint — is a fork's decision, and picking one here would impose a dependency
+and a data-protection question on every fork. The handler bodies are the single
+place to change, and the whole app is covered. So the honest gain today is
+**interface resilience, not observability**: the user gets something actionable
+instead of a white screen; the log stays in their browser console.
+
+**Verified**: five tests, and the suite was confirmed to fail (3 of 5) when the
+boundary's capture is commented out, so it tests the behaviour rather than the
+code path.
+
+---
+
 ## 4. API contracts (summary)
 
 ### Public (Vue → Rust)

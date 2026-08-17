@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { useRouter } from "vue-router";
 
+import ErrorBoundary from "@/components/ErrorBoundary.vue";
 import { useAuthStore } from "@/stores/auth";
 
 const auth = useAuthStore();
@@ -49,7 +50,13 @@ async function deleteAccount(): Promise<void> {
     </div>
   </header>
   <main>
-    <RouterView />
+    <!-- Keyed on the route so a failed view resets when the user navigates
+         away, instead of staying stuck on the fallback (ADR-073). -->
+    <RouterView v-slot="{ Component, route }">
+      <ErrorBoundary :key="route.path">
+        <component :is="Component" />
+      </ErrorBoundary>
+    </RouterView>
   </main>
 </template>
 
