@@ -55,5 +55,17 @@ Every dev command is listed in [docs/COMMANDS.md](docs/COMMANDS.md).
 
 ## Reporting bugs / proposing features
 
-Use the issue templates. For security vulnerabilities, please do **not** open
-a public issue — contact the maintainer directly.
+Use the issue templates. Questions and "how do I make this mine?" belong in
+[Discussions](https://github.com/christopheduc-me/ai-agent-boilerplate/discussions)
+rather than the tracker — [docs/FORKING.md](docs/FORKING.md) answers most of
+them already.
+
+For security vulnerabilities, do **not** open a public issue: follow
+[SECURITY.md](SECURITY.md), which gives the private reporting channel and spells
+out what is out of scope (the placeholder secrets in `.env.example` and the
+keyless demo mode are deliberate, not findings).
+
+## Code of conduct
+
+Participation is covered by the [Contributor Covenant](CODE_OF_CONDUCT.md).
+Report unacceptable behaviour to **github@christopheduc.me**.

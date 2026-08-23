@@ -182,7 +182,11 @@ redeploying the previous tag. See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
 
 Fork → short-lived branch → PR against `main`. CI must be green; PRs are
 squash-merged. See [CONTRIBUTING.md](CONTRIBUTING.md) for the ground rules
-(English only, TDD, architecture doc kept in sync).
+(English only, TDD, architecture doc kept in sync) and
+[CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md) for how we behave here.
+
+Found a vulnerability? [SECURITY.md](SECURITY.md) has the private reporting
+channel — please don't open a public issue.
 
 ## License
 

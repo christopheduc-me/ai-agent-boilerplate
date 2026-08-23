@@ -1,0 +1,19 @@
+# Routes anything that is not a bug report or a feature request away from the
+# issue tracker, so the tracker stays a list of actionable work.
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/christopheduc-me/ai-agent-boilerplate/security/advisories/new
+    about: >-
+      Report privately, never as a public issue. See SECURITY.md for what to
+      include and what is out of scope.
+  - name: Question, or help making this boilerplate yours
+    url: https://github.com/christopheduc-me/ai-agent-boilerplate/discussions
+    about: >-
+      Ask in Discussions. Read docs/FORKING.md first — it covers swapping the
+      example domain, the ports to reshape, and what to keep.
+  - name: Architecture decisions (why is it built this way?)
+    url: https://github.com/christopheduc-me/ai-agent-boilerplate/blob/main/docs/ARCHITECTURE.md
+    about: >-
+      Every technical decision is recorded as an ADR, with the alternatives that
+      were rejected and why. Check there before proposing a redesign.
